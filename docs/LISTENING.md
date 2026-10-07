@@ -597,3 +597,19 @@ counter and retype it `counter 2`: only `a` and `b` should play. Type
 `chord min7` somewhere: it should stay, outlined in red, doing nothing, and
 save and reopen as it was typed. Typing `*   -.5` should make a box that
 reads `* -0.5`.
+
+### 43. Faces, bends and cable activity (MOO-524): look and listen, in the app
+
+Type `lfo` and `lfo tri 2hz`, and open both with the arrow at each box's
+right. Each should show its settings as small knobs with readouts; the
+shape should click through `sin tri saw sqr rnd`, not slide. Drag the first
+LFO's depth down and up: one undo should put it back. Click the second
+LFO's outlet to arm it and drag the first LFO's rate knob up, then arm the
+first onto a filter cutoff and play: the cutoff's wobble should speed up and
+slow down at 2 Hz, and the rate knob's arc should move with it. Drag the
+middle of a cable: its run should follow the pointer along one axis, and a
+double-click on it should put it back where the canvas routes it. Save and
+reopen: the bend and the open faces should be as left. Then play with
+Preferences > Appearance > Cable activity on each setting. Off: plain wires.
+Subtle: the LFO's cable should glow faintly with its swing, never enough to
+pull the eye from the boxes. Full: plainly lit. Is Subtle still too loud?

@@ -160,6 +160,41 @@ Where it differs from the step file:
   its routes.
 - `MAX_INLETS` is 9: a `select 8` has `index` and `a` to `h`.
 
+**05 (MOO-524).** A box's arrow opens its face in place: a `MiniKnob`
+with a label and a readout per setting (`ui/src/patch_face.rs` picks them
+and spells the readouts; `patch_canvas.rs` lays the cells out, four to a
+row up to twelve settings, eight past that). A face's knobs are
+destinations: `ParamOwner::Modulator { module }` names a box by id (saved
+as `owner.modulator.module`, reading the old `slot` key too) under a scope
+of its own, `MODULATOR_SCOPE`, that no channel or track uses. Cables bend
+by hand (`Wire.bend`, saved since step 01), and Preferences > Appearance has
+**Cable activity**. Where it differs from the step file:
+
+- **Double-click a box still retypes it**, as step 04 made it; the face
+  opens with the arrow at the box's right, which is also a one-step undo.
+- **The shelf keeps its routes.** The per-kind surfaces and the input
+  picker under the canvas are gone (a box's inlets are the canvas's); the
+  shelf keeps the selected box's name, the outlets, and the routes list.
+- **A route onto a knob moves it in its normalized range**, summed per knob
+  and clamped, before the box ticks; the source is read as of this tick if
+  it ran earlier in the order, else the tick before. The routes are part of
+  the compiled set's shape, so a depth drag on a box knob sends a new set
+  (carrying every box's state) rather than retuning in place. A stepped
+  knob (a shape, a division, a mode) refuses modulation, and a box cannot
+  route onto its own knobs. An LFO whose fade-in is under way does not
+  restart it when a route moves it.
+- **MIDI learn does not reach box knobs yet.**
+- **Any run of a patch wire drags**, not only the middle one: a horizontal
+  run moves up and down, a vertical one sideways, and the wire then leaves
+  its outlet, runs along the bend and enters its inlet. An assignment tag's
+  wire does not bend.
+- **Cable activity starts on Subtle everywhere**: Slint cannot read the
+  system's reduced-motion setting. Control wires mix toward the accent by
+  their level (a gate tag's is 1 while a note is held). For note wires the
+  engine now publishes each tag's NoteOn count, and a notes-in tag hears its
+  channel in the compiled set, so its wires flash before step 07 gives note
+  wires a box to play.
+
 ## Adam's rulings
 
 | When | Ruling |

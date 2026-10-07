@@ -1642,11 +1642,7 @@ mod tests {
     #[test]
     fn an_unreachable_address_writes_nothing() {
         let mut session = Session::default();
-        let modulator = ParamAddr {
-            scope: EffectTarget::Channel(0),
-            owner: mooloop_core::ParamOwner::Modulator { slot: 0 },
-            param: 0,
-        };
+        let modulator = ParamAddr::modulator(mooloop_core::ModSourceId(0), 0);
         assert_eq!(session.param_descriptor(modulator), None);
         assert_eq!(session.param_normalized(modulator), None);
         assert_eq!(session.set_param_normalized(modulator, 1.0), None);

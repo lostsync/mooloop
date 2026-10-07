@@ -73,7 +73,8 @@ impl SongModulator {
             }),
             plan.tags.iter().map(|tag| tag.gate),
             plan.order.iter().copied(),
-        );
+        )
+        .with_knobs(plan.knobs.iter().copied());
         let table = vec![0.0; plan.modules.len() * MAX_CONTROL_TICKS_PER_BLOCK];
         Self { plan, set, table }
     }
@@ -205,6 +206,11 @@ impl SongModulator {
     /// Every module's output as of the last tick run, in list order.
     pub(crate) fn outputs(&self) -> &[f32] {
         self.set.outputs()
+    }
+
+    /// Each tag's NoteOn count and held gate, in tag order.
+    pub(crate) fn tag_activity(&self) -> impl Iterator<Item = (u32, bool)> + '_ {
+        self.set.tag_activity()
     }
 
     /// How far a source's wire output can travel from zero; see

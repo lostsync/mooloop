@@ -42,6 +42,7 @@ mod plugin_gui;
 mod plugin_scan;
 mod plugin_ui;
 mod patch_canvas;
+mod patch_face;
 mod pump_profile;
 #[cfg(test)]
 mod plugin_ui_tests;
@@ -852,6 +853,10 @@ fn window_appearance(window: &MainWindow, stored: &AppearanceSettings) -> Appear
             window.global::<MeterPrefs>().get_falloff(),
         )
         .to_owned(),
+        cable_activity: settings::cable_activity_name(
+            window.global::<DisplayPrefs>().get_cable_activity(),
+        )
+        .to_owned(),
         user_schemes: stored.user_schemes.clone(),
     }
 }
@@ -1011,6 +1016,9 @@ fn sync_preferences_properties(window: &MainWindow, settings: &UiSettings) {
     window
         .global::<MeterPrefs>()
         .set_falloff(settings::meter_falloff_index(&appearance.meter_falloff));
+    window
+        .global::<DisplayPrefs>()
+        .set_cable_activity(settings::cable_activity_index(&appearance.cable_activity));
     window.set_preferences_error("".into());
     window.set_preferences_audio_driver(DRIVER_COPY.to_slint());
     let buffer_index = settings
@@ -6436,24 +6444,13 @@ impl UiState {
         window.set_modulation_selected_slot(selected.map_or(-1, |index| index as i32));
         window.set_modulation_armed_slot(armed.map_or(-1, |index| index as i32));
 
-        // The selected source's own controls. One editor is shown, so the shelf
-        // reads scalars rather than searching the source rows for the
-        // selected one.
+        // The selected box's kind and values, which the shelf's header spells
+        // its signal from; its settings are on its face in the canvas.
         let selected_params = selected_module.map(|module| module.params);
-        let selected_lfo = selected_params.and_then(|params| match params {
-            ModulatorParams::Lfo(lfo) => Some(lfo),
-            _ => None,
-        });
-        let selected_envelope = selected_params.and_then(|params| match params {
-            ModulatorParams::Envelope(envelope) => Some(envelope),
-            _ => None,
-        });
         window.set_modulation_selected_kind(
             selected_params.map_or(-1, |params| params.kind().to_index()),
         );
-        // The one visible editor reads its values by descriptor id, exactly
-        // as the destination overlays already do; the kind decides which id
-        // table the array answers for.
+        // Values by descriptor id, as the destination overlays read them.
         let selected_values: Vec<f32> = selected_params.map_or_else(Vec::new, |params| {
             let descriptors = params.kind().descriptors();
             let mut values = vec![0.0; descriptor_slots(descriptors)];
@@ -6465,67 +6462,6 @@ impl UiState {
             values
         });
         window.set_modulation_selected_values(selected_values.as_slice().into());
-        let selected_lfo_cycle_seconds = selected_lfo.map_or(1.0, |lfo| {
-            if lfo.tempo_sync {
-                lfo.rate_division.seconds(bpm)
-            } else {
-                lfo.rate_hz.max(0.001).recip()
-            }
-        });
-        window.set_modulation_selected_preview_fade_cycles(selected_lfo.map_or(0.0, |lfo| {
-            let seconds = if lfo.fade_in_tempo_sync {
-                lfo.fade_in_division.seconds(bpm)
-            } else {
-                lfo.fade_in_seconds
-            };
-            seconds / selected_lfo_cycle_seconds
-        }));
-        window.set_modulation_selected_preview_smoothing_cycles(selected_lfo.map_or(0.0, |lfo| {
-            lfo.smoothing_seconds / selected_lfo_cycle_seconds
-        }));
-        // The input picker: None, then every outlet that sends what the
-        // selected module takes, from anywhere in the song.
-        let selected_module = selected_module.map(|module| module.id);
-        let input_options: Vec<slint::SharedString> = selected_module
-            .map(|id| self.session.module_input_options(id))
-            .unwrap_or_default()
-            .into_iter()
-            .map(|(_, name)| name.into())
-            .collect();
-        window.set_modulation_input_options(ModelRc::from(Rc::new(VecModel::from(input_options))));
-        let (input, note) = selected_module.map_or((0, ""), |id| self.session.module_input_choice(id));
-        window.set_modulation_selected_input(input as i32);
-        window.set_modulation_input_note(note.into());
-        window.set_modulation_selected_envelope_preview_attack(selected_envelope.map_or(
-            0.0,
-            |env| {
-                if env.attack_tempo_sync {
-                    env.attack_division.seconds(bpm)
-                } else {
-                    env.attack_seconds
-                }
-            },
-        ));
-        window.set_modulation_selected_envelope_preview_decay(selected_envelope.map_or(
-            0.0,
-            |env| {
-                if env.decay_tempo_sync {
-                    env.decay_division.seconds(bpm)
-                } else {
-                    env.decay_seconds
-                }
-            },
-        ));
-        window.set_modulation_selected_envelope_preview_release(selected_envelope.map_or(
-            0.0,
-            |env| {
-                if env.release_tempo_sync {
-                    env.release_division.seconds(bpm)
-                } else {
-                    env.release_seconds
-                }
-            },
-        ));
 
         // Every described generator and strip parameter carries its own
         // overlay depth and legality, so which controls can be routed is
@@ -12576,50 +12512,6 @@ impl AppUi {
                 });
             });
         }
-        // One descriptor-addressed edit path for every modulator parameter.
-        // A knob drag arrives bracketed by edit-started/finished and lands as
-        // one undo step; a discrete edit (selector click, LED toggle) arrives
-        // bare and records immediately.
-        {
-            let st = state.clone();
-            let weak = window.as_weak();
-            window.on_modulation_param_edit_started(move || {
-                let Some(window) = weak.upgrade() else { return };
-                st.borrow_mut().begin_gesture(&window);
-            });
-        }
-        {
-            let st = state.clone();
-            let commands = command_state.clone();
-            let weak = window.as_weak();
-            window.on_modulation_param_changed(move |slot, id, value| {
-                let Some(window) = weak.upgrade() else { return };
-                // A knob gesture owns one undo entry, recorded on release;
-                // outside one, every change is its own. This handler used to
-                // spell that rule out; it is the general one now.
-                with_gesture_history(&st, &commands, &window, "Modulator edited", || {
-                    let mut state = st.borrow_mut();
-                    let sent = state.session.set_modulator_param(slot, id, value);
-                    if !sent {
-                        return false;
-                    }
-                    state.modulation_edited(&window);
-                    true
-                });
-            });
-        }
-        {
-            let st = state.clone();
-            let commands = command_state.clone();
-            let weak = window.as_weak();
-            window.on_modulation_param_edit_finished(move || {
-                let Some(window) = weak.upgrade() else { return };
-                let before = st.borrow_mut().session.finish_gesture();
-                if let Some(before) = before {
-                    record_project_history(&commands, before, &st, &window, "Modulator edited");
-                }
-            });
-        }
         // Removing a source drops the slot and every route it feeds; the
         // engine restores those destinations' bases through the
         // `set_channel_modulation` diff.
@@ -12652,33 +12544,6 @@ impl AppUi {
                 with_gesture_history(&st, &commands, &window, "Rename module", || {
                     let mut state = st.borrow_mut();
                     if !state.session.rename_modulation_source(slot, &name) {
-                        return false;
-                    }
-                    state.modulation_edited(&window);
-                    true
-                });
-            });
-        }
-        {
-            let commands = command_state.clone();
-            let st = state.clone();
-            let weak = window.as_weak();
-            window.on_modulation_input_changed(move |slot, index| {
-                let Some(window) = weak.upgrade() else { return };
-                with_gesture_history(&st, &commands, &window, "Modulator input", || {
-                    let mut state = st.borrow_mut();
-                    // An input is a jack rather than a descriptor id, so there
-                    // is no parameter to name: the module travels entire.
-                    let Some(id) = state.session.module_at(slot) else {
-                        return false;
-                    };
-                    let Some((input, _)) = usize::try_from(index)
-                        .ok()
-                        .and_then(|index| state.session.module_input_options(id).into_iter().nth(index))
-                    else {
-                        return false;
-                    };
-                    if !state.session.set_module_input(id, input) {
                         return false;
                     }
                     state.modulation_edited(&window);
@@ -19103,12 +18968,18 @@ impl AppUi {
                     let moved = state.session.read_modulation_levels(
                         |at| handle.module_output(at),
                         |seat| handle.channel_sources(seat),
+                        |at| handle.tag_activity(at),
                     );
                     // Once the outputs stop moving, the meters and the arcs
                     // are already where they belong, so neither is worth a
                     // model write.
                     if moved {
                         state.refresh_modulation_offsets(&w);
+                    }
+                    // The patch canvas's cables and open faces, the same way;
+                    // a cable still thick from a note keeps it running.
+                    if moved || state.patch_canvas.flashing.get() {
+                        state.refresh_patch_activity(&w);
                     }
                 }
                 profile.borrow_mut().lap(pump_profile::Section::Playhead);

@@ -120,6 +120,9 @@ export global Theme {
 // apply the same way: set once from Rust, read by any component.
 export global DisplayPrefs {
     in-out property <bool> smooth-curves: true;
+    // How much the patch canvas's cables show what moves through them:
+    // 0 Off, 1 Subtle, 2 Full (`settings::CABLE_ACTIVITIES`).
+    in-out property <int> cable-activity: 1;
 }
 
 // What the status bar is saying about whatever the pointer is over.

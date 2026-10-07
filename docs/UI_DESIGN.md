@@ -506,10 +506,10 @@ when it moved.
 It holds the song's patch canvas (`ui/patch-canvas.slint`, song patch step
 03): boxes where the song put them, tags at the patch's edges, an assignment
 tag under each route, and the wires, in a canvas larger than the pane that
-scrolls, where a double-click types a box (step 04); with the OUTLETS of
-every channel that publishes some under the channel's name; the selected
-source's surface, with
-its name edited in its header; and that source's routes, from the whole song.
+scrolls, where a double-click types a box (step 04) and a box's arrow opens
+its face of small knobs in place (step 05); with the OUTLETS of every
+channel that publishes some under the channel's name; the selected box's
+name, edited in its header; and that source's routes, from the whole song.
 A route row names its chain, device and parameter ("Kick Filter 1 · Cutoff"),
 because a route can land on any channel or track. Because it is one pane for
 the whole song, a source can target a source parameter, any insert, and a
@@ -518,8 +518,9 @@ permanent empty slots in the pane or a separate modulation page inside every
 device: the song has no module limit, so the number is not a layout
 decision.
 
-Selecting a source tile opens its larger control surface without changing what
-ordinary parameter gestures mean. A separate **Assign** switch arms the
+Selecting a box shows its routes without changing what ordinary parameter
+gestures mean; its settings are on its face in the canvas, not in a surface
+under it. A separate **Assign** switch arms the
 selected source. Legal destination controls then receive a subtle assignable
 state, and dragging a normal control creates or changes route depth without
 changing that control's base value. Its normal value display remains the base;
@@ -531,13 +532,15 @@ sufficient for ordinary review and removal; today the route-count dots raise
 nothing when clicked, and a fader or pan control does not take the assign
 gesture yet (open: `docs/plans/archive/song-modulation/00-status.md`).
 
-Both the compact tile and expanded source face are parameter-derived previews,
-not generic type icons. An envelope face follows its effective attack, decay,
-sustain, release, and amount (including tempo-synced stage durations); a
-zero-time attack therefore has a vertical leading edge while a long attack
-has a visible ramp. An LFO face follows waveform, phase, amount, fade-in,
-smoothing, and pulse width. These are deterministic previews of the configured
-signal, not phase-locked telemetry from the audio thread.
+A box's face is a row of `MiniKnob`s with a label above and a readout below,
+four to a row, eight past twelve settings; a stepped setting snaps. The
+knobs are destinations like any other: an armed outlet's drag sets a
+route's depth, and the arc shows the live offset. Cables are drawn
+orthogonally with rounded corners; a hand-placed bend is a run the user
+dragged, kept until a double-click. Cable activity is a preference (Off,
+Subtle, Full) because the prototype's blinking was, in Adam's word, loud: a
+control wire mixes toward the accent by its level, a note wire thickens
+for about 120 ms per note.
 
 A source's own signal inputs belong on its expanded control surface. Every
 module has one input picker: none, then every channel's notes for the four

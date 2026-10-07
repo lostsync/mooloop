@@ -937,7 +937,12 @@ impl Session {
             // `docs/plans/plugin-hosting/` reaches; until then a plugin
             // parameter reads as unavailable rather than as a native one.
             ParamOwner::PluginParam { .. } => None,
-            ParamOwner::Modulator { .. } => None,
+            ParamOwner::Modulator { module } => self
+                .modulation
+                .module(module)?
+                .params
+                .kind()
+                .descriptor(target.param),
         }
     }
 
@@ -1271,6 +1276,16 @@ impl Session {
         &self,
         address: ParamAddr,
     ) -> Option<(String, &'static ParamDescriptor)> {
+        // A knob on a box's face (song patch step 05), named as the box
+        // reads on the canvas.
+        if let Some(id) = address.module() {
+            let module = self.modulation.module(id)?;
+            if module.params.kind() == mooloop_core::ModulatorKind::Unknown {
+                return None;
+            }
+            let descriptor = module.params.kind().descriptor(address.param)?;
+            return Some((mooloop_core::box_text::spell(&module.params, &module.text), descriptor));
+        }
         let (chain, effects, strip, generator) = match address.scope {
             EffectTarget::Channel(channel) => {
                 let state = self.channels.get(channel as usize)?;
@@ -1302,8 +1317,8 @@ impl Session {
                 (format!("{} {}", effect.kind().label(), slot + 1), descriptor)
             }
             ParamOwner::Strip => (strip.to_string(), strip_descriptor(address.param)?),
-            // Modulators are sources in this first UI pass, not destinations.
-            // An instrument's own routes are not channel destinations either:
+            // A box's knob was answered above, by the box. An instrument's
+            // own routes are not channel destinations:
             // the shelf reaches a device's controls, and a route amount
             // belongs to the patch's internal modulation rather than to the
             // device's control surface.
@@ -1744,6 +1759,11 @@ impl Session {
         let Some(source) = self.modulation_armed.get() else {
             return ArmedRoute::Unchanged;
         };
+        // A box does not move its own knobs: it would read itself a tick
+        // late, which a wire into its inlet already says more plainly.
+        if destination.module().is_some_and(|module| source == ModSourceRef::Id(module)) {
+            return ArmedRoute::Unchanged;
+        }
         // Native or a hosted plugin's parameter (MOO-82): the same question
         // the engine's control pass asks, from one place.
         let Some(policy) = self.modulation_policy(destination) else {

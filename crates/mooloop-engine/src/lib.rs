@@ -2548,6 +2548,12 @@ impl EngineHandle {
         self.shared.modulator_meters.module(at)
     }
 
+    /// How many NoteOns the patch's tag `at` (in tag order) has passed, as
+    /// of the last block, wrapping, and whether it holds a note.
+    pub fn tag_activity(&self, at: usize) -> (u32, bool) {
+        self.shared.modulator_meters.tag(at)
+    }
+
     /// `channel`'s generator outlets and keyboard as of the last block.
     pub fn channel_sources(
         &self,

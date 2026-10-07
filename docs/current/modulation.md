@@ -35,21 +35,32 @@ area, and where each behaviour stops.
   inlet to pick what feeds it, marquee and drag to move, Delete to remove.
   A name the vocabulary lacks makes a box outlined in red that keeps its
   text and does nothing. The canvas is larger than the pane and scrolls.
-  Beside it, the OUTLETS of every channel that publishes some, under the
-  channel's name; the selected module's surface, with its name edited in its header; and
-  beside it the selected source's routes from the whole song, each naming
-  its chain, device and parameter ("Kick Filter 1 · Cutoff"), with polarity
-  and remove. Eight module kinds ship (LFO, Envelope, Step, Random, Math as
-  the arithmetic boxes `+ - * / min max clip`, Counter, Select and Slew),
-  each a descriptor table plus a tick; the last three have no surface on
-  the shelf until step 05's faces, so a module's parameters undo and
-  persist like an effect's. Selection and arming hold the source itself, so
-  they survive a channel change, a reorder and a new module.
-- **A module's input is picked from a list**: none, then every channel's
-  notes for the LFO's reset, the Envelope's gate, the Step's advance and
-  the Random's trigger, or every other module in the song for Math. A new
-  module is named for the channel it was made on and keeps that channel as
-  its home seat, which a channel preset reads.
+- **A box's settings are on its face** (song patch step 05). The arrow at
+  the right of a box opens it in place: a small knob and readout per
+  setting, a stepped one (a shape, a division, a mode) clicking through its
+  values. A knob drag is one undo step, and an armed outlet's drag on a
+  knob routes it there: one box can move another's rate or depth, as any
+  destination. A box cannot route onto its own knobs. The face being open
+  is saved with the song.
+- **Cables bend by hand.** Drag a cable's middle and the run moves along the
+  axis it crosses; a double-click on it goes back to automatic routing. The
+  bend is saved with the song, and a drag is one undo step.
+- **Cable activity** (Preferences > Appearance): Off, Subtle (the default) or
+  Full. A control wire tints toward the accent with its level and a note
+  wire thickens for a moment on each note; Subtle is 30 % of Full.
+- Beside the canvas, the OUTLETS of every channel that publishes some,
+  under the channel's name; the selected box's name, edited in its header;
+  and the selected source's routes from the whole song, each naming its
+  chain, device and parameter ("Kick Filter 1 · Cutoff"), with polarity and
+  remove. Eight box kinds ship (LFO, Envelope, Step, Random, Math as the
+  arithmetic boxes `+ - * / min max clip`, Counter, Select and Slew), each
+  a descriptor table plus a tick, so a box's settings undo and persist like
+  an effect's. Selection and arming hold the source itself, so they survive
+  a channel change, a reorder and a new box.
+- **A box's inlets are fed by wires**, or by clicking an inlet and picking
+  what feeds it: none, then every channel's notes as a `gate` tag, or
+  another box. A new box is named for the channel it was made on and keeps
+  that channel as its home seat, which a channel preset reads.
 - Routes carry durable `ModSourceId`s, so reordering the grid moves a module
   without changing what any route means. **A reorder, and any other edit,
   keeps each module's running state**: an LFO keeps its phase, its smoothing

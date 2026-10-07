@@ -11,14 +11,17 @@
 //! Everything here but [`wire`] and [`UiState::publish_patch_canvas`] is
 //! free of Slint, so the geometry and the gestures are tested as plain data.
 
-use crate::{project_snapshot, record_project_history, CommandState, MainWindow, UiState};
+use crate::{
+    project_snapshot, record_project_history, with_gesture_history, CommandState, MainWindow,
+    UiState,
+};
 use mooloop_core::{
-    CanvasPoint, InletSource, Jack, JackSort, ModSourceId, ModSourceRef,
+    Bend, BendAxis, CanvasPoint, InletSource, Jack, JackSort, ModSourceId, ModSourceRef,
     ModulatorParams, ParamAddr, Port, SongModulation, TagKind,
 };
 use mooloop_session::modulation::{PatchFeed, PatchRefusal};
 use mooloop_session::session::Session;
-use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
+use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -27,10 +30,20 @@ pub(crate) const BOX_HEIGHT: f32 = 28.0;
 pub(crate) const TAG_HEIGHT: f32 = 26.0;
 /// A box's jack is a bar this wide on its edge.
 pub(crate) const JACK_WIDTH: f32 = 12.0;
+/// An open box's face (song patch step 05): one cell per knob, the room
+/// round the cells, and what a face with no knobs takes to say so.
+pub(crate) const CELL_WIDTH: f32 = 46.0;
+pub(crate) const CELL_HEIGHT: f32 = 52.0;
+const FACE_PAD: f32 = 8.0;
+const EMPTY_FACE: f32 = 24.0;
+/// The fold arrow at the right of a box's spelling, which opens its face.
+pub(crate) const FOLD_WIDTH: f32 = 18.0;
 /// How far from a jack a press still takes it.
 const JACK_REACH: f32 = 8.0;
 /// How far from a wire a press still selects it.
 const WIRE_REACH: f32 = 5.0;
+/// How many pump ticks a note wire stays thick for a note: about 120 ms.
+const FLASH_TICKS: i32 = 15;
 /// How far the pointer travels before a press becomes a drag.
 const DRAG_THRESHOLD: f32 = 4.0;
 /// The canvas is at least this big, and this much bigger than what is on it.
@@ -97,8 +110,14 @@ pub(crate) struct Anchor {
 /// What a node looks like.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum Face {
-    /// A box: its spelling in the mono face.
-    Box { spelling: String, unknown: bool },
+    /// A box: its spelling in the mono face, and its face's knobs when it
+    /// is open.
+    Box {
+        spelling: String,
+        unknown: bool,
+        open: bool,
+        knobs: Vec<FaceKnob>,
+    },
     /// A tag: an arrow pointing right (a source, its outlet at the point) or
     /// left (a sink, its inlet at the point).
     Tag {
@@ -109,6 +128,15 @@ pub(crate) enum Face {
         note: bool,
         unbound: bool,
     },
+}
+
+/// One knob on an open box's face: the setting it turns, and the top-left
+/// of its cell on the canvas.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct FaceKnob {
+    pub param: u32,
+    pub x: f32,
+    pub y: f32,
 }
 
 /// One node, laid out.
@@ -131,6 +159,15 @@ impl Node {
 
     fn is_box(&self) -> bool {
         matches!(self.face, Face::Box { .. })
+    }
+
+    /// Whether `(x, y)` is on a box's fold arrow.
+    fn on_fold(&self, x: f32, y: f32) -> bool {
+        self.is_box()
+            && x >= self.x + self.width - FOLD_WIDTH - 2.0
+            && x <= self.x + self.width
+            && y >= self.y
+            && y <= self.y + BOX_HEIGHT
     }
 
     /// Where inlet `port` (or outlet, with `outlet`) meets its wire.
@@ -185,6 +222,8 @@ pub(crate) struct WireLine {
     pub note: bool,
     /// It reads its outlet a tick late: saved so, or a loop's break.
     pub delayed: bool,
+    /// The box or tag it leaves.
+    pub source: ModSourceId,
 }
 
 /// The whole canvas, laid out.
@@ -203,6 +242,8 @@ pub(crate) enum Hit {
     Inlet(Jack),
     /// The inlet of a route's assignment tag, which nothing wires by hand.
     RouteInlet(NodeKey),
+    /// A box's fold arrow.
+    Fold(ModSourceId),
     Node(NodeKey),
     Wire(WireKey),
     Empty,
@@ -246,33 +287,68 @@ fn tag_width(kind: &str, name: &str, depth: &str, unbound: bool) -> f32 {
 }
 
 /// Lay out `song`'s patch. `channel_name` names a channel by id, `label_of`
-/// names a route's destination, and `offset` moves the nodes a drag holds by
-/// how far it has gone, so a drag is drawn before it is a song edit.
+/// names a route's destination, and `canvas` is the gesture under way: the
+/// nodes a drag holds are moved by how far it has gone and a bend being
+/// dragged is where the pointer has it, so a drag is drawn before it is a
+/// song edit.
 pub(crate) fn lay_out(
     song: &SongModulation,
     channel_name: impl Fn(mooloop_core::ChannelId) -> Option<String>,
     label_of: impl Fn(ParamAddr) -> RouteLabel,
     delayed: impl Fn(Jack) -> bool,
-    offset: impl Fn(NodeKey) -> (f32, f32),
+    canvas: &CanvasState,
 ) -> Layout {
+    let offset = |key| canvas.offset(key);
     let mut nodes = Vec::new();
     for module in &song.modules {
         let ports = module.params.ports();
         let spelling = spelling(&module.params, &module.text);
         let unknown = module.params == ModulatorParams::Unknown;
         let jacks = ports.inlets.len().max(ports.outlets.len()) as f32;
-        let width = (26.0 + text_width(&spelling, MONO_CHAR))
-            .max(64.0)
-            .max(jacks * 24.0);
         let key = NodeKey::Node(module.id);
         let (dx, dy) = offset(key);
+        let (x, y) = (module.at.x as f32 + dx, module.at.y as f32 + dy);
+        let params = if module.open {
+            crate::patch_face::face_params(&module.params)
+        } else {
+            Vec::new()
+        };
+        let columns = match params.len() {
+            count @ 0..=4 => count,
+            5..=12 => 4,
+            _ => 8,
+        };
+        let rows = params.len().div_ceil(columns.max(1));
+        let width = (26.0 + text_width(&spelling, MONO_CHAR) + FOLD_WIDTH)
+            .max(64.0)
+            .max(jacks * 24.0)
+            .max(columns as f32 * CELL_WIDTH + 2.0 * FACE_PAD);
+        let height = match (module.open, rows) {
+            (false, _) => BOX_HEIGHT,
+            (true, 0) => BOX_HEIGHT + EMPTY_FACE,
+            (true, rows) => BOX_HEIGHT + rows as f32 * CELL_HEIGHT + FACE_PAD,
+        };
+        let knobs = params
+            .into_iter()
+            .enumerate()
+            .map(|(index, param)| FaceKnob {
+                param,
+                x: x + FACE_PAD + (index % columns) as f32 * CELL_WIDTH,
+                y: y + BOX_HEIGHT + (index / columns) as f32 * CELL_HEIGHT,
+            })
+            .collect();
         nodes.push(Node {
             key,
-            x: module.at.x as f32 + dx,
-            y: module.at.y as f32 + dy,
+            x,
+            y,
             width,
-            height: BOX_HEIGHT,
-            face: Face::Box { spelling, unknown },
+            height,
+            face: Face::Box {
+                spelling,
+                unknown,
+                open: module.open,
+                knobs,
+            },
             inlets: ports.inlets.to_vec(),
             outlets: ports.outlets.to_vec(),
         });
@@ -327,6 +403,10 @@ pub(crate) fn lay_out(
         let Some(module) = song.module(id) else {
             continue;
         };
+        let below_box = nodes
+            .iter()
+            .find(|node| node.key == NodeKey::Node(id))
+            .map_or(BOX_HEIGHT, |node| node.height);
         let key = NodeKey::Route {
             source: route.source,
             destination: route.destination,
@@ -346,7 +426,7 @@ pub(crate) fn lay_out(
                 };
                 CanvasPoint::new(
                     module.at.x + 16,
-                    module.at.y + BOX_HEIGHT as i32 + 40 + below as i32 * 34,
+                    module.at.y + below_box as i32 + 40 + below as i32 * 34,
                 )
             });
         let label = label_of(route.destination);
@@ -401,9 +481,13 @@ pub(crate) fn lay_out(
             .is_some_and(|port| port.sort == JackSort::Note);
         wires.push(WireLine {
             key: WireKey::Patch(wire.to),
-            points: route_points(start, end),
+            points: match canvas.bend_of(wire.to, wire.bend) {
+                Some(bend) => bent_points(start, end, bend),
+                None => route_points(start, end),
+            },
             note,
             delayed: wire.late || delayed(wire.to),
+            source: wire.from.node,
         });
     }
     for (from_jack, key) in route_wires {
@@ -428,6 +512,7 @@ pub(crate) fn lay_out(
             points: route_points(start, end),
             note: false,
             delayed: false,
+            source: from_jack.node,
         });
     }
 
@@ -516,6 +601,30 @@ pub(crate) fn route_points(start: Anchor, end: Anchor) -> Vec<(f32, f32)> {
                 ]
             }
         }
+    }
+}
+
+/// A point `LEAD` out of a jack, the way its wire leaves (`out`) or comes
+/// in.
+fn lead(anchor: Anchor, out: bool) -> (f32, f32) {
+    let g = if out { LEAD } else { -LEAD };
+    match anchor.facing {
+        Facing::Right | Facing::Left => (anchor.x + g, anchor.y),
+        Facing::Down | Facing::Up => (anchor.x, anchor.y + g),
+    }
+}
+
+/// The corners of a wire whose bend was dragged by hand: straight out of
+/// its outlet, across to the bend's line, along it, and into its inlet. The
+/// bend is a horizontal run at `at` on the y axis or a vertical one at `at`
+/// on the x axis.
+pub(crate) fn bent_points(start: Anchor, end: Anchor, bend: Bend) -> Vec<(f32, f32)> {
+    let (s, t) = ((start.x, start.y), (end.x, end.y));
+    let (a, b) = (lead(start, true), lead(end, false));
+    let at = bend.at as f32;
+    match bend.axis {
+        BendAxis::Horizontal => vec![s, a, (a.0, at), (b.0, at), b, t],
+        BendAxis::Vertical => vec![s, a, (at, a.1), (at, b.1), b, t],
     }
 }
 
@@ -612,7 +721,10 @@ impl Layout {
             }
         }
         if let Some(node) = self.nodes.iter().rev().find(|node| node.contains(x, y)) {
-            return Hit::Node(node.key);
+            return match node.key {
+                NodeKey::Node(id) if node.on_fold(x, y) => Hit::Fold(id),
+                key => Hit::Node(key),
+            };
         }
         for wire in self.wires.iter().rev() {
             if wire
@@ -624,6 +736,23 @@ impl Layout {
             }
         }
         Hit::Empty
+    }
+
+    /// The segment of wire `key` a press at `point` is on, if it is on one.
+    pub(crate) fn segment_at(
+        &self,
+        key: WireKey,
+        point: (f32, f32),
+    ) -> Option<((f32, f32), (f32, f32))> {
+        let wire = self.wires.iter().find(|wire| wire.key == key)?;
+        wire.points
+            .windows(2)
+            .map(|pair| (pair[0], pair[1]))
+            .filter(|(a, b)| (a.0 - b.0).abs() + (a.1 - b.1).abs() > 0.5)
+            .map(|(a, b)| (segment_distance(point, a, b), (a, b)))
+            .filter(|(distance, _)| *distance <= WIRE_REACH)
+            .min_by(|a, b| a.0.total_cmp(&b.0))
+            .map(|(_, segment)| segment)
     }
 
     /// The nodes a marquee from `a` to `b` touches.
@@ -668,6 +797,8 @@ pub(crate) enum Drag {
         lifted: Option<Jack>,
         at: (f32, f32),
     },
+    /// The bend of the wire into `inlet`, dragged to `bend`.
+    Bend { inlet: Jack, bend: Bend },
     /// A marquee from `from` to `at`, adding to `kept`.
     Marquee {
         from: (f32, f32),
@@ -685,6 +816,9 @@ pub(crate) struct CanvasState {
     pub drag: Drag,
     pub picking: Option<Jack>,
     pub typing: Option<Typing>,
+    /// A note wire is thick for a note just sent, so the pump keeps
+    /// refreshing the cables until it is not.
+    pub flashing: std::cell::Cell<bool>,
 }
 
 /// A box being typed (song patch step 04): where its field is, the box it
@@ -744,6 +878,10 @@ pub(crate) enum Edit {
     Pick(Jack),
     /// Select this box in the surface below.
     Select(ModSourceRef),
+    /// Open or fold this box's face.
+    Fold(ModSourceId),
+    /// Set or clear the bend of the wire into this inlet.
+    Bend(Jack, Option<Bend>),
 }
 
 impl CanvasState {
@@ -752,6 +890,15 @@ impl CanvasState {
         match self.drag {
             Drag::Move { by, .. } if self.selected.contains(&key) => by,
             _ => (0.0, 0.0),
+        }
+    }
+
+    /// The bend of the wire into `inlet` as drawn: the one being dragged,
+    /// else `saved`.
+    pub(crate) fn bend_of(&self, inlet: Jack, saved: Option<Bend>) -> Option<Bend> {
+        match self.drag {
+            Drag::Bend { inlet: held, bend } if held == inlet => Some(bend),
+            _ => saved,
         }
     }
 
@@ -822,6 +969,26 @@ impl CanvasState {
                     from,
                     by: (0.0, 0.0),
                 },
+                // A patch wire's segment moves along the axis it crosses.
+                Hit::Wire(WireKey::Patch(inlet)) if !shift => {
+                    match layout.segment_at(WireKey::Patch(inlet), from) {
+                        Some((a, b)) if (a.1 - b.1).abs() < 0.5 => Drag::Bend {
+                            inlet,
+                            bend: Bend {
+                                axis: BendAxis::Horizontal,
+                                at: a.1.round() as i32,
+                            },
+                        },
+                        Some((a, _)) => Drag::Bend {
+                            inlet,
+                            bend: Bend {
+                                axis: BendAxis::Vertical,
+                                at: a.0.round() as i32,
+                            },
+                        },
+                        None => Drag::None,
+                    }
+                }
                 Hit::Empty | Hit::Wire(_) => Drag::Marquee {
                     from,
                     at: (x, y),
@@ -837,6 +1004,12 @@ impl CanvasState {
         match &mut self.drag {
             Drag::Move { from, by } => *by = ((x - from.0).round(), (y - from.1).round()),
             Drag::Wire { at, .. } => *at = (x, y),
+            Drag::Bend { bend, .. } => {
+                bend.at = match bend.axis {
+                    BendAxis::Horizontal => y.round() as i32,
+                    BendAxis::Vertical => x.round() as i32,
+                }
+            }
             Drag::Marquee { from, at, kept } => {
                 *at = (x, y);
                 let mut selected = kept.clone();
@@ -871,6 +1044,7 @@ impl CanvasState {
                     Edit::Pick(jack)
                 }
                 Hit::Node(NodeKey::Route { source, .. }) if !shift => Edit::Arm(source),
+                Hit::Fold(id) => Edit::Fold(id),
                 _ => Edit::None,
             },
             Drag::Move { by, .. } => {
@@ -902,6 +1076,14 @@ impl CanvasState {
                 }
                 _ => lifted.map_or(Edit::None, Edit::Unplug),
             },
+            Drag::Bend { inlet, bend } => {
+                let saved = song.wire_into(inlet).and_then(|wire| wire.bend);
+                if saved == Some(bend) {
+                    Edit::None
+                } else {
+                    Edit::Bend(inlet, Some(bend))
+                }
+            }
             Drag::Marquee { .. } | Drag::None => Edit::None,
         }
     }
@@ -931,6 +1113,18 @@ impl CanvasState {
             self.drag = Drag::None;
         }
         self.typing.is_some()
+    }
+
+    /// A double-click at `(x, y)` on a cable bent by hand straightens it:
+    /// the inlet of that wire.
+    pub(crate) fn straighten(&self, layout: &Layout, song: &SongModulation, x: f32, y: f32) -> Option<Jack> {
+        match layout.hit(x, y) {
+            Hit::Wire(WireKey::Patch(inlet)) => song
+                .wire_into(inlet)
+                .is_some_and(|wire| wire.bend.is_some())
+                .then_some(inlet),
+            _ => None,
+        }
     }
 
     /// The pointer's wire while one is being drawn, and the inlet it would
@@ -997,7 +1191,7 @@ impl UiState {
                     })
                     .is_some_and(|inlet| inlet.delayed)
             },
-            |key| canvas.offset(key),
+            canvas,
         )
     }
 
@@ -1014,6 +1208,7 @@ impl UiState {
 
         let mut nodes = Vec::with_capacity(layout.nodes.len());
         let mut jacks = Vec::new();
+        let mut knobs = Vec::new();
         for node in &layout.nodes {
             let selected = canvas.selected.contains(&node.key);
             let source = match node.key {
@@ -1033,10 +1228,20 @@ impl UiState {
                 ..Default::default()
             };
             match &node.face {
-                Face::Box { spelling, unknown } => {
+                Face::Box {
+                    spelling,
+                    unknown,
+                    open,
+                    knobs: face,
+                } => {
                     row.is_box = true;
                     row.spelling = spelling.into();
                     row.unknown = *unknown;
+                    row.open = *open;
+                    row.empty_face = *open && face.is_empty();
+                    if let NodeKey::Node(id) = node.key {
+                        knobs.extend(face.iter().filter_map(|knob| self.face_knob_row(id, *knob)));
+                    }
                 }
                 Face::Tag {
                     points_right,
@@ -1086,6 +1291,7 @@ impl UiState {
             .iter()
             .map(|wire| {
                 let last = wire.points.last().copied().unwrap_or_default();
+                let (level, seen) = self.session.patch_node_activity(wire.source);
                 crate::PatchWireRow {
                     d: path_commands(&wire.points).into(),
                     note: wire.note,
@@ -1093,10 +1299,18 @@ impl UiState {
                     delayed: wire.delayed,
                     mark_x: last.0,
                     mark_y: last.1,
+                    source: wire.source.0 as i32,
+                    level: level.abs(),
+                    flash: 0,
+                    seen: seen as i32,
                 }
             })
             .collect();
         patch.set_nodes(ModelRc::new(VecModel::from(nodes)));
+        patch.set_assigning(armed.is_some());
+        // In place when the faces on show are the same knobs, so a knob
+        // being dragged is not rebuilt under the pointer.
+        patch.set_knobs(crate::models::rows_in_place(Some(patch.get_knobs()), knobs));
         patch.set_jacks(ModelRc::new(VecModel::from(jacks)));
         patch.set_wires(ModelRc::new(VecModel::from(wires)));
         patch.set_canvas_width(layout.width);
@@ -1163,6 +1377,100 @@ impl UiState {
             None => patch.set_typing(false),
         }
         patch.set_empty(layout.nodes.is_empty() && canvas.typing.is_none());
+    }
+}
+
+impl UiState {
+    /// One knob of box `id`'s face as the canvas draws it: where it is, what
+    /// it reads, and what the assignment gesture would do to it.
+    /// The cables' activity and the open faces' live offsets, from the
+    /// levels the pump last read: only the rows that moved are written, in
+    /// place. Run by the pump when a level moved or a cable is flashing.
+    pub(crate) fn refresh_patch_activity(&self, window: &MainWindow) {
+        let patch = window.global::<crate::PatchView>();
+        let knobs = patch.get_knobs();
+        for index in 0..knobs.row_count() {
+            let Some(mut row) = knobs.row_data(index) else {
+                continue;
+            };
+            let (Ok(module), Ok(param)) = (u32::try_from(row.module), u32::try_from(row.param)) else {
+                continue;
+            };
+            let id = ModSourceId(module);
+            let Some(descriptor) = self
+                .session
+                .modulation
+                .module(id)
+                .and_then(|module| crate::patch_face::descriptor(&module.params, param))
+            else {
+                continue;
+            };
+            let policy = mooloop_core::ModDestinationDescriptor::for_param(descriptor);
+            let offset = self.session.live_offset(ParamAddr::modulator(id, param), &policy);
+            if row.offset != offset {
+                row.offset = offset;
+                knobs.set_row_data(index, row);
+            }
+        }
+        let flashing = &self.patch_canvas.flashing;
+        flashing.set(false);
+        if window.global::<crate::DisplayPrefs>().get_cable_activity() == 0 {
+            return;
+        }
+        let wires = patch.get_wires();
+        for index in 0..wires.row_count() {
+            let Some(mut row) = wires.row_data(index) else {
+                continue;
+            };
+            let Ok(source) = u32::try_from(row.source) else {
+                continue;
+            };
+            let (level, seen) = self.session.patch_node_activity(ModSourceId(source));
+            let (level, seen) = (level.abs(), seen as i32);
+            let mut changed = false;
+            if row.note && seen != row.seen {
+                row.seen = seen;
+                row.flash = FLASH_TICKS;
+                changed = true;
+            } else if row.flash > 0 {
+                row.flash -= 1;
+                changed = true;
+            }
+            if !row.note && (row.level - level).abs() > 0.002 {
+                row.level = level;
+                changed = true;
+            }
+            flashing.set(flashing.get() || row.flash > 0);
+            if changed {
+                wires.set_row_data(index, row);
+            }
+        }
+    }
+
+    fn face_knob_row(&self, id: ModSourceId, knob: FaceKnob) -> Option<crate::PatchKnobRow> {
+        let session = &self.session;
+        let module = session.modulation.module(id)?;
+        let params = module.params;
+        let descriptor = crate::patch_face::descriptor(&params, knob.param)?;
+        let value = params.get(knob.param)?;
+        let address = ParamAddr::modulator(id, knob.param);
+        let policy = mooloop_core::ModDestinationDescriptor::for_param(descriptor);
+        let armed = session.modulation_armed.get();
+        Some(crate::PatchKnobRow {
+            x: knob.x,
+            y: knob.y,
+            module: id.0 as i32,
+            param: knob.param as i32,
+            label: crate::patch_face::label(&params, knob.param).into(),
+            value_text: crate::patch_face::readout(&params, knob.param).into(),
+            value: descriptor.to_normalized(value),
+            default_value: descriptor.to_normalized(descriptor.default),
+            steps: crate::patch_face::steps(descriptor).map_or(0, i32::from),
+            allowed: policy.allowed && armed != Some(ModSourceRef::Id(id)),
+            offset: session.live_offset(address, &policy),
+            routes: session.route_count(address) as i32,
+            depth: armed.map_or(0.0, |source| session.modulation_depth_for(source, address)),
+        })
     }
 }
 
@@ -1281,6 +1589,25 @@ fn apply(
             return;
         }
         Edit::Pick(_) => {}
+        Edit::Fold(id) => {
+            let open = state
+                .borrow()
+                .session
+                .modulation
+                .module(id)
+                .is_some_and(|module| module.open);
+            edited(if open { "Fold a box" } else { "Open a box" }, &|st| {
+                st.session.set_patch_box_open(id, !open)
+            });
+        }
+        Edit::Bend(inlet, bend) => {
+            let label = if bend.is_some() {
+                "Bend a cable"
+            } else {
+                "Straighten a cable"
+            };
+            edited(label, &|st| st.session.set_wire_bend(inlet, bend));
+        }
     }
     state.borrow_mut().publish_patch_canvas(window);
 }
@@ -1541,9 +1868,22 @@ pub(crate) fn wire(
     }
     {
         let st = state.clone();
+        let commands = commands.clone();
         let weak = window.as_weak();
         patch.on_double_clicked(move |x, y| {
             let Some(window) = weak.upgrade() else { return };
+            let straighten = {
+                let state = st.borrow();
+                let layout = state.patch_layout();
+                state
+                    .patch_canvas
+                    .straighten(&layout, &state.session.modulation, x, y)
+            };
+            if let Some(inlet) = straighten {
+                st.borrow_mut().patch_canvas.drag = Drag::None;
+                apply(&st, &commands, &window, Edit::Bend(inlet, None));
+                return;
+            }
             let mut state = st.borrow_mut();
             let layout = state.patch_layout();
             let UiState {
@@ -1642,6 +1982,80 @@ pub(crate) fn wire(
     }
     {
         let st = state.clone();
+        let commands = commands.clone();
+        let weak = window.as_weak();
+        patch.on_knob_changed(move |module, param, value| {
+            let (Some(window), Ok(module), Ok(param)) =
+                (weak.upgrade(), u32::try_from(module), u32::try_from(param))
+            else {
+                return;
+            };
+            let id = ModSourceId(module);
+            // A drag is one undo step: the knob's own gesture holds it open.
+            with_gesture_history(&st, &commands, &window, "Box setting", || {
+                let mut state = st.borrow_mut();
+                let Some(params) = state.session.modulation.module(id).map(|module| module.params)
+                else {
+                    return false;
+                };
+                let Some(descriptor) = crate::patch_face::descriptor(&params, param) else {
+                    return false;
+                };
+                let mut natural = descriptor.from_normalized(value);
+                if crate::patch_face::steps(descriptor).is_some() {
+                    natural = natural.round();
+                }
+                if !state.session.set_patch_box_param(id, param, natural) {
+                    return false;
+                }
+                state.modulation_edited(&window);
+                true
+            });
+        });
+    }
+    {
+        let st = state.clone();
+        let weak = window.as_weak();
+        patch.on_knob_depth_started(move || {
+            let Some(window) = weak.upgrade() else { return };
+            st.borrow_mut().begin_gesture(&window);
+        });
+    }
+    {
+        let st = state.clone();
+        let commands = commands.clone();
+        let weak = window.as_weak();
+        patch.on_knob_depth_changed(move |module, param, depth| {
+            let (Some(window), Ok(module), Ok(param)) =
+                (weak.upgrade(), u32::try_from(module), u32::try_from(param))
+            else {
+                return;
+            };
+            let destination = ParamAddr::modulator(ModSourceId(module), param);
+            with_gesture_history(&st, &commands, &window, "Modulation depth", || {
+                let mut state = st.borrow_mut();
+                if !state.set_armed_modulation_depth(&window, destination, depth) {
+                    state.refresh_modulation(&window);
+                    return false;
+                }
+                true
+            });
+        });
+    }
+    {
+        let st = state.clone();
+        let commands = commands.clone();
+        let weak = window.as_weak();
+        patch.on_knob_depth_finished(move || {
+            let Some(window) = weak.upgrade() else { return };
+            let before = st.borrow_mut().session.finish_gesture();
+            if let Some(before) = before {
+                record_project_history(&commands, before, &st, &window, "Modulation route changed");
+            }
+        });
+    }
+    {
+        let st = state.clone();
         let weak = window.as_weak();
         patch.on_menu_closed(move || {
             let Some(window) = weak.upgrade() else { return };
@@ -1711,7 +2125,7 @@ mod tests {
                 device: "ML-M1 9".into(),
             },
             |_| false,
-            |key| canvas.offset(key),
+            canvas,
         )
     }
 
@@ -1989,6 +2403,71 @@ mod tests {
             canvas.release(&layout, &song, 900.0, 500.0),
             Edit::Unplug(Jack::new(ModSourceId(0), 1))
         );
+    }
+
+    #[test]
+    fn dragging_a_cables_middle_bends_it_and_a_double_click_straightens_it() {
+        let mut song = example();
+        let mut canvas = CanvasState::default();
+        let layout = laid(&song, &canvas);
+        let inlet = Jack::new(ModSourceId(1), 0);
+        let points = layout
+            .wires
+            .iter()
+            .find(|wire| wire.key == WireKey::Patch(inlet))
+            .unwrap()
+            .points
+            .clone();
+        assert!(points.len() >= 4, "the wire has a middle: {points:?}");
+        let (a, b) = (points[1], points[2]);
+        let middle = ((a.0 + b.0) / 2.0, (a.1 + b.1) / 2.0);
+        let across = (a.1 - b.1).abs() < 0.5;
+        let to = if across {
+            (middle.0, middle.1 + 30.0)
+        } else {
+            (middle.0 + 30.0, middle.1)
+        };
+        canvas.press(&layout, middle.0, middle.1, false);
+        canvas.moved(&layout, &song, to.0, to.1);
+        let bend = if across {
+            Bend {
+                axis: BendAxis::Horizontal,
+                at: to.1.round() as i32,
+            }
+        } else {
+            Bend {
+                axis: BendAxis::Vertical,
+                at: to.0.round() as i32,
+            }
+        };
+        // The drag is drawn before it is an edit: the run sits where the
+        // pointer has it.
+        let dragged = laid(&song, &canvas);
+        let run = &dragged
+            .wires
+            .iter()
+            .find(|wire| wire.key == WireKey::Patch(inlet))
+            .unwrap()
+            .points;
+        assert!(run.windows(2).any(|pair| match bend.axis {
+            BendAxis::Horizontal => pair[0].1 == to.1.round() && pair[1].1 == to.1.round(),
+            BendAxis::Vertical => pair[0].0 == to.0.round() && pair[1].0 == to.0.round(),
+        }));
+        assert_eq!(
+            canvas.release(&dragged, &song, to.0, to.1),
+            Edit::Bend(inlet, Some(bend))
+        );
+        // Saved, it lays out the same; a double-click on it asks to
+        // straighten it, and on an unbent cable does nothing.
+        assert!(song.bend_wire(inlet, Some(bend)));
+        let bent = laid(&song, &canvas);
+        assert_eq!(bent.wires, dragged.wires);
+        let on = run[2];
+        assert_eq!(canvas.straighten(&bent, &song, on.0, on.1), Some(inlet));
+        assert!(song.bend_wire(inlet, None));
+        let straight = laid(&song, &canvas);
+        assert_eq!(straight, layout);
+        assert_eq!(canvas.straighten(&straight, &song, middle.0, middle.1), None);
     }
 
     #[test]

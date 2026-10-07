@@ -23,7 +23,7 @@ use mooloop_core::modulation::{
     MAX_GENERATOR_OUTLETS, PERFORMANCE_DESCRIPTORS, PERFORMANCE_SOURCES,
 };
 use mooloop_core::{
-    CanvasPoint, CompiledSource, InputSource, Jack, ModPolarity, ModRoute, ModSourceId,
+    Bend, CanvasPoint, CompiledSource, InputSource, Jack, ModPolarity, ModRoute, ModSourceId,
     ModSourceRef, ModulatorKind, ModulatorParams, OutletDescriptor, PublishesOutlets, TagKind,
     WireRefusal,
 };
@@ -65,6 +65,9 @@ fn module_name(module: &mooloop_core::SongModule) -> String {
 pub struct ModulationLevels {
     pub modules: Vec<f32>,
     pub channels: Vec<([f32; MAX_GENERATOR_OUTLETS], [f32; PERFORMANCE_SOURCES])>,
+    /// Each tag's count of NoteOns and held gate, in the set last sent's
+    /// tag order.
+    pub tags: Vec<(u32, bool)>,
 }
 
 impl ModulationLevels {
@@ -215,17 +218,28 @@ impl Session {
     }
 
     /// Read every source's output off the engine: `module` for a list
-    /// position in the set last sent, `channel` for a seat. Returns whether
-    /// anything moved, which is when the knobs need their offsets redrawn.
+    /// position in the set last sent, `channel` for a seat, `tag` for a
+    /// tag's count of NoteOns and held gate by its place among the tags. Returns whether
+    /// anything moved, which is when the knobs and wires need redrawing.
     pub fn read_modulation_levels(
         &self,
         module: impl Fn(usize) -> f32,
         channel: impl Fn(usize) -> ([f32; MAX_GENERATOR_OUTLETS], [f32; PERFORMANCE_SOURCES]),
+        tag: impl Fn(usize) -> (u32, bool),
     ) -> bool {
         let mut levels = self.modulation_levels.borrow_mut();
         let modules = self.modulation_sent.modules.len();
+        let tags = self.modulation_sent.tags.len();
         let seats = self.channels.len();
-        let mut moved = levels.modules.len() != modules || levels.channels.len() != seats;
+        let mut moved = levels.modules.len() != modules
+            || levels.channels.len() != seats
+            || levels.tags.len() != tags;
+        levels.tags.resize(tags, (0, false));
+        for (at, value) in levels.tags.iter_mut().enumerate() {
+            let next = tag(at);
+            moved |= *value != next;
+            *value = next;
+        }
         levels.modules.resize(modules, 0.0);
         levels.channels.resize(seats, ([0.0; MAX_GENERATOR_OUTLETS], [0.0; PERFORMANCE_SOURCES]));
         for (at, value) in levels.modules.iter_mut().enumerate() {
@@ -239,6 +253,23 @@ impl Session {
             *value = next;
         }
         moved
+    }
+
+    /// What patch node `node` is putting on its outlet as of the last read:
+    /// a box's value, or a tag's gate (1 while a note is held) and how many
+    /// NoteOns it has passed. Zero for a node the engine does not run.
+    pub fn patch_node_activity(&self, node: ModSourceId) -> (f32, u32) {
+        if self.modulation.module(node).is_some() {
+            return (self.modulation_source_level(ModSourceRef::Id(node)), 0);
+        }
+        let (notes, held) = self
+            .modulation_sent
+            .tags
+            .iter()
+            .position(|tag| tag.id == node)
+            .and_then(|at| self.modulation_levels.borrow().tags.get(at).copied())
+            .unwrap_or_default();
+        (if held { 1.0 } else { 0.0 }, notes)
     }
 
     /// The live offset the routes onto `destination` add right now, as a
@@ -612,6 +643,31 @@ impl Session {
         moved
     }
 
+    /// Opens or folds box `id`'s face on the canvas (song patch step 05).
+    /// `false` when it was already so, or there is no such box.
+    pub fn set_patch_box_open(&mut self, id: ModSourceId, open: bool) -> bool {
+        match self.modulation.module_mut(id) {
+            Some(module) if module.open != open => {
+                module.open = open;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Sets one of box `id`'s settings from its face: what
+    /// [`Self::set_modulator_param`] does, by the box rather than its place
+    /// in the list.
+    pub fn set_patch_box_param(&mut self, id: ModSourceId, param: u32, value: f32) -> bool {
+        let Some(index) = self.modulation_source_index(ModSourceRef::Id(id)) else {
+            return false;
+        };
+        let Ok(param) = i32::try_from(param) else {
+            return false;
+        };
+        self.set_modulator_param(index as i32, param, value)
+    }
+
     /// Removes a box or a tag from the song, with its wires; a box takes its
     /// routes too, and the selection and arming that named it.
     pub fn remove_patch_node(&mut self, node: ModSourceId) -> bool {
@@ -635,6 +691,12 @@ impl Session {
             return Err(PatchRefusal::InletTaken);
         }
         self.modulation.connect(from, to).map_err(PatchRefusal::Wire)
+    }
+
+    /// Sets or clears the hand-placed bend of the wire into inlet `to`: the
+    /// canvas's drag of a cable's middle. `false` when nothing changed.
+    pub fn set_wire_bend(&mut self, to: Jack, bend: Option<Bend>) -> bool {
+        self.modulation.bend_wire(to, bend)
     }
 
     /// Removes the wire into inlet `to`. `false` when there was none.
@@ -1231,6 +1293,36 @@ mod tests {
         assert_eq!(session.modulation_armed.get(), None);
         assert_eq!(session.modulation.wire_into(Jack::new(select, 2)), None);
         assert_eq!(session.modulation.module(counter).unwrap().at, at(100));
+    }
+
+    /// An outlet assigned to a box's knob (song patch step 05) makes a
+    /// route onto the box, named as the box reads; a box never takes its own
+    /// outlet, a stepped knob takes nothing, and removing the box takes the
+    /// routes onto it.
+    #[test]
+    fn an_outlet_assigns_to_another_box_knob() {
+        use crate::session::ArmedRoute;
+        use mooloop_core::{ParamAddr, COUNTER_PARAM_STEPS, LFO_PARAM_RATE_HZ};
+        let mut session = Session::default();
+        let at = |x| CanvasPoint::new(x, 40);
+        let lfo = session.type_patch_box("lfo", at(0)).unwrap();
+        let other = session.type_patch_box("lfo", at(100)).unwrap();
+        let counter = session.type_patch_box("counter 4", at(200)).unwrap();
+        let rate = ParamAddr::modulator(other, LFO_PARAM_RATE_HZ);
+        session.modulation_armed.set(Some(ModSourceRef::Id(lfo)));
+        assert!(matches!(session.arm_modulation_route(rate, 0.3), ArmedRoute::Added(_)));
+        assert_eq!(session.route_count(rate), 1);
+        assert_eq!(
+            session.modulation_destination(rate).map(|(name, descriptor)| (name, descriptor.name)),
+            Some(("lfo".to_string(), "Rate"))
+        );
+        let own = ParamAddr::modulator(lfo, LFO_PARAM_RATE_HZ);
+        assert!(matches!(session.arm_modulation_route(own, 0.3), ArmedRoute::Unchanged));
+        let steps = ParamAddr::modulator(counter, COUNTER_PARAM_STEPS);
+        assert!(matches!(session.arm_modulation_route(steps, 0.3), ArmedRoute::Unchanged));
+
+        assert!(session.remove_patch_node(other));
+        assert!(session.modulation.routes.is_empty(), "the route onto the box went with it");
     }
 
     /// The canvas's own verbs: a drop replaces an inlet's wire, the inlet

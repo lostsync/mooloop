@@ -72,8 +72,13 @@ pub enum ParamOwner {
     Effect {
         device: DeviceId,
     },
+    /// One parameter of a box in the song's patch, by the box's identity
+    /// (song patch step 05): a knob on an open face is a destination like
+    /// any other, so an outlet can move another box's setting. The address
+    /// sits on no channel or track: its scope is [`MODULATOR_SCOPE`], which
+    /// no seat is and no channel or track edit moves.
     Modulator {
-        slot: u8,
+        module: ModSourceId,
     },
     /// Volume, pan, mute — the strip itself rather than a device on it.
     Strip,
@@ -146,8 +151,11 @@ enum SavedOwner {
         #[serde(alias = "slot")]
         device: DeviceId,
     },
+    /// `slot` is what this key was called before anything authored one,
+    /// when it named a rack position; nothing wrote it.
     Modulator {
-        slot: u8,
+        #[serde(alias = "slot")]
+        module: ModSourceId,
     },
     Strip,
     #[serde(rename = "plugin_param")]
@@ -199,7 +207,7 @@ impl<S> SavedAddress<S> {
             ParamOwner::Source { kind } => (SavedOwner::Source, kind),
             ParamOwner::SourceRoute { route } => (SavedOwner::SourceRoute { route }, None),
             ParamOwner::Effect { device } => (SavedOwner::Effect { device }, None),
-            ParamOwner::Modulator { slot } => (SavedOwner::Modulator { slot }, None),
+            ParamOwner::Modulator { module } => (SavedOwner::Modulator { module }, None),
             ParamOwner::Strip => (SavedOwner::Strip, None),
             ParamOwner::PluginParam { device } => (SavedOwner::PluginParam { device }, None),
         };
@@ -220,7 +228,7 @@ impl<S> SavedAddress<S> {
             },
             SavedOwner::SourceRoute { route } => ParamOwner::SourceRoute { route },
             SavedOwner::Effect { device } => ParamOwner::Effect { device },
-            SavedOwner::Modulator { slot } => ParamOwner::Modulator { slot },
+            SavedOwner::Modulator { module } => ParamOwner::Modulator { module },
             SavedOwner::Strip => ParamOwner::Strip,
             SavedOwner::PluginParam { device } => ParamOwner::PluginParam { device },
         }
@@ -337,7 +345,30 @@ impl ParamAddr {
             param,
         }
     }
+
+    /// Parameter `param` of the song's box `module` (song patch step 05).
+    pub const fn modulator(module: ModSourceId, param: u32) -> Self {
+        Self {
+            scope: MODULATOR_SCOPE,
+            owner: ParamOwner::Modulator { module },
+            param,
+        }
+    }
+
+    /// The box this address is a knob of, when it is one.
+    pub const fn module(self) -> Option<ModSourceId> {
+        match self.owner {
+            ParamOwner::Modulator { module } => Some(module),
+            _ => None,
+        }
+    }
 }
+
+/// The scope of a box's knob ([`ParamAddr::modulator`]): a box is on no
+/// channel or track, so its address names a track seat past the last there
+/// can be. No chain files a route there, and a channel or track edit leaves
+/// it where it is ([`crate::structure::ListEdit::address`]).
+pub const MODULATOR_SCOPE: EffectTarget = EffectTarget::Bus(u8::MAX);
 
 /// A parameter named so that a structural edit cannot move it:
 /// [`ParamAddr`]'s durable twin.
@@ -2337,7 +2368,7 @@ impl ModRack {
             // be inherited by whatever module is installed there next.
             if route.is_some_and(|route| {
                 route.source == ModSourceRef::Id(removed.id)
-                    || route.destination.owner == ParamOwner::Modulator { slot: slot as u8 }
+                    || route.destination.module() == Some(removed.id)
             }) {
                 *route = None;
             }
@@ -2441,22 +2472,6 @@ impl ModRack {
                         math.input_slot = moved;
                     }
                 }
-            }
-        }
-        // A route's *source* resolves from its durable id below, but its
-        // destination can name a modulator slot -- the same positional
-        // reference an effect slot is, one level down. Nothing authors one
-        // yet; wiring it here means the day something does, the grid's
-        // reorder does not silently re-aim it at a different module.
-        for route in self.routes.iter_mut().flatten() {
-            let ParamOwner::Modulator { slot } = route.destination.owner else {
-                continue;
-            };
-            let Some(moved) = remap.get(slot as usize).copied() else {
-                continue;
-            };
-            if moved != UNRESOLVED_SLOT {
-                route.destination.owner = ParamOwner::Modulator { slot: moved };
             }
         }
         self.resolve_routes();
@@ -3419,7 +3434,12 @@ impl SongModulation {
         if self.modules.len() == before {
             return false;
         }
-        self.routes.retain(|route| route.source != ModSourceRef::Id(id));
+        // The routes it drove, and the routes onto its knobs.
+        let gone = |source: ModSourceRef, destination: ParamAddr| {
+            source == ModSourceRef::Id(id) || destination.module() == Some(id)
+        };
+        self.routes.retain(|route| !gone(route.source, route.destination));
+        self.route_places.retain(|place| !gone(place.source, place.destination));
         // A box that read it reads nothing.
         self.drop_wires_of(id);
         true
@@ -4195,29 +4215,21 @@ retrigger = true
         assert!(rack.modulates(addr(1), &narrowed));
     }
 
-    /// A modulator slot is a position like an effect slot is, so a route
-    /// aimed at one has to survive the grid being reordered. Nothing authors
-    /// such a route yet; this is the hole closed before something does.
+    /// A route onto a module's knob names the module, not its grid slot, so
+    /// a reorder leaves it aimed at the same module, and emptying that
+    /// module's slot takes the route with it rather than leaving it for the
+    /// next module installed there.
     #[test]
     fn a_route_onto_a_modulator_follows_the_module_through_the_grid() {
         let mut rack = rack_with_sources(3);
-        let onto_slot_2 = ParamAddr {
-            scope: EffectTarget::Channel(0),
-            owner: ParamOwner::Modulator { slot: 2 },
-            param: LFO_PARAM_RATE_HZ,
-        };
-        rack.add_route(ModRoute::to_slot(0, onto_slot_2, 0.5, ModPolarity::Bipolar))
+        let third = rack.slots[2].unwrap().id;
+        let onto_third = ParamAddr::modulator(third, LFO_PARAM_RATE_HZ);
+        rack.add_route(ModRoute::to_slot(0, onto_third, 0.5, ModPolarity::Bipolar))
             .unwrap();
 
-        // Move the module in slot 2 to the front: everything shifts up one.
         assert!(rack.move_module(2, 0));
-        assert_eq!(
-            rack.routes[0].unwrap().destination.owner,
-            ParamOwner::Modulator { slot: 0 }
-        );
+        assert_eq!(rack.routes[0].unwrap().destination, onto_third);
 
-        // And emptying the destination's slot takes the route with it rather
-        // than leaving it for the next module installed there.
         assert!(rack.clear(0));
         assert!(rack.routes.iter().flatten().next().is_none());
     }
@@ -4270,6 +4282,24 @@ retrigger = true
         assert!(rack.forget_device(here, DeviceId(3)));
         let left: Vec<ParamAddr> = rack.routes.iter().flatten().map(|route| route.destination).collect();
         assert_eq!(left, [ParamAddr::plugin_param(here, DeviceId(4), 7)]);
+    }
+
+    /// A box's knob is written `owner.modulator.module`, beside a scope no
+    /// seat has, and costs the address nothing (song patch step 05).
+    #[test]
+    fn a_box_knob_address_round_trips() {
+        assert_eq!(std::mem::size_of::<ParamAddr>(), 16);
+        let address = ParamAddr::modulator(ModSourceId(12), 3);
+        #[derive(serde::Serialize, serde::Deserialize)]
+        struct Wrap {
+            target: ParamAddr,
+        }
+        let text = toml::to_string(&Wrap { target: address }).unwrap();
+        assert!(text.contains("[target.owner.modulator]"), "{text}");
+        assert!(text.contains("module = 12"), "{text}");
+        assert_eq!(toml::from_str::<Wrap>(&text).unwrap().target, address);
+        assert_eq!(address.module(), Some(ModSourceId(12)));
+        assert_eq!(address.device(), None);
     }
 
     #[test]

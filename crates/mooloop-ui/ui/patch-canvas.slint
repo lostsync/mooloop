@@ -6,7 +6,8 @@
 // in canvas units, the way the piano roll's grid does, because a touch area
 // on each box would move out from under the pointer as its box is dragged.
 import { ScrollView } from "std-widgets.slint";
-import { Theme } from "theme.slint";
+import { Theme, DisplayPrefs } from "theme.slint";
+import { MiniKnob } from "controls.slint";
 
 // A box, a tag, or a route's assignment tag.
 export struct PatchNodeRow {
@@ -33,6 +34,32 @@ export struct PatchNodeRow {
     selected: bool,
     // Armed for the assignment gesture.
     armed: bool,
+    // A box's face is open under its spelling (song patch step 05); its
+    // knobs are `PatchView.knobs`. `empty-face` is an open box with none.
+    open: bool,
+    empty-face: bool,
+}
+
+// One knob on an open box's face, at the top-left of its cell. `value` and
+// `default-value` are 0..1 along the setting's range; `steps` is how many
+// detents a stepped setting has, 0 for a continuous one.
+export struct PatchKnobRow {
+    x: length,
+    y: length,
+    module: int,
+    param: int,
+    label: string,
+    value-text: string,
+    value: float,
+    default-value: float,
+    steps: int,
+    // Whether the armed source may be routed here: not a stepped setting,
+    // and not the box's own outlet.
+    allowed: bool,
+    offset: float,
+    routes: int,
+    // The armed source's depth onto this knob.
+    depth: float,
 }
 
 // One jack, at the point its wire meets.
@@ -63,6 +90,13 @@ export struct PatchWireRow {
     delayed: bool,
     mark-x: length,
     mark-y: length,
+    // Cable activity (step 05): the node the wire leaves, `-1` for none;
+    // a control wire's level, `0..1`; how many pump ticks a note wire stays
+    // thick for a note just sent, and the NoteOn count it last saw.
+    source: int,
+    level: float,
+    flash: int,
+    seen: int,
 }
 
 // One name the box being typed could be, as the completion list shows it.
@@ -117,6 +151,15 @@ export global PatchView {
     callback typing-key(string) -> bool;
     callback typing-accepted(string);
     callback word-picked(int);
+    // Open faces (song patch step 05): every knob on show, and whether a
+    // source is armed, which makes a drag on a knob set its depth.
+    in property <[PatchKnobRow]> knobs;
+    in property <bool> assigning;
+    // (module, param, value 0..1)
+    callback knob-changed(int, int, float);
+    callback knob-depth-started();
+    callback knob-depth-changed(int, int, float);
+    callback knob-depth-finished();
 }
 
 global PatchColors {
@@ -217,8 +260,17 @@ export component PatchCanvas inherits Rectangle {
                 viewbox-height: world.height / 1px;
                 commands: wire.d;
                 fill: transparent;
-                stroke: wire.selected ? Theme.accent : wire.note ? Theme.warning.transparentize(0.35) : PatchColors.wire;
-                stroke-width: wire.selected ? 2.5px : 1.5px;
+                // Cable activity: a control wire tints toward the accent with
+                // its level, a note wire thickens for a note; Subtle is 30 %
+                // of Full, Off draws plain wires.
+                property <float> amount: DisplayPrefs.cable-activity == 2 ? 1.0
+                    : DisplayPrefs.cable-activity == 1 ? 0.3 : 0.0;
+                stroke: wire.selected ? Theme.accent
+                    : wire.note ? Theme.warning.transparentize(0.35)
+                    : Theme.accent.mix(PatchColors.wire, clamp(wire.level, 0, 1) * self.amount);
+                stroke-width: wire.selected ? 2.5px
+                    : wire.note && wire.flash > 0 ? 1.5px + 3px * self.amount
+                    : 1.5px;
             }
             // A wire that reads a tick late carries a short bar across it
             // just above its inlet.
@@ -257,14 +309,45 @@ export component PatchCanvas inherits Rectangle {
                     border-radius: Theme.radius-md;
                     Text {
                         x: 12px;
-                        width: parent.width - 16px;
-                        height: parent.height;
+                        y: 0;
+                        width: parent.width - 16px - 18px;
+                        height: 28px;
                         text: node.spelling;
                         font-family: Theme.font-family-mono;
                         font-size: Theme.text-2xl;
                         color: node.unknown ? Theme.text-muted : Theme.text;
                         vertical-alignment: center;
                         overflow: elide;
+                    }
+                    // The fold arrow, which opens the face; the canvas's
+                    // pointer finds it (`patch_canvas.rs`, `Hit::Fold`).
+                    Text {
+                        x: parent.width - 20px;
+                        y: 0;
+                        width: 18px;
+                        height: 28px;
+                        text: node.open ? "\u{25be}" : "\u{25b8}";
+                        color: Theme.text-muted;
+                        font-size: Theme.text-xl;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                    if node.open : Rectangle {
+                        x: 1px;
+                        y: 28px;
+                        width: parent.width - 2px;
+                        height: 1px;
+                        background: PatchColors.edge;
+                    }
+                    if node.empty-face : Text {
+                        x: 12px;
+                        y: 28px;
+                        width: parent.width - 16px;
+                        height: 22px;
+                        text: "No settings";
+                        color: Theme.text-faint;
+                        font-size: Theme.text-md;
+                        vertical-alignment: center;
                     }
                 }
                 if !node.is-box : PatchTag {
@@ -348,6 +431,58 @@ export component PatchCanvas inherits Rectangle {
                 }
                 double-clicked => {
                     PatchView.double-clicked(self.mouse-x, self.mouse-y);
+                }
+            }
+
+            // The knobs of every open face, over the canvas's pointer so they
+            // take their own drags. A drag sets the setting, or, with a
+            // source armed, that source's depth onto it.
+            for knob in PatchView.knobs : Rectangle {
+                x: knob.x;
+                y: knob.y;
+                width: 46px;
+                height: 52px;
+                Text {
+                    y: 3px;
+                    width: parent.width;
+                    height: 10px;
+                    text: knob.label;
+                    color: Theme.text-faint;
+                    font-size: Theme.text-xs;
+                    horizontal-alignment: center;
+                    overflow: elide;
+                }
+                MiniKnob {
+                    x: (parent.width - self.width) / 2;
+                    y: 15px;
+                    diameter: 22px;
+                    label: knob.label;
+                    hint: knob.label + " " + knob.value-text;
+                    value-text: knob.value-text;
+                    value: knob.value;
+                    default-value: knob.default-value;
+                    step: knob.steps > 0 ? 1 / knob.steps : 0;
+                    travel: knob.steps > 0 ? max(40px, min(150px, knob.steps * 12px)) : 150px;
+                    modulation-armed: PatchView.assigning;
+                    modulation-allowed: knob.allowed;
+                    modulation-depth: knob.depth;
+                    modulation-offset: knob.offset;
+                    modulation-route-count: knob.routes;
+                    changed(value) => { PatchView.knob-changed(knob.module, knob.param, value); }
+                    modulation-edit-started => { PatchView.knob-depth-started(); }
+                    modulation-depth-changed(depth) => { PatchView.knob-depth-changed(knob.module, knob.param, depth); }
+                    modulation-edit-finished => { PatchView.knob-depth-finished(); }
+                }
+                Text {
+                    y: 39px;
+                    width: parent.width;
+                    height: 11px;
+                    text: knob.value-text;
+                    color: Theme.text-muted;
+                    font-family: Theme.font-family-mono;
+                    font-size: Theme.text-xs;
+                    horizontal-alignment: center;
+                    overflow: elide;
                 }
             }
 
