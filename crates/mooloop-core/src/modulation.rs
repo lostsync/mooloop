@@ -3534,6 +3534,8 @@ impl SongModulation {
                 ..*route
             });
         }
+        // The rack's outlet and keyboard routes read the channel's tags.
+        self.adopt_channel_routes();
     }
 
     /// The rack the engine runs for the channel wearing `channel`, at `seat`.
@@ -3576,6 +3578,12 @@ impl SongModulation {
             }
         }
         for route in &self.routes {
+            // A route from a channel's inlet tag is the channel's own outlet
+            // or keyboard route in a rack, as it was before tags.
+            let route = &ModRoute {
+                source: self.channel_source(route.source),
+                ..*route
+            };
             let carried = match route.source {
                 ModSourceRef::Id(id) => {
                     if rack.slot_of(id).is_some() {
@@ -3837,12 +3845,17 @@ impl SongModulation {
     }
 
     /// The routes landing on the channel at `seat`: what a copied channel
-    /// carries to its paste.
+    /// carries to its paste. A route from a channel's outlet or keyboard tag
+    /// is carried as that outlet's or keyboard's, so a paste into another
+    /// song finds or makes its own tag.
     pub fn routes_into(&self, seat: u8) -> Vec<ModRoute> {
         self.routes
             .iter()
             .filter(|route| route.destination.scope == EffectTarget::Channel(seat))
-            .copied()
+            .map(|route| ModRoute {
+                source: self.channel_source(route.source),
+                ..*route
+            })
             .collect()
     }
 
@@ -3861,8 +3874,10 @@ impl SongModulation {
     ) -> usize {
         let mut dropped = 0;
         for route in routes {
-            let source = match route.source {
-                ModSourceRef::Id(id) if self.module(id).is_some() => route.source,
+            let source = match self.channel_source(route.source) {
+                ModSourceRef::Id(id) if self.module(id).is_some() || self.tag(id).is_some() => {
+                    route.source
+                }
                 ModSourceRef::Id(_) | ModSourceRef::LocalSlot(_) => {
                     dropped += 1;
                     continue;
@@ -3886,6 +3901,8 @@ impl SongModulation {
                 ..*route
             });
         }
+        // An outlet or keyboard route lands as a route from its tag.
+        self.adopt_channel_routes();
         dropped
     }
 }

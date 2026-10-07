@@ -298,6 +298,14 @@ fn a_right_click_makes_an_inlet_tag_and_its_list_binds_it() {
     let row = options().iter().position(|option| option == "Beat").expect("the beat tag is offered");
     patch.invoke_picked(row as i32);
     assert_eq!(h.feeds(Jack::new(lfo, 1)), Some(Jack::new(tag, 0)));
+
+    // A click on its outlet arms it, as a box's does: a channel's outlets
+    // and the transport reach a knob through tags.
+    h.click(h.jack(tag, true, 0));
+    assert_eq!(
+        h.state.borrow().session.modulation_armed.get(),
+        Some(mooloop_core::ModSourceRef::Id(tag))
+    );
 }
 
 #[test]

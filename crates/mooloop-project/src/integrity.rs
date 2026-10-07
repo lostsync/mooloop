@@ -1820,6 +1820,12 @@ fn check_song_modulation(
     }
 
     let modules: Vec<_> = modulation.modules.iter().map(|module| module.id).collect();
+    // A route can come from a tag too (song patch step 06).
+    let nodes: Vec<_> = modules
+        .iter()
+        .copied()
+        .chain(modulation.tags.iter().map(|tag| tag.id))
+        .collect();
     let kinds: Vec<_> = modulation
         .modules
         .iter()
@@ -1846,7 +1852,7 @@ fn check_song_modulation(
         let where_ = format!("{WHO}, route {}", index + 1);
         doctor.fit_finite("modulation.depth", &where_, "its depth", &mut route.depth, 0.0);
         let missing = match route.source {
-            ModSourceRef::Id(id) => (!modules.contains(&id))
+            ModSourceRef::Id(id) => (!nodes.contains(&id))
                 .then(|| format!("it is driven by module {}, which this song does not have", id.0)),
             ModSourceRef::GeneratorOutlet { channel, .. } | ModSourceRef::Performance { channel, .. } => {
                 (!channels.contains(&channel)).then(|| {
@@ -3624,7 +3630,7 @@ mod tests {
     }
 
     /// The song's set checks what it names: a module identity worn twice, a
-    /// route from a module or a channel the song does not have, a tag naming
+    /// route from a module the song does not have, a tag naming
     /// a channel that has gone, a wire from a box that is not there, a wire
     /// of the wrong sort, a second wire into one inlet, and a depth that is
     /// not a number.
@@ -3676,7 +3682,7 @@ mod tests {
             wire(gate),
         ]);
         let mut gone = project.modulation.routes[0];
-        gone.source = ModSourceRef::Id(ModSourceId(99));
+        gone.source = ModSourceRef::Id(ModSourceId(96));
         let mut stranger = project.modulation.routes[0];
         stranger.source = ModSourceRef::GeneratorOutlet {
             channel: mooloop_core::ChannelId(40),
@@ -3695,7 +3701,9 @@ mod tests {
                 "modulation.depth",
                 "modulation.module.id",
                 "modulation.route.destination",
-                "modulation.route.destination",
+                // The gate tag, and the tag the outlet route from channel 40
+                // now reads (song patch step 06).
+                "modulation.tag.channel",
                 "modulation.tag.channel",
                 "modulation.wire.inlet",
                 "modulation.wire.jack",
@@ -3708,8 +3716,12 @@ mod tests {
         assert_eq!(modulation.input_of(lfo.id), InputSource::None, "its gate is an empty tag");
         assert_eq!(modulation.input_of(ModSourceId(98)), InputSource::Module(lfo.id), "the first good wire");
         assert_eq!(modulation.wires.len(), 2);
-        assert_eq!(modulation.routes.len(), 1);
+        assert_eq!(modulation.routes.len(), 2);
         assert_eq!(modulation.routes[0].depth, 0.0);
+        let ModSourceRef::Id(stranger) = modulation.routes[1].source else {
+            panic!("the outlet route reads a tag");
+        };
+        assert_eq!(modulation.tag(stranger).map(|tag| tag.kind), Some(TagKind::Inlet { bind: None }));
     }
 
     /// MOO-74's C.6, and Adam's ruling on it: nothing about a plugin

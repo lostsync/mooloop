@@ -1775,8 +1775,17 @@ impl Session {
         let depth = policy.clamp_depth(depth);
         let default_polarity = match source {
             ModSourceRef::Id(id) => match self.modulation.module(id).map(|module| module.params) {
-                // A module that has gone names nothing.
-                None => return ArmedRoute::Unchanged,
+                // A tag takes the destination's own default, as the outlet
+                // or keyboard it may read did; an empty one, or one reading
+                // something the song no longer has, names nothing.
+                None => match self.modulation.tag(id).map(|tag| tag.kind) {
+                    Some(mooloop_core::TagKind::Inlet { bind: Some(bind) })
+                        if self.inlet_source_name(bind).is_some() =>
+                    {
+                        policy.default_polarity
+                    }
+                    _ => return ArmedRoute::Unchanged,
+                },
                 // Sources that only ever swing one way default to a unipolar
                 // route, so their resting value is the destination's base.
                 Some(ModulatorParams::Envelope(_)) => ModPolarity::Unipolar,

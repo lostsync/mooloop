@@ -376,6 +376,9 @@ pub const GRID_STEP: CanvasPoint = CanvasPoint::new(160, 112);
 /// Where the tags a conversion makes go: a column at the canvas's left edge.
 pub const TAG_COLUMN_X: i32 = 16;
 
+/// How far below the last tag a tag made in the column goes.
+pub const TAG_STEP: i32 = 40;
+
 /// The canvas place of the box at list position `index` in the default grid.
 pub fn grid_place(index: usize) -> CanvasPoint {
     let index = i32::try_from(index).unwrap_or(i32::MAX / GRID_STEP.y);
@@ -589,13 +592,85 @@ impl SongModulation {
     /// `y` if there is none. One tag per channel, shared by every box that
     /// reads it (Adam drew it that way).
     pub fn gate_tag(&mut self, channel: crate::ChannelId, y: i32) -> ModSourceId {
-        let kind = TagKind::Inlet {
-            bind: Some(InletSource::Gate(channel)),
-        };
-        match self.tags.iter().find(|tag| tag.kind == kind) {
-            Some(tag) => tag.id,
-            None => self.add_tag(kind, CanvasPoint::new(TAG_COLUMN_X, y)),
+        self.inlet_tag(InletSource::Gate(channel), Some(y))
+    }
+
+    /// The song's inlet tag bound to `source`, made in the tag column if
+    /// there is none: at `y`, or under the lowest tag. One tag per source,
+    /// shared by everything that reads it.
+    pub fn inlet_tag(&mut self, source: InletSource, y: Option<i32>) -> ModSourceId {
+        let kind = TagKind::Inlet { bind: Some(source) };
+        if let Some(tag) = self.tags.iter().find(|tag| tag.kind == kind) {
+            return tag.id;
         }
+        let y = y.unwrap_or_else(|| {
+            self.tags
+                .iter()
+                .map(|tag| tag.at.y + TAG_STEP)
+                .max()
+                .unwrap_or(GRID_ORIGIN.y)
+        });
+        self.add_tag(kind, CanvasPoint::new(TAG_COLUMN_X, y))
+    }
+
+    /// The channel source an inlet tag stands for, as a route named it
+    /// before routes read tags (song patch step 06): a generator outlet or
+    /// the keyboard. `source` itself for anything else.
+    pub fn channel_source(&self, source: crate::ModSourceRef) -> crate::ModSourceRef {
+        let crate::ModSourceRef::Id(id) = source else {
+            return source;
+        };
+        match self.tag(id).map(|tag| tag.kind) {
+            Some(TagKind::Inlet {
+                bind: Some(InletSource::Outlet { channel, outlet }),
+            }) => crate::ModSourceRef::GeneratorOutlet { channel, outlet },
+            Some(TagKind::Inlet {
+                bind: Some(InletSource::Performance { channel, source }),
+            }) => crate::ModSourceRef::Performance { channel, source },
+            _ => source,
+        }
+    }
+
+    /// Turn every route read straight from a channel's generator outlet or
+    /// keyboard into a route from the inlet tag bound to it (song patch step
+    /// 06), one tag per source, shared, with the route's place carried over.
+    /// A route naming no channel yet is left for when it does. Returns
+    /// whether anything changed.
+    pub fn adopt_channel_routes(&mut self) -> bool {
+        let mut changed = false;
+        let routes = std::mem::take(&mut self.routes);
+        for mut route in routes {
+            let bind = match route.source {
+                crate::ModSourceRef::GeneratorOutlet { channel, outlet } if channel.is_assigned() => {
+                    Some(InletSource::Outlet { channel, outlet })
+                }
+                crate::ModSourceRef::Performance { channel, source } if channel.is_assigned() => {
+                    Some(InletSource::Performance { channel, source })
+                }
+                _ => None,
+            };
+            if let Some(bind) = bind {
+                let source = crate::ModSourceRef::Id(self.inlet_tag(bind, None));
+                for place in &mut self.route_places {
+                    if place.source == route.source && place.destination == route.destination {
+                        place.source = source;
+                    }
+                }
+                route.source = source;
+                changed = true;
+                // The tag's route is already there (a paste of one): this
+                // is the same route.
+                if self
+                    .routes
+                    .iter()
+                    .any(|held| held.source == source && held.destination == route.destination)
+                {
+                    continue;
+                }
+            }
+            self.routes.push(route);
+        }
+        changed
     }
 
     /// Where the assignment tag of the route from `source` to `destination`

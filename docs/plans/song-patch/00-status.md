@@ -199,7 +199,7 @@ by hand (`Wire.bend`, saved since step 01), and Preferences > Appearance has
   channel in the compiled set, so its wires flash before step 07 gives note
   wires a box to play.
 
-**06 (MOO-525), first half.** Inlet tags read every source in the step
+**06 (MOO-525), first half (PR #585).** Inlet tags read every source in the step
 file: `InletSource` grows `Outlet`, `Performance`, `Beat`, `Bar`,
 `PatternPosition` and `Pattern` (`core/src/patch.rs`), compiled to a
 `TagSource` per tag. The render loop fills a per-tick transport table
@@ -223,6 +223,30 @@ from the step file:
   An outlet tag sends no fire of its own: a gate outlet rising through 0.5
   triggers as any wire does.
 - **No toolbar button yet**: the right-click is the only way to make a tag.
+
+**06, second half.** Routes from outlets and keyboards read tags: on load
+(`Project::lift_channel_modulation`), after a rack is lifted (a channel
+preset) and after a paste, each such route reads the inlet tag bound to its
+source, one per source, made in the tag column, with its place carried
+over (`SongModulation::adopt_channel_routes`). The outlet band is gone; any
+bound inlet tag is a source in the pane's list, armed from its outlet on
+the canvas. Where it differs from the step file:
+
+- **The engine's `ChannelSources` reads stay.** A route from a tag bound to
+  an outlet or the keyboard compiles to the same `CompiledSource::Outlet`
+  or `Performance` the old route did, so a converted song reads the same
+  values at the same block: the null test holds by construction. A route
+  from any other tag reads a per-tick tag table (`CompiledSource::Tag`).
+- **`ModSourceRef` keeps its outlet and keyboard variants** for what is
+  carried outside the song: a copied channel's routes and a channel preset's
+  rack name the outlet itself (`SongModulation::channel_source`), so a paste
+  into another song finds or makes its own tag. Inside the song they are
+  only ever transient.
+- **A route from an outlet of a channel the song does not have** used to be
+  dropped on load; it now reads a tag that integrity empties, and drives
+  nothing until the tag is bound again.
+- **A tag can move a box's knob**: a knob route's source is a node index,
+  boxes then tags.
 
 ## Adam's rulings
 

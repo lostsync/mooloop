@@ -1442,6 +1442,9 @@ impl Project {
             self.modulation.lift_rack(id, index as u8, &name, &rack);
         }
         self.modulation.resolve_math_inputs();
+        // Routes read a channel's outlets and keyboard through inlet tags
+        // (song patch step 06), which name the channel by id.
+        self.modulation.adopt_channel_routes();
     }
 
     /// Give every lane, route and control binding onto a generator that was

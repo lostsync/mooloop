@@ -28,6 +28,9 @@ use mooloop_core::{
     WireRefusal,
 };
 
+/// What an inlet tag's list adds to a source read a block late.
+const LATE_NOTE: &str = " (a block late)";
+
 /// What can feed an inlet, as the canvas's inlet picker offers it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PatchFeed {
@@ -59,8 +62,8 @@ fn module_name(module: &mooloop_core::SongModule) -> String {
 }
 
 /// Every source's latest output, as the knobs read it: each module by its
-/// position in the set the engine runs ([`Session::sync_modulation`]), and
-/// each channel's outlets and keyboard by its seat.
+/// position in the set the engine runs ([`Session::sync_modulation`]), each
+/// channel's outlets and keyboard by its seat, and each tag.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ModulationLevels {
     pub modules: Vec<f32>,
@@ -83,6 +86,7 @@ impl ModulationLevels {
                 .channels
                 .get(usize::from(seat))
                 .and_then(|(_, performance)| performance.get(usize::from(source)).copied()),
+            CompiledSource::Tag(at) => self.tags.get(usize::from(at)).map(|&(_, value)| value),
         }
         .unwrap_or(0.0)
     }
@@ -105,26 +109,16 @@ impl Session {
     }
 
     /// Every source the modulation pane lists, in its order: the song's
-    /// modules in list order, then for each channel by seat its generator's
-    /// published control outlets and its keyboard's mod wheel and
-    /// aftertouch (MOO-128). Only the control run of a generator's outlets:
-    /// an audio outlet is not a control signal that happens to be fast.
+    /// boxes in list order, then its bound inlet tags in theirs. A channel's
+    /// generator outlets and keyboard are read through tags (song patch step
+    /// 06), so they are sources once a tag reads them.
     pub fn modulation_sources(&self) -> Vec<ModSourceRef> {
         let modules = self.modulation.modules.iter().map(|module| ModSourceRef::Id(module.id));
-        let channels = self.channels.iter().flat_map(|channel| {
-            let id = channel.id;
-            channel
-                .kind()
-                .control_outlets()
-                .iter()
-                .map(move |outlet| ModSourceRef::GeneratorOutlet { channel: id, outlet: outlet.id })
-                .chain(
-                    PERFORMANCE_DESCRIPTORS
-                        .iter()
-                        .map(move |source| ModSourceRef::Performance { channel: id, source: source.id }),
-                )
+        let tags = self.modulation.tags.iter().filter_map(|tag| match tag.kind {
+            TagKind::Inlet { bind: Some(_) } => Some(ModSourceRef::Id(tag.id)),
+            _ => None,
         });
-        modules.chain(channels).collect()
+        modules.chain(tags).collect()
     }
 
     /// The source at `index` in [`Self::modulation_sources`].
@@ -166,10 +160,11 @@ impl Session {
         }
     }
 
-    /// The declaration of an outlet or keyboard source; `None` for a module
-    /// and for an outlet its channel's generator does not publish.
+    /// The declaration of an outlet or keyboard source, or of the tag that
+    /// reads one; `None` for anything else and for an outlet its channel's
+    /// generator does not publish.
     pub fn modulation_outlet(&self, source: ModSourceRef) -> Option<&'static OutletDescriptor> {
-        match source {
+        match self.modulation.channel_source(source) {
             ModSourceRef::GeneratorOutlet { channel, outlet } => {
                 let state = self.channels.get(self.channel_index(channel)?)?;
                 state.kind().control_outlet(outlet)
@@ -182,9 +177,10 @@ impl Session {
         }
     }
 
-    /// The channel an outlet or keyboard source belongs to, by name.
+    /// The channel an outlet or keyboard source, or the tag that reads one,
+    /// belongs to, by name.
     pub fn modulation_source_channel(&self, source: ModSourceRef) -> Option<&str> {
-        let channel = match source {
+        let channel = match self.modulation.channel_source(source) {
             ModSourceRef::GeneratorOutlet { channel, .. } | ModSourceRef::Performance { channel, .. } => {
                 channel
             }
@@ -197,11 +193,14 @@ impl Session {
     /// ([`Self::read_modulation_levels`]): what a tile's meter draws.
     pub fn modulation_source_level(&self, source: ModSourceRef) -> f32 {
         let resolved = match source {
-            ModSourceRef::Id(id) => self
-                .modulation_sent
-                .position_of(id)
-                .and_then(|at| u16::try_from(at).ok())
-                .map(CompiledSource::Module),
+            ModSourceRef::Id(id) => match self.modulation_sent.position_of(id) {
+                Some(at) => u16::try_from(at).ok().map(CompiledSource::Module),
+                None => self
+                    .modulation_sent
+                    .tag_position_of(id)
+                    .and_then(|at| u16::try_from(at).ok())
+                    .map(CompiledSource::Tag),
+            },
             ModSourceRef::GeneratorOutlet { channel, outlet } => self
                 .channel_index(channel)
                 .and_then(|seat| u8::try_from(seat).ok())
@@ -370,7 +369,17 @@ impl Session {
     /// name. `None` for a source the song no longer has.
     pub fn modulation_source_name(&self, source: ModSourceRef) -> Option<String> {
         match source {
-            ModSourceRef::Id(id) => self.modulation.module(id).map(module_name),
+            ModSourceRef::Id(id) => match self.modulation.module(id) {
+                Some(module) => Some(module_name(module)),
+                // What it reads, without the picker's note that it reads it
+                // late: the tag on the canvas says that.
+                None => match self.modulation.tag(id)?.kind {
+                    TagKind::Inlet { bind: Some(source) } => self
+                        .inlet_source_name(source)
+                        .map(|name| name.trim_end_matches(LATE_NOTE).to_string()),
+                    _ => None,
+                },
+            },
             ModSourceRef::GeneratorOutlet { .. } | ModSourceRef::Performance { .. } => {
                 let outlet = self.modulation_outlet(source)?;
                 let channel = self.modulation_source_channel(source)?;
@@ -939,7 +948,7 @@ impl Session {
                 let name = &self.channels.get(self.channel_index(channel)?)?.name;
                 let kind = self.inlet_source_kind(source)?;
                 if source.late() {
-                    format!("{name} · {kind} (a block late)")
+                    format!("{name} · {kind}{LATE_NOTE}")
                 } else {
                     format!("{name} · {kind}")
                 }
@@ -1036,11 +1045,11 @@ impl Session {
         (index, note)
     }
 
-    /// The module at `index` in the pane's list, by identity; `None` for an
-    /// outlet or the keyboard.
+    /// The module at `index` in the pane's list, by identity; `None` for a
+    /// tag.
     pub fn module_at(&self, index: i32) -> Option<ModSourceId> {
         match self.modulation_source_at(usize::try_from(index).ok()?)? {
-            ModSourceRef::Id(id) => Some(id),
+            ModSourceRef::Id(id) if self.modulation.module(id).is_some() => Some(id),
             _ => None,
         }
     }
@@ -1096,11 +1105,22 @@ mod tests {
     use super::*;
     use mooloop_core::{EffectTarget, ParamAddr, STRIP_PARAM_VOLUME};
 
-    /// Where an outlet of channel 0 sits in the pane's list.
-    fn outlet_index(session: &Session, outlet: u16) -> i32 {
-        let source = ModSourceRef::GeneratorOutlet { channel: session.channels[0].id, outlet };
-        session
-            .modulation_source_index(source)
+    /// The inlet tag reading channel 0's outlet `outlet`, made as the
+    /// canvas makes one: `None` when the generator does not publish it.
+    fn outlet_tag(session: &mut Session, outlet: u16) -> Option<ModSourceId> {
+        let source = mooloop_core::InletSource::Outlet {
+            channel: session.channels[0].id,
+            outlet,
+        };
+        session.inlet_source_name(source)?;
+        Some(session.modulation.inlet_tag(source, None))
+    }
+
+    /// Where the tag reading channel 0's outlet `outlet` sits in the pane's
+    /// list, made if need be; -1 when the generator does not publish it.
+    fn outlet_index(session: &mut Session, outlet: u16) -> i32 {
+        outlet_tag(session, outlet)
+            .and_then(|tag| session.modulation_source_index(ModSourceRef::Id(tag)))
             .map_or(-1, |index| index as i32)
     }
 
@@ -1600,38 +1620,40 @@ mod tests {
         assert!(!session.remove_modulation_source(0));
     }
 
-    /// The keyboard's mod wheel is a source on every channel, whatever its
-    /// generator (MOO-128): selectable, armable, named for what it is, and
-    /// authored as a durable performance route rather than as an outlet.
+    /// The keyboard's mod wheel can be read on every channel, whatever its
+    /// generator (MOO-128), through an inlet tag (song patch step 06): the
+    /// tag is selectable, armable, named for what it reads, and its route
+    /// reads the keyboard as a route from the wheel did.
     #[test]
     fn the_mod_wheel_arms_and_authors_a_performance_route() {
         let mut session = Session::default();
         assert_eq!(session.channels[0].kind(), mooloop_core::DeviceKind::Sampler);
-        let wheel = session
-            .modulation_source_index(ModSourceRef::Performance {
-                channel: session.channels[0].id,
-                source: mooloop_core::modulation::PERFORMANCE_MOD_WHEEL,
-            })
-            .expect("every channel lists its keyboard");
+        let source = mooloop_core::InletSource::Performance {
+            channel: session.channels[0].id,
+            source: mooloop_core::modulation::PERFORMANCE_MOD_WHEEL,
+        };
+        assert!(
+            session.inlet_sources().iter().any(|(listed, _)| *listed == source),
+            "every channel offers its keyboard"
+        );
+        let tag = session.modulation.inlet_tag(source, None);
+        let wheel = session.modulation_source_index(ModSourceRef::Id(tag)).expect("a bound tag is a source");
         assert!(session.select_modulation_source(wheel as i32));
         let name = session.toggle_modulation_assignment().expect("armed");
-        assert!(name.ends_with("Mod Wheel"), "{name}");
+        assert!(name.ends_with("mod wheel"), "{name}");
         let destination = ParamAddr::strip(EffectTarget::Channel(0), STRIP_PARAM_VOLUME);
         let crate::session::ArmedRoute::Added(route) =
             session.arm_modulation_route(destination, 0.5)
         else {
             panic!("the armed wheel did not author a route");
         };
+        assert_eq!(route.source, ModSourceRef::Id(tag));
         assert_eq!(
-            route.source,
-            mooloop_core::ModSourceRef::Performance {
-                channel: session.channels[0].id,
-                source: mooloop_core::modulation::PERFORMANCE_MOD_WHEEL,
+            session.modulation_plan().chain_routes(EffectTarget::Channel(0))[0].resolved,
+            CompiledSource::Performance {
+                seat: 0,
+                source: mooloop_core::modulation::PERFORMANCE_MOD_WHEEL as u8,
             }
-        );
-        assert_eq!(
-            route.source_slot,
-            mooloop_core::modulation::performance_slot(mooloop_core::modulation::PERFORMANCE_MOD_WHEEL)
         );
     }
 
@@ -1648,12 +1670,12 @@ mod tests {
     #[test]
     fn a_published_outlet_selects_and_arms_like_a_module() {
         let mut session = mlp8_channel();
-        let gate = outlet_index(&session, mooloop_core::mlp8::OUTLET_GATE);
+        let gate = outlet_index(&mut session, mooloop_core::mlp8::OUTLET_GATE);
 
         assert!(session.select_modulation_source(gate));
         assert_eq!(session.modulation_selected_index(), Some(gate as usize));
         let name = session.toggle_modulation_assignment().expect("armed");
-        assert!(name.ends_with(" Gate"), "the badge did not name the outlet: {name}");
+        assert!(name.ends_with(" gate"), "the badge did not name the outlet: {name}");
         assert_eq!(session.modulation_armed_index(), Some(gate as usize));
     }
 
@@ -1662,19 +1684,24 @@ mod tests {
     /// answer an empty rack slot gives.
     #[test]
     fn a_generator_that_publishes_nothing_offers_no_outlets() {
-        let session = Session::default();
+        let mut session = Session::default();
         assert_eq!(session.channels[0].kind(), mooloop_core::DeviceKind::Sampler);
         for outlet in 0..mooloop_core::modulation::MAX_GENERATOR_OUTLETS as u16 {
-            assert_eq!(outlet_index(&session, outlet), -1);
+            assert_eq!(outlet_index(&mut session, outlet), -1);
         }
-        // The keyboard is all it lists.
-        assert_eq!(session.modulation_sources().len(), PERFORMANCE_SOURCES);
+        // Its notes and its keyboard are all a tag can read from it.
+        let channel = session.channels[0].id;
+        assert!(session
+            .inlet_sources()
+            .iter()
+            .all(|(source, _)| !matches!(source, mooloop_core::InletSource::Outlet { channel: of, .. } if *of == channel)));
+        assert!(session.modulation_sources().is_empty(), "no tag, no source");
 
         // Nor does an audio outlet become selectable by living in the same
         // table as the control ones: ML-P8 publishes fourteen and offers
         // seven, and `Osc 1` is past the run a route can name.
-        let mlp8 = mlp8_channel();
-        assert_eq!(outlet_index(&mlp8, mooloop_core::mlp8::OUTLET_OSC1), -1);
+        let mut mlp8 = mlp8_channel();
+        assert_eq!(outlet_index(&mut mlp8, mooloop_core::mlp8::OUTLET_OSC1), -1);
     }
 
     /// The gesture authors an outlet route by its durable outlet id rather
@@ -1691,40 +1718,36 @@ mod tests {
         let mut session = mlp8_channel();
         let destination = ParamAddr::strip(EffectTarget::Channel(0), STRIP_PARAM_VOLUME);
 
-        session.select_modulation_source(outlet_index(&session, mooloop_core::mlp8::OUTLET_GATE));
+        let index = outlet_index(&mut session, mooloop_core::mlp8::OUTLET_GATE);
+        session.select_modulation_source(index);
         session.toggle_modulation_assignment();
         let crate::session::ArmedRoute::Added(gate) =
             session.arm_modulation_route(destination, 0.4)
         else {
             panic!("the armed outlet did not author a route");
         };
+        let gate_tag = outlet_tag(&mut session, mooloop_core::mlp8::OUTLET_GATE).unwrap();
+        assert_eq!(gate.source, ModSourceRef::Id(gate_tag));
         assert_eq!(
-            gate.source,
-            mooloop_core::ModSourceRef::GeneratorOutlet {
-                channel: session.channels[0].id,
-                outlet: mooloop_core::mlp8::OUTLET_GATE,
-            }
-        );
-        assert_eq!(
-            gate.source_slot,
-            mooloop_core::modulation::outlet_slot(mooloop_core::mlp8::OUTLET_GATE)
+            session.modulation_plan().chain_routes(EffectTarget::Channel(0))[0].resolved,
+            CompiledSource::Outlet {
+                seat: 0,
+                outlet: mooloop_core::mlp8::OUTLET_GATE as u8,
+            },
+            "the route reads the outlet as a route from it did"
         );
         assert_eq!(gate.polarity, ModPolarity::Bipolar);
 
-        session.select_modulation_source(outlet_index(&session, mooloop_core::mlp8::OUTLET_LFO));
+        let index = outlet_index(&mut session, mooloop_core::mlp8::OUTLET_LFO);
+        session.select_modulation_source(index);
         let crate::session::ArmedRoute::Added(lfo) =
             session.arm_modulation_route(destination, 0.4)
         else {
             panic!("selecting a second outlet did not follow the arming");
         };
         assert_eq!(lfo.polarity, ModPolarity::Bipolar);
-        assert_eq!(
-            lfo.source,
-            mooloop_core::ModSourceRef::GeneratorOutlet {
-                channel: session.channels[0].id,
-                outlet: mooloop_core::mlp8::OUTLET_LFO,
-            }
-        );
+        let lfo_tag = outlet_tag(&mut session, mooloop_core::mlp8::OUTLET_LFO).unwrap();
+        assert_eq!(lfo.source, ModSourceRef::Id(lfo_tag));
 
         // Two rows, one per outlet: an outlet route dedupes on its source the
         // way a module's does, rather than stacking.
@@ -1741,7 +1764,8 @@ mod tests {
     fn swapping_the_generator_disarms_rather_than_misreporting() {
         let mut session = mlp8_channel();
         let destination = ParamAddr::strip(EffectTarget::Channel(0), STRIP_PARAM_VOLUME);
-        session.select_modulation_source(outlet_index(&session, mooloop_core::mlp8::OUTLET_GATE));
+        let index = outlet_index(&mut session, mooloop_core::mlp8::OUTLET_GATE);
+        session.select_modulation_source(index);
         session.toggle_modulation_assignment();
 
         session.reset_channel_source(0, mooloop_core::DeviceKind::Sampler);
@@ -1767,16 +1791,13 @@ mod tests {
             session.add_modulation_source(ModulatorKind::Envelope),
             "rack has room"
         );
-        let trigger = outlet_index(&session, mooloop_core::mlp8::OUTLET_TRIGGER);
+        let trigger = outlet_index(&mut session, mooloop_core::mlp8::OUTLET_TRIGGER);
         session.select_modulation_source(trigger);
         session.toggle_modulation_assignment();
 
         assert!(session.move_modulation_source(1, 0), "two modules to reorder");
 
-        let source = ModSourceRef::GeneratorOutlet {
-            channel: session.channels[0].id,
-            outlet: mooloop_core::mlp8::OUTLET_TRIGGER,
-        };
+        let source = ModSourceRef::Id(outlet_tag(&mut session, mooloop_core::mlp8::OUTLET_TRIGGER).unwrap());
         assert_eq!(session.modulation_selected.get(), Some(source));
         assert_eq!(session.modulation_armed.get(), Some(source));
     }

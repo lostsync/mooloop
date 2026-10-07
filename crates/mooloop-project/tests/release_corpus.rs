@@ -104,7 +104,7 @@ fn a_release_song_without_modulation_saves_no_modulation_table() {
 fn a_release_songs_channel_modulation_converts_and_round_trips() {
     use mooloop_core::{
         ds01, InputSource, ModEnvelopeParams, ModLfoParams, ModPolarity, ModRack, ModRoute,
-        ModSourceRef, ModStepParams, ModulatorParams, ParamAddr, ParamOwner,
+        InletSource, ModSourceRef, ModStepParams, TagKind, ModulatorParams, ParamAddr, ParamOwner,
     };
     let newest = corpus().pop().expect("the corpus has a song");
     let LoadedDocument::Song(project) = load_bundle(&newest).unwrap().document else {
@@ -190,15 +190,32 @@ fn a_release_songs_channel_modulation_converts_and_round_trips() {
             (Some(3), InputSource::ChannelNotes(own)),
         ]
     );
-    // As a patch: one gate tag per channel, shared, and a wire per input.
-    assert_eq!(converted.modulation.tags.len(), 2);
+    // As a patch: one gate tag per channel, shared, a wire per input, and
+    // the outlet route reading an inlet tag bound to the outlet (song patch
+    // step 06).
+    assert_eq!(converted.modulation.tags.len(), 3);
     assert_eq!(converted.modulation.wires.len(), 3);
     assert_eq!(converted.modulation.routes.len(), 3);
-    assert!(converted.modulation.routes.iter().any(|route| route.source
-        == ModSourceRef::GeneratorOutlet {
-            channel: own,
-            outlet: ds01::DS01_OUTLET_TRIGGER,
-        }));
+    let trigger = converted
+        .modulation
+        .tags
+        .iter()
+        .find(|tag| {
+            tag.kind
+                == TagKind::Inlet {
+                    bind: Some(InletSource::Outlet {
+                        channel: own,
+                        outlet: ds01::DS01_OUTLET_TRIGGER,
+                    }),
+                }
+        })
+        .expect("a tag reads the trigger outlet")
+        .id;
+    assert!(converted
+        .modulation
+        .routes
+        .iter()
+        .any(|route| route.source == ModSourceRef::Id(trigger)));
     // The engine runs the rack it ran before.
     let held = converted.channel_rack(0);
     for slot in 0..mooloop_core::modulation::MAX_MODULATORS_PER_CHANNEL {

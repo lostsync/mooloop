@@ -1023,7 +1023,9 @@ impl ModulatorSet {
         let modules = self.modules.len();
         self.knobs = knobs
             .into_iter()
-            .filter(|knob| usize::from(knob.module) < modules && usize::from(knob.source) < modules)
+            .filter(|knob| {
+                usize::from(knob.module) < modules && usize::from(knob.source) < modules + self.tags.len()
+            })
             .collect();
         self.knobs.sort_by_key(|knob| (knob.module, knob.param));
         self.knob_spans = vec![(0, 0); if self.knobs.is_empty() { 0 } else { modules }];
@@ -1131,16 +1133,20 @@ impl ModulatorSet {
             let mut offset = 0.0;
             while index < knobs.len() && knobs[index].param == param {
                 let knob = knobs[index];
+                // A box by list position, then the tags.
                 let source = usize::from(knob.source);
-                let output = self.outputs.get(source).copied().unwrap_or(0.0);
+                let output = match source.checked_sub(self.modules.len()) {
+                    None => self.outputs.get(source).copied().unwrap_or(0.0),
+                    Some(tag) => self.tags.get(tag).map_or(0.0, |tag| tag.value),
+                };
                 offset += match knob.polarity {
                     ModPolarity::Bipolar => output,
                     // Lifted onto the source's span, so the setting is the
                     // floor: an LFO's depth, the full span for the rest
                     // (`CompiledModulation::wire_span`).
                     ModPolarity::Unipolar => {
-                        let span = match self.modules[source].spec.params {
-                            ModulatorParams::Lfo(lfo) => lfo.depth.clamp(0.0, 1.0),
+                        let span = match self.modules.get(source).map(|module| module.spec.params) {
+                            Some(ModulatorParams::Lfo(lfo)) => lfo.depth.clamp(0.0, 1.0),
                             _ => 1.0,
                         };
                         (output + span) * 0.5
