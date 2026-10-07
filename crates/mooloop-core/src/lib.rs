@@ -30,6 +30,7 @@ pub mod mlm1_factory;
 pub mod mlp8_factory;
 pub mod mlp8;
 pub mod outlet;
+pub mod patch;
 pub mod pattern;
 pub mod playlist;
 pub mod plugin;
@@ -86,6 +87,10 @@ pub use plugin::{
     PluginState, PluginStateChunk, PluginStateText,
 };
 pub use mlm1_factory::FactoryPatch;
+pub use patch::{
+    grid_place, Bend, BendAxis, CanvasPoint, InletSource, Jack, JackSort, Port, Ports, SongTag,
+    TagKind, Wire, WireRefusal,
+};
 pub use modulation_plan::{
     chain_index, CompiledModulation, CompiledModule, CompiledRoute, CompiledSource,
     MODULATION_CHAINS,

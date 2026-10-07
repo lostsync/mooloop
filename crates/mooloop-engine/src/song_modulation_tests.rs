@@ -10,7 +10,7 @@
 use std::sync::Arc;
 
 use mooloop_core::{
-    EffectSlotState, EffectTarget, FilterMode, FilterParams, InputSource, ModLfoParams,
+    EffectSlotState, EffectTarget, FilterMode, FilterParams, ModLfoParams,
     ModLfoWaveform, ModPolarity, ModRoute, ModSourceId, ModTimeDivision, ModulatorParams,
     NoteEvent, ParamAddr, PatternPlacement, Project, ProjectChannel, SongModule,
     FILTER_PARAM_CUTOFF_HZ, STRIP_PARAM_VOLUME, TICKS_PER_STEP,
@@ -86,7 +86,8 @@ fn song(steps: &[u32], bars: u16, lfo: ModLfoParams, destinations: &[Drives]) ->
         id,
         name: String::new(),
         seed: 0,
-        input: InputSource::None,
+        at: Default::default(),
+        open: false,
         rack: None,
         params: ModulatorParams::Lfo(lfo),
     });
@@ -252,7 +253,8 @@ fn a_set_grown_past_what_it_held_installs_without_allocating() {
             id: ModSourceId(id),
             name: String::new(),
             seed: id,
-            input: InputSource::None,
+            at: Default::default(),
+            open: false,
             rack: None,
             params: ModulatorParams::Lfo(ModLfoParams {
                 rate_hz: 0.5 + id as f32 * 0.1,

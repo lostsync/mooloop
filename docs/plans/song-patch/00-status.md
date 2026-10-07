@@ -21,7 +21,36 @@ Each step is blocked by the one before it, except that 09 needs only 06.
 Step 02 carries MOO-170's owed measurement. Step 03 carries song
 modulation's owed *Open* item on route dots revealing the pane.
 
-Planned 2026-10-06. Nothing built.
+Planned 2026-10-06.
+
+## What each step found
+
+**01 (MOO-520).** The patch is in the song file: boxes have `at` and
+`open`, `SongModulation` has `tags` and `wires`, the five kinds and three
+tag kinds declare their jacks (`core/src/patch.rs`), songs saved by song
+modulation convert on load, integrity repairs wires and tags, and the
+session has the verbs. Where it differs from the step file:
+
+- **Tags are a list of their own** (`SongModulation::tags`), not
+  `ModulatorParams` variants. A variant would have added an arm to every
+  `match` on the params across five crates for a box with no DSP; the ids
+  share one mint, so a wire names a box or a tag the same way.
+- **`input` survives as a view.** `SongModulation::input_of` reads the wire
+  into a box's input inlet back as the old single input, and `set_input`
+  writes one, so the engine's compile, the shelf's input picker
+  (`module_input_options`, `set_module_input`) and channel presets keep
+  working unchanged until step 02 compiles the graph and step 03 replaces
+  the picker.
+- **Routes do not name an outlet yet, and have no `at`.** No box has a
+  second outlet before step 04, and the canvas that draws assignment tags
+  is step 03; both fields arrive there with serde defaults, so the format
+  only grows.
+- **`arm` still takes a source, not a `Jack`**, for the same reason; step
+  03 changes it with the canvas.
+- **Undo is the window's.** The verbs (`add_patch_box`, `move_patch_nodes`,
+  `remove_patch_node`, `connect_patch`, `disconnect_patch`,
+  `add_patch_tag`) each return whether they changed the song; step 03 wraps
+  each gesture in `with_gesture_history`, a multi-box drag being one call.
 
 ## Adam's rulings
 

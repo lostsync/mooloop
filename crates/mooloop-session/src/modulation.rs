@@ -23,9 +23,19 @@ use mooloop_core::modulation::{
     MAX_GENERATOR_OUTLETS, PERFORMANCE_DESCRIPTORS, PERFORMANCE_SOURCES,
 };
 use mooloop_core::{
-    CompiledSource, InputSource, ModPolarity, ModRoute, ModSourceId, ModSourceRef, ModulatorKind,
-    ModulatorParams, OutletDescriptor, PublishesOutlets,
+    CanvasPoint, CompiledSource, InputSource, Jack, ModPolarity, ModRoute, ModSourceId,
+    ModSourceRef, ModulatorKind, ModulatorParams, OutletDescriptor, PublishesOutlets, TagKind,
+    WireRefusal,
 };
+
+/// Why the session refused a wire.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PatchRefusal {
+    /// The wire itself cannot exist ([`WireRefusal`]).
+    Wire(WireRefusal),
+    /// The inlet already has a wire.
+    InletTaken,
+}
 
 /// What a list of every module in the song calls `module`: its name, or its
 /// kind for one that has none.
@@ -433,13 +443,77 @@ impl Session {
                 math && read != id && self.modulation.module(read).is_some()
             }
         };
-        if !fits || module.input == input {
+        if !fits || self.modulation.input_of(id) == input {
             return false;
         }
-        if let Some(module) = self.modulation.module_mut(id) {
-            module.input = input;
+        self.modulation.set_input(id, input)
+    }
+
+    /// Adds a new box of `kind` at `at` on the patch canvas: what
+    /// [`Self::add_modulation_source`] does, placed where it was asked for.
+    pub fn add_patch_box(&mut self, kind: ModulatorKind, at: CanvasPoint) -> Option<ModSourceId> {
+        if !self.add_modulation_source(kind) {
+            return None;
         }
-        true
+        let id = self.modulation.modules.last()?.id;
+        self.modulation.move_node(id, at);
+        Some(id)
+    }
+
+    /// Moves boxes and tags on the canvas, all of them as one edit: a drag
+    /// of a selection is one undo step. `false` when none of them moved.
+    pub fn move_patch_nodes(&mut self, moves: &[(ModSourceId, CanvasPoint)]) -> bool {
+        let mut moved = false;
+        for &(node, at) in moves {
+            let was = self
+                .modulation
+                .module(node)
+                .map(|module| module.at)
+                .or_else(|| self.modulation.tag(node).map(|tag| tag.at));
+            if was.is_some_and(|was| was != at) {
+                moved |= self.modulation.move_node(node, at);
+            }
+        }
+        moved
+    }
+
+    /// Removes a box or a tag from the song, with its wires; a box takes its
+    /// routes too, and the selection and arming that named it.
+    pub fn remove_patch_node(&mut self, node: ModSourceId) -> bool {
+        if self.modulation.remove_tag(node) {
+            return true;
+        }
+        match self.modulation_source_index(ModSourceRef::Id(node)) {
+            Some(index) => self.remove_modulation_source(index as i32),
+            None => false,
+        }
+    }
+
+    /// Wires outlet `from` into inlet `to`. Refuses a jack the song does not
+    /// have, a note jack into a control jack or the reverse, a box into
+    /// itself, and an inlet that already has a wire: the canvas replaces one
+    /// by disconnecting it first, in the same edit. A wire that closes a
+    /// loop is allowed.
+    pub fn connect_patch(&mut self, from: Jack, to: Jack) -> Result<(), PatchRefusal> {
+        self.modulation.check_wire(from, to).map_err(PatchRefusal::Wire)?;
+        if self.modulation.wire_into(to).is_some() {
+            return Err(PatchRefusal::InletTaken);
+        }
+        self.modulation.connect(from, to).map_err(PatchRefusal::Wire)
+    }
+
+    /// Removes the wire into inlet `to`. `false` when there was none.
+    pub fn disconnect_patch(&mut self, to: Jack) -> bool {
+        self.modulation.disconnect(to)
+    }
+
+    /// Adds a tag of `kind` at `at`. Refuses one naming a channel the song
+    /// does not have; an unbound tag is the empty `[ ]` slot and always fits.
+    pub fn add_patch_tag(&mut self, kind: TagKind, at: CanvasPoint) -> Option<ModSourceId> {
+        if kind.channel().is_some_and(|channel| self.channel_index(channel).is_none()) {
+            return None;
+        }
+        Some(self.modulation.add_tag(kind, at))
     }
 
     /// What module `id`'s input picker offers, in order, with the name each
@@ -489,9 +563,9 @@ impl Session {
         let index = self
             .module_input_options(id)
             .iter()
-            .position(|(input, _)| *input == module.input)
+            .position(|(input, _)| *input == self.modulation.input_of(id))
             .unwrap_or(0);
-        let note = match (module.params, module.input) {
+        let note = match (module.params, self.modulation.input_of(id)) {
             (ModulatorParams::Envelope(_), _) => "CHANNEL NOTE GATE",
             (ModulatorParams::Math(_), InputSource::Module(read)) => {
                 let at = |id| self.modulation.modules.iter().position(|module| module.id == id);
@@ -709,7 +783,7 @@ mod tests {
 
         let id = session.module_at(0).expect("the envelope was added");
         assert_eq!(
-            session.modulation.module(id).map(|module| module.input),
+            Some(session.modulation.input_of(id)),
             session.channel_id(1).map(InputSource::ChannelNotes)
         );
 
@@ -721,9 +795,69 @@ mod tests {
         assert!(session
             .set_module_input(id, InputSource::ChannelNotes(first)));
         assert_eq!(
-            session.modulation.module(id).map(|module| module.input),
+            Some(session.modulation.input_of(id)),
             Some(InputSource::ChannelNotes(first))
         );
+    }
+
+    /// The patch verbs (song patch step 01): a box lands where it was put,
+    /// a drag of two is one edit, a wire refuses a taken inlet, the wrong
+    /// sort and a box into itself, and removing a box or a tag takes its
+    /// wires.
+    #[test]
+    fn the_patch_verbs_place_wire_and_remove() {
+        let mut session = Session::default();
+        let lead = session.channel_id(0).expect("a first channel");
+        let lfo = session
+            .add_patch_box(ModulatorKind::Lfo, CanvasPoint::new(400, 80))
+            .expect("an LFO");
+        let math = session
+            .add_patch_box(ModulatorKind::Math, CanvasPoint::new(560, 80))
+            .expect("a Math box");
+        assert_eq!(session.modulation.module(lfo).map(|module| module.at), Some(CanvasPoint::new(400, 80)));
+        assert_eq!(session.modulation.input_of(lfo), InputSource::ChannelNotes(lead), "made on the selected channel");
+        let gate = session.modulation.tags[0].id;
+
+        assert!(session.move_patch_nodes(&[
+            (lfo, CanvasPoint::new(400, 200)),
+            (gate, CanvasPoint::new(16, 200)),
+        ]));
+        assert!(!session.move_patch_nodes(&[(lfo, CanvasPoint::new(400, 200))]), "already there");
+        assert_eq!(session.modulation.tag(gate).map(|tag| tag.at), Some(CanvasPoint::new(16, 200)));
+
+        let math_in = Jack::new(math, 0);
+        assert_eq!(session.connect_patch(Jack::new(lfo, 0), math_in), Ok(()));
+        assert_eq!(session.modulation.input_of(math), InputSource::Module(lfo));
+        assert_eq!(
+            session.connect_patch(Jack::new(gate, 0), math_in),
+            Err(PatchRefusal::InletTaken),
+            "the canvas disconnects first"
+        );
+        assert_eq!(
+            session.connect_patch(Jack::new(math, 0), math_in),
+            Err(PatchRefusal::Wire(WireRefusal::IntoItself))
+        );
+        let notes = session
+            .add_patch_tag(TagKind::NotesIn { channel: Some(lead), take: false }, CanvasPoint::new(16, 300))
+            .expect("a notes tag on a channel the song has");
+        assert_eq!(
+            session.connect_patch(Jack::new(notes, 0), Jack::new(lfo, 0)),
+            Err(PatchRefusal::Wire(WireRefusal::WrongSort))
+        );
+        assert!(session
+            .add_patch_tag(TagKind::NotesOut { channel: Some(mooloop_core::ChannelId(999)) }, CanvasPoint::default())
+            .is_none());
+        // A loop is allowed.
+        assert_eq!(session.connect_patch(Jack::new(math, 0), Jack::new(lfo, 0)), Ok(()));
+
+        assert!(session.disconnect_patch(math_in));
+        assert!(!session.disconnect_patch(math_in));
+        assert!(session.remove_patch_node(gate));
+        assert_eq!(session.modulation.input_of(lfo), InputSource::None);
+        assert!(session.remove_patch_node(math));
+        assert!(session.modulation.wires.is_empty());
+        assert!(session.remove_patch_node(notes));
+        assert!(!session.remove_patch_node(notes));
     }
 
     /// Arming toggles, and reports the badge the status bar names.

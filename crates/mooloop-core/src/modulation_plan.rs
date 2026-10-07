@@ -119,18 +119,16 @@ impl CompiledModulation {
                 // that runs the first 65,535.
                 position_of(module.id)?;
                 let math = matches!(module.params, ModulatorParams::Math(_));
+                // Until step 02 of `docs/plans/song-patch/` compiles the
+                // graph, a box hears the one wire into its input inlet.
+                let input = song.input_of(module.id);
                 Some(CompiledModule {
                     id: module.id,
                     params: module.params,
                     seed: module.seed,
-                    input: module.input,
-                    gate: module
-                        .input
-                        .channel()
-                        .filter(|_| !math)
-                        .and_then(&seat_of),
-                    reads: module
-                        .input
+                    input,
+                    gate: input.channel().filter(|_| !math).and_then(&seat_of),
+                    reads: input
                         .module()
                         .filter(|_| math)
                         .and_then(position_of),
@@ -314,12 +312,13 @@ mod tests {
     use crate::modulation::{ModLfoParams, ModMathParams, ModRoute, SongModule};
     use crate::DeviceId;
 
-    fn module(id: u32, params: ModulatorParams, input: InputSource) -> SongModule {
+    fn module(id: u32, params: ModulatorParams) -> SongModule {
         SongModule {
             id: ModSourceId(id),
             name: String::new(),
             seed: id,
-            input,
+            at: crate::patch::CanvasPoint::default(),
+            open: false,
             rack: None,
             params,
         }
@@ -341,14 +340,10 @@ mod tests {
     #[test]
     fn a_set_is_filed_by_chain_with_inputs_as_seats() {
         let lfo = ModulatorParams::Lfo(ModLfoParams::default());
-        let song = SongModulation {
+        let mut song = SongModulation {
             modules: vec![
-                module(7, lfo, InputSource::ChannelNotes(ChannelId(30))),
-                module(
-                    3,
-                    ModulatorParams::Math(ModMathParams::default()),
-                    InputSource::Module(ModSourceId(7)),
-                ),
+                module(7, lfo),
+                module(3, ModulatorParams::Math(ModMathParams::default())),
             ],
             routes: vec![
                 route(ModSourceRef::Id(ModSourceId(3)), EffectTarget::Bus(2), 1),
@@ -366,7 +361,10 @@ mod tests {
                 ),
             ],
             next_source_id: 8,
+            ..SongModulation::default()
         };
+        song.set_input(ModSourceId(7), InputSource::ChannelNotes(ChannelId(30)));
+        song.set_input(ModSourceId(3), InputSource::Module(ModSourceId(7)));
         let seat_of = |id: ChannelId| (id == ChannelId(30)).then_some(1);
         let plan = CompiledModulation::compile(&song, seat_of);
         assert_eq!(plan.modules[0].gate, Some(1));

@@ -200,7 +200,7 @@ impl SongModulator {
 mod tests {
     use super::*;
     use mooloop_core::{
-        InputSource, ModLfoParams, ModRandomParams, SongModulation, SongModule,
+        ModLfoParams, ModRandomParams, SongModulation, SongModule,
     };
 
     fn module(id: u32, params: ModulatorParams) -> SongModule {
@@ -208,7 +208,8 @@ mod tests {
             id: ModSourceId(id),
             name: String::new(),
             seed: id,
-            input: InputSource::None,
+            at: Default::default(),
+            open: false,
             rack: None,
             params,
         }
@@ -220,6 +221,7 @@ mod tests {
                 modules,
                 routes: Vec::new(),
                 next_source_id: 100,
+                ..SongModulation::default()
             },
             |_| Some(0),
         )

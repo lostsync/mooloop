@@ -14413,7 +14413,8 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
                 id: mooloop_core::ModSourceId(1),
                 name: String::new(),
                 seed: 0,
-                input: mooloop_core::InputSource::None,
+                at: Default::default(),
+                open: false,
                 rack: None,
                 params: mooloop_core::ModulatorParams::Lfo(mooloop_core::ModLfoParams::default()),
             }],
@@ -14424,6 +14425,7 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
                 ModPolarity::Bipolar,
             )],
             next_source_id: 2,
+            ..Default::default()
         };
         let mut set = SongModulator::new(mooloop_core::CompiledModulation::compile(&song, |_| Some(0)));
         for (tick, value) in outputs.iter().enumerate() {
@@ -14946,8 +14948,9 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
         let mut project = synth_project(target);
         project.insert_channel(1, ProjectChannel::sampler(1, 1));
         // The song's module listens to the second channel by identity.
-        project.modulation.modules[0].input =
-            mooloop_core::InputSource::ChannelNotes(project.channels[1].id);
+        let id = project.modulation.modules[0].id;
+        let second = project.channels[1].id;
+        project.modulation.set_input(id, mooloop_core::InputSource::ChannelNotes(second));
         let mut render = RenderState::from_project(48_000, &project, &[]);
         render.gate_ticks[0][1].note_ons = 1;
 
@@ -16234,7 +16237,8 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
                 id: mooloop_core::ModSourceId(id),
                 name: String::new(),
                 seed: id,
-                input: mooloop_core::InputSource::None,
+                at: Default::default(),
+                open: false,
                 rack: None,
                 params: mooloop_core::ModulatorParams::Lfo(mooloop_core::ModLfoParams {
                     rate_hz: rate,

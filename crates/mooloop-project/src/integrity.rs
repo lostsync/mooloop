@@ -1748,33 +1748,81 @@ fn check_song_modulation(
         }
     }
 
+    // A tag wearing an id a box or an earlier tag wears.
+    let mut index = 0;
+    while index < modulation.tags.len() {
+        let tag = modulation.tags[index];
+        let worn = modulation.module(tag.id).is_some()
+            || modulation.tags[..index].iter().any(|other| other.id == tag.id);
+        if worn
+            && doctor.correct(
+                "modulation.tag.id",
+                WHO,
+                format!("tag {} wears identity {}, which another box already has", index + 1, tag.id.0),
+                "drop the tag".into(),
+            )
+        {
+            // Its wires now name whichever box keeps the identity, and the
+            // wire checks below judge them as that box's.
+            modulation.tags.remove(index);
+            continue;
+        }
+        index += 1;
+    }
+    for (index, tag) in modulation.tags.iter_mut().enumerate() {
+        if let Some(channel) = tag.kind.channel() {
+            if !channels.contains(&channel)
+                && doctor.correct(
+                    "modulation.tag.channel",
+                    WHO,
+                    format!("tag {} names channel {}, which this song does not have", index + 1, channel.0),
+                    "leave it empty".into(),
+                )
+            {
+                tag.kind = tag.kind.unbound();
+            }
+        }
+    }
+
+    // Each wire joins two real jacks of one sort, and an inlet takes one.
+    let mut index = 0;
+    while index < modulation.wires.len() {
+        let wire = modulation.wires[index];
+        let fault = match modulation.check_wire(wire.from, wire.to) {
+            Err(mooloop_core::WireRefusal::NoSuchJack) => {
+                Some(("modulation.wire.jack", "names a box or a port this song does not have"))
+            }
+            Err(mooloop_core::WireRefusal::IntoItself) => {
+                Some(("modulation.wire.jack", "runs from a box into itself"))
+            }
+            Err(mooloop_core::WireRefusal::WrongSort) => {
+                Some(("modulation.wire.sort", "joins a note jack to a control jack"))
+            }
+            Ok(()) if modulation.wires[..index].iter().any(|other| other.to == wire.to) => {
+                Some(("modulation.wire.inlet", "runs into an inlet another wire already feeds"))
+            }
+            Ok(()) => None,
+        };
+        if let Some((code, what)) = fault {
+            if doctor.correct(
+                code,
+                WHO,
+                format!(
+                    "the wire from {}:{} to {}:{} {what}",
+                    wire.from.node.0, wire.from.port, wire.to.node.0, wire.to.port
+                ),
+                "drop the wire".into(),
+            ) {
+                modulation.wires.remove(index);
+                continue;
+            }
+        }
+        index += 1;
+    }
+
     let modules: Vec<_> = modulation.modules.iter().map(|module| module.id).collect();
     for (index, module) in modulation.modules.iter_mut().enumerate() {
         let where_ = format!("{WHO}, module {} ({})", index + 1, module.name);
-        if let mooloop_core::InputSource::Module(read) = module.input {
-            if !modules.contains(&read)
-                && doctor.correct(
-                    "modulation.module.input",
-                    &where_,
-                    format!("its input reads module {}, which this song does not have", read.0),
-                    "read nothing".into(),
-                )
-            {
-                module.input = mooloop_core::InputSource::None;
-            }
-        }
-        if let Some(channel) = module.input.channel() {
-            if !channels.contains(&channel)
-                && doctor.correct(
-                    "modulation.module.input",
-                    &where_,
-                    format!("its input listens to channel {}, which this song does not have", channel.0),
-                    "listen to nothing".into(),
-                )
-            {
-                module.input = mooloop_core::InputSource::None;
-            }
-        }
         if let Some(seat) = module.rack {
             if !channels.contains(&seat.channel)
                 && doctor.correct(
@@ -3561,28 +3609,56 @@ mod tests {
     }
 
     /// The song's set checks what it names: a module identity worn twice, a
-    /// route from a module or a channel the song does not have, an input on a
-    /// channel or a module that has gone, and a depth that is not a number.
+    /// route from a module or a channel the song does not have, a tag naming
+    /// a channel that has gone, a wire from a box that is not there, a wire
+    /// of the wrong sort, a second wire into one inlet, and a depth that is
+    /// not a number.
     #[test]
     fn the_songs_modulation_names_only_what_the_song_has() {
-        use mooloop_core::{InputSource, ModSourceId, ModSourceRef};
+        use mooloop_core::{
+            CanvasPoint, InletSource, InputSource, Jack, ModSourceId, ModSourceRef, TagKind, Wire,
+        };
         let mut project = Project::default();
         project.channels[0].setup = lfo_channel("Lead");
         let volume = ParamAddr::strip(EffectTarget::Channel(0), mooloop_core::STRIP_PARAM_VOLUME);
         route_from_lfo(&mut project, volume);
+        let lead = project.channels[0].id;
         let lfo = project.modulation.modules[0].clone();
-        assert_eq!(lfo.input, InputSource::ChannelNotes(project.channels[0].id));
+        assert_eq!(project.modulation.input_of(lfo.id), InputSource::ChannelNotes(lead));
+        let gate = project.modulation.tags[0].id;
 
         let mut twin = lfo.clone();
         twin.name = "Twin".into();
         project.modulation.modules.push(twin);
-        project.modulation.modules[0].input = InputSource::ChannelNotes(mooloop_core::ChannelId(40));
+        project.modulation.tags[0].kind = TagKind::Inlet {
+            bind: Some(InletSource::Gate(mooloop_core::ChannelId(40))),
+        };
         let mut math = lfo.clone();
         math.id = ModSourceId(98);
         math.name = "Math".into();
-        math.input = InputSource::Module(ModSourceId(97));
+        math.params = mooloop_core::ModulatorParams::Math(Default::default());
+        math.rack = None;
         project.modulation.modules.push(math);
         project.modulation.next_source_id = 99;
+        let notes = project.modulation.add_tag(
+            TagKind::NotesIn {
+                channel: Some(lead),
+                take: false,
+            },
+            CanvasPoint::default(),
+        );
+        let math_in = Jack::new(ModSourceId(98), 0);
+        let wire = |from| Wire {
+            from: Jack::new(from, 0),
+            to: math_in,
+            bend: None,
+        };
+        project.modulation.wires.extend([
+            wire(ModSourceId(97)),
+            wire(lfo.id),
+            wire(notes),
+            wire(gate),
+        ]);
         let mut gone = project.modulation.routes[0];
         gone.source = ModSourceRef::Id(ModSourceId(99));
         let mut stranger = project.modulation.routes[0];
@@ -3602,17 +3678,22 @@ mod tests {
             [
                 "modulation.depth",
                 "modulation.module.id",
-                "modulation.module.input",
-                "modulation.module.input",
                 "modulation.route.destination",
                 "modulation.route.destination",
+                "modulation.tag.channel",
+                "modulation.wire.inlet",
+                "modulation.wire.jack",
+                "modulation.wire.sort",
             ]
         );
-        assert_eq!(project.modulation.modules.len(), 2);
-        assert_eq!(project.modulation.modules[0].input, InputSource::None);
-        assert_eq!(project.modulation.modules[1].input, InputSource::None, "a module that is not there");
-        assert_eq!(project.modulation.routes.len(), 1);
-        assert_eq!(project.modulation.routes[0].depth, 0.0);
+        let modulation = &project.modulation;
+        assert_eq!(modulation.modules.len(), 2);
+        assert_eq!(modulation.tags[0].kind, TagKind::Inlet { bind: None });
+        assert_eq!(modulation.input_of(lfo.id), InputSource::None, "its gate is an empty tag");
+        assert_eq!(modulation.input_of(ModSourceId(98)), InputSource::Module(lfo.id), "the first good wire");
+        assert_eq!(modulation.wires.len(), 2);
+        assert_eq!(modulation.routes.len(), 1);
+        assert_eq!(modulation.routes[0].depth, 0.0);
     }
 
     /// MOO-74's C.6, and Adam's ruling on it: nothing about a plugin

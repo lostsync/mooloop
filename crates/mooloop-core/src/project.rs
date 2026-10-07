@@ -3233,7 +3233,7 @@ mod tests {
         assert_eq!(loading.modulation.modules.len(), 2);
         for module in &loading.modulation.modules {
             assert_eq!(module.rack.map(|seat| seat.channel), Some(here));
-            assert_eq!(module.input, InputSource::ChannelNotes(here));
+            assert_eq!(loading.modulation.input_of(module.id), InputSource::ChannelNotes(here));
         }
         assert_eq!(loading.modulation.routes.len(), 2);
         assert!(loading.modulation.routes.iter().all(|route| route.destination == volume(0)));
