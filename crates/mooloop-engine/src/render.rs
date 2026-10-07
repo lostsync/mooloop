@@ -1388,6 +1388,7 @@ impl<'a> ModulationBlock<'a> {
     fn source(&self, source: CompiledSource, tick: usize) -> f32 {
         match source {
             CompiledSource::Module(at) => self.song.output(tick, at),
+            CompiledSource::Tag(at) => self.song.tag_output(tick, at),
             CompiledSource::Outlet { seat, outlet } => self.sources.outlets[usize::from(seat)]
                 .get(usize::from(outlet))
                 .copied()

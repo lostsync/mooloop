@@ -5,8 +5,8 @@ import { PatchCanvas } from "patch-canvas.slint";
 import { Divisions, LedIndicator, MiniKnob, SelectorBank, SyncMiniKnob, ToggleButton, ToolButton, ValueScale } from "controls.slint";
 
 // One module in the song. `slot` is its index in the session's list of
-// sources (modules first, then every channel's outlets and keyboard), which
-// is what every callback from the pane carries back.
+// sources (boxes first, then the bound inlet tags), which is what every
+// callback from the pane carries back.
 export struct ModulationSourceRow {
     slot: int,
     name: string,
@@ -36,27 +36,6 @@ export struct ModulationSourceRow {
     selected: bool,
 }
 
-// One control outlet the channel's generator publishes, as the picker offers
-// it. Not a module: it has no editor, cannot be added, removed or reordered,
-// and its number is a device-interface id rather than a position, so the chip
-// shows its name and never a slot. `slot` is where it sits in the same flat
-// control address space a module occupies, which is what lets one selection
-// and one assignment gesture serve both (docs/MODULATION.md).
-export struct ModulationOutletRow {
-    slot: int,
-    name: string,
-    // A heading row: `name` is the channel whose outlets follow, and the row
-    // is a label rather than a chip. The band lists every channel's outlets,
-    // grouped, so the grouping travels as rows rather than as nesting.
-    heading: bool,
-    // Whether the signal swings both ways, which is what decides whether the
-    // chip's live fill grows from the centre or from the left.
-    bipolar: bool,
-    // Live value, telemetry exactly like a module tile's meter.
-    output: float,
-    selected: bool,
-}
-
 // One of the selected source's routes. `route-index` is the route's place
 // in the song's list, which the polarity and remove callbacks carry back;
 // `destination` names the chain, the device and the parameter, since the
@@ -76,21 +55,6 @@ export struct ModulationRouteRow {
     missing: bool,
 }
 
-// The outlet band's geometry. One column, beside the module grid rather than
-// under it: an outlet is named, not numbered -- "Filter Envelope" has to stay
-// readable, and a chip narrow enough to sit four-across would elide it. Beside
-// also costs the grid no height, so publishing outlets never takes a row of
-// modules off the screen.
-global OutletBand {
-    out property <length> chip-width: 112px;
-    out property <length> chip-height: 16px;
-    out property <length> gap: 4px;
-
-    public pure function height-for(count: int) -> length {
-        return count * root.chip-height + (count - 1) * root.gap;
-    }
-}
-
 global RandomParam {
     out property <int> rate: 0;
     out property <int> tempo-sync: 1;
@@ -101,55 +65,6 @@ global RandomParam {
     out property <int> quantize: 6;
     out property <int> drunk: 7;
     out property <int> walk: 8;
-}
-
-// One published outlet in the picker. A module tile draws the signal it is
-// configured to produce; an outlet has no configuration to draw, so the chip
-// shows its name over the live value instead. The fill *is* the meter rather
-// than a bar under the name, which is what lets a chip be one line tall and
-// the whole band fit beside the grid.
-component OutletChip inherits Rectangle {
-    in property <string> name;
-    in property <bool> bipolar;
-    in property <float> output;
-    in property <bool> selected;
-    in property <bool> armed;
-    callback clicked();
-
-    width: OutletBand.chip-width;
-    height: OutletBand.chip-height;
-    border-radius: Theme.radius-sm;
-    border-width: root.selected ? Theme.hairline : 0px;
-    border-color: root.armed ? Theme.focus : Theme.accent;
-    background: tap.pressed ? Theme.surface-active
-        : root.selected ? Theme.surface-raised : Theme.surface;
-    clip: true;
-
-    // Centre-origin for a bipolar signal and left-origin for the rest, so a
-    // gate reads as filling and an LFO reads as swinging.
-    Rectangle {
-        x: root.bipolar ? parent.width / 2 + min(0, clamp(root.output, -1, 1)) * parent.width / 2 : 0px;
-        width: root.bipolar
-            ? abs(clamp(root.output, -1, 1)) * parent.width / 2
-            : clamp(root.output, 0, 1) * parent.width;
-        height: parent.height;
-        background: root.armed ? Theme.focus : Theme.accent;
-        opacity: 0.28;
-    }
-    Text {
-        text: root.name;
-        color: root.selected ? Theme.text : Theme.text-muted;
-        font-size: Theme.text-sm;
-        horizontal-alignment: center;
-        vertical-alignment: center;
-        overflow: elide;
-        width: parent.width - 4px;
-        x: 2px;
-    }
-    tap := TouchArea {
-        mouse-cursor: pointer;
-        clicked => { root.clicked(); }
-    }
 }
 
 component RouteRow inherits Rectangle {
@@ -228,18 +143,13 @@ export component ModulationShelf inherits Rectangle {
     // Whether the assignment gesture is armed with any source in the song,
     // which a module seated on another channel is without a slot here.
     in property <bool> assigning;
-    // The channel generator's published control outlets, and what to call the
-    // device that publishes them. Empty for a generator that publishes
-    // nothing, and the band is then absent rather than empty: an outlet is
-    // designed, not discovered, so there is nothing to show a placeholder for.
-    in property <[ModulationOutletRow]> outlets;
-    // What the armed source is called. A module's badge and slot number, or an
-    // outlet's name -- resolved in Rust because only one of the two is a
-    // position, and the header should not have to know which it is holding.
+    // What the armed source is called: a box's name, or what a tag reads --
+    // resolved in Rust, so the header need not know which it is holding.
     in property <string> armed-name;
-    // The selected outlet's declaration, when the selection is an outlet.
-    // Empty means a module (or nothing) is selected, which is what gates the
-    // module header, the jack strip, and the empty state below.
+    // What the selected tag reads and, for a channel's outlet, its
+    // declaration (song patch step 06: a channel's outlets and keyboard are
+    // read through tags). Empty means a box (or nothing) is selected, which
+    // is what gates the box header and the empty state below.
     in property <string> selected-outlet-name;
     in property <string> selected-outlet-signal;
     callback source-selected(int);
@@ -312,10 +222,7 @@ export component ModulationShelf inherits Rectangle {
                 padding: 6px;
                 spacing: 6px;
 
-                // The work area: every module in the song, the outlets every
-                // channel publishes, and what can be added. The song patch
-                // canvas is meant to replace the grid here later, so the add
-                // list and the surface below do not depend on it.
+                // The work area: the song's patch.
                 HorizontalLayout {
                     vertical-stretch: 1;
                     spacing: 6px;
@@ -328,58 +235,6 @@ export component ModulationShelf inherits Rectangle {
                     min-width: 120px;
                 }
 
-                // The control outlets every channel's generator publishes,
-                // grouped under the channel's name. Nothing here can be added,
-                // removed or reordered: they belong to whichever device each
-                // channel holds. No channel publishing any means no band at
-                // all rather than an empty one -- an outlet is designed, not
-                // discovered, so there is nothing to hold a place for.
-                if root.outlets.length > 0 : Rectangle {
-                    width: OutletBand.chip-width + 10px;
-                    border-width: Theme.hairline;
-                    border-color: Theme.border;
-                    background: Theme.panel;
-                    VerticalLayout {
-                        padding: 4px;
-                        spacing: 3px;
-                        HorizontalLayout {
-                            height: 10px;
-                            Text { text: "OUTLETS"; color: Theme.text-faint; font-size: Theme.text-sm; vertical-alignment: center; }
-                        }
-                        ScrollView {
-                            vertical-stretch: 1;
-                            width: OutletBand.chip-width + 2px;
-                            content-width: OutletBand.chip-width;
-                            content-height: OutletBand.height-for(root.outlets.length);
-                            Rectangle {
-                                width: OutletBand.chip-width;
-                                height: OutletBand.height-for(root.outlets.length);
-                                for outlet[index] in root.outlets : Rectangle {
-                                    y: index * (OutletBand.chip-height + OutletBand.gap);
-                                    width: OutletBand.chip-width;
-                                    height: OutletBand.chip-height;
-                                    if outlet.heading : Text {
-                                        width: parent.width;
-                                        height: parent.height;
-                                        text: outlet.name;
-                                        color: Theme.text-faint;
-                                        font-size: Theme.text-sm;
-                                        vertical-alignment: bottom;
-                                        overflow: elide;
-                                    }
-                                    if !outlet.heading : OutletChip {
-                                        name: outlet.name;
-                                        bipolar: outlet.bipolar;
-                                        output: outlet.output;
-                                        selected: outlet.selected;
-                                        armed: root.armed-slot == outlet.slot;
-                                        clicked => { root.source-selected(outlet.slot); }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
                 }
 
                 // Below the work area: the selected source's surface and the
@@ -439,12 +294,10 @@ export component ModulationShelf inherits Rectangle {
                                     clicked => { root.source-removed(root.selected-slot); }
                                 }
                             }
-                            // A selected outlet, which has no surface to
-                            // open: the device that publishes it owns its
-                            // behaviour, so what the pane shows instead is
-                            // the declaration -- shape, rate and latency --
-                            // and the arm button that is the reason an outlet
-                            // is in the picker at all.
+                            // A selected tag, which has no surface to open:
+                            // what it reads owns its behaviour, so the pane
+                            // shows what that is -- for an outlet its shape,
+                            // rate and latency -- and the arm button.
                             if root.selected-outlet-name != "" : HorizontalLayout {
                                 height: 15px;
                                 spacing: 5px;
@@ -465,7 +318,7 @@ export component ModulationShelf inherits Rectangle {
                                     text: root.assigning ? "ASSIGNING" : "ASSIGN";
                                     tooltip: root.assigning
                                         ? "Stop assigning routes and edit base values"
-                                        : "Assign this outlet to highlighted controls";
+                                        : "Assign this tag to highlighted controls";
                                     checked: root.assigning;
                                     min-width: 82px; max-width: 82px; min-height: 15px; max-height: 15px;
                                     toggled(value) => { root.assignment-toggled(); }
@@ -473,7 +326,7 @@ export component ModulationShelf inherits Rectangle {
                             }
                             if root.selected-outlet-name != "" : Text {
                                 vertical-stretch: 1;
-                                text: "Its channel's device publishes this. It has no controls of its "
+                                text: "A tag passes on what it reads. It has no controls of its "
                                     + "own: arm it, then drag a knob to route it.";
                                 color: Theme.text-muted;
                                 font-size: Theme.text-lg;

@@ -63,9 +63,17 @@ area, and where each behaviour stops.
 - **Cable activity** (Preferences > Appearance): Off, Subtle (the default) or
   Full. A control wire tints toward the accent with its level and a note
   wire thickens for a moment on each note; Subtle is 30 % of Full.
-- Beside the canvas, the OUTLETS of every channel that publishes some,
-  under the channel's name; the selected box's name, edited in its header;
-  and the selected source's routes from the whole song, each naming its
+- **A channel's outlets and keyboard are read through tags.** There is no
+  outlet band: an inlet tag bound to a generator's outlet or a channel's mod
+  wheel or aftertouch is the source, armed by clicking its outlet like a
+  box's, and a route from it reads exactly what a route from the outlet
+  read. A song saved before this opens with each such route reading a tag
+  made for its source, one per source, in the tag column; copying a channel
+  and saving a channel preset still carry the outlet itself, so a paste
+  finds or makes its own tag. Any bound tag can be routed: a Bar ramp onto
+  a cutoff needs no box.
+- Under the canvas, the selected box's name, edited in its header, or what
+  the selected tag reads; and the selected source's routes from the whole song, each naming its
   chain, device and parameter ("Kick Filter 1 · Cutoff"), with polarity and
   remove. Eight box kinds ship (LFO, Envelope, Step, Random, Math as the
   arithmetic boxes `+ - * / min max clip`, Counter, Select and Slew), each

@@ -117,6 +117,9 @@ pub enum CompiledSource {
     Outlet { seat: u8, outlet: u8 },
     /// The keyboard's mod wheel or aftertouch on a channel, by its seat.
     Performance { seat: u8, source: u8 },
+    /// An inlet tag reading the transport or a channel's notes (song patch
+    /// step 06), by its index among the tags.
+    Tag(u16),
 }
 
 /// One route as the engine resolves it.
@@ -139,9 +142,10 @@ pub struct CompiledKnob {
     /// The box whose knob it is, by list position.
     pub module: u16,
     pub param: u32,
-    /// The box that moves it, by list position. Its output is read as the
-    /// tick has it when the knob's box runs: this tick's when the order ran
-    /// it first, else the tick before's.
+    /// The box or tag that moves it, by node index (the boxes, then the
+    /// tags). Its output is read as the tick has it when the knob's box
+    /// runs: this tick's when the order ran it first, else the tick
+    /// before's.
     pub source: u16,
     /// Clamped into the knob's declared limit.
     pub depth: f32,
@@ -257,7 +261,7 @@ impl CompiledModulation {
                 let ModSourceRef::Id(source) = route.source else {
                     return None;
                 };
-                let source = position_of(source)?;
+                let source = nodes.get(&source).copied()?;
                 let descriptor = modules[usize::from(module)]
                     .params
                     .kind()
@@ -282,9 +286,23 @@ impl CompiledModulation {
                 }
                 let chain = chain_index(route.destination.scope)?;
                 let resolved = match route.source {
-                    ModSourceRef::Id(id) => {
-                        CompiledSource::Module(position_of(id).filter(|&at| usize::from(at) < modules.len())?)
-                    }
+                    ModSourceRef::Id(id) => match position_of(id) {
+                        Some(at) => CompiledSource::Module(at),
+                        // A tag bound to a channel's outlet or keyboard reads
+                        // what a route from it read before tags; any other
+                        // bound tag is read from the set. An empty one
+                        // drives nothing.
+                        None => {
+                            let at = tags.iter().position(|tag| tag.id == id)?;
+                            match tags[at].source? {
+                                TagSource::Outlet { seat, outlet } => CompiledSource::Outlet { seat, outlet },
+                                TagSource::Performance { seat, source } => {
+                                    CompiledSource::Performance { seat, source }
+                                }
+                                _ => CompiledSource::Tag(u16::try_from(at).ok()?),
+                            }
+                        }
+                    },
                     ModSourceRef::GeneratorOutlet { channel, outlet } => {
                         let outlet = u8::try_from(outlet)
                             .ok()
@@ -427,7 +445,7 @@ impl CompiledModulation {
                 Some(ModulatorParams::Lfo(lfo)) => lfo.depth.clamp(0.0, 1.0),
                 _ => 1.0,
             },
-            CompiledSource::Outlet { .. } | CompiledSource::Performance { .. } => 1.0,
+            CompiledSource::Outlet { .. } | CompiledSource::Performance { .. } | CompiledSource::Tag(_) => 1.0,
         }
     }
 
@@ -574,6 +592,52 @@ mod tests {
             depth: 0.5,
             polarity: ModPolarity::Bipolar,
         }
+    }
+
+    /// **Routes from outlets and keyboards become tags** (song patch step
+    /// 06): a song's routes from a channel's outlet and its mod wheel read
+    /// inlet tags bound to them, one per source and shared, and compile to
+    /// exactly what the routes read before -- the null test's promise. A
+    /// route from any other bound tag reads the tag; one from an empty tag
+    /// drives nothing.
+    #[test]
+    fn routes_from_outlets_read_tags_and_compile_as_before() {
+        use crate::patch::{InletSource, TagKind};
+        use crate::ChannelId;
+        let kick = ChannelId(3);
+        let mut song = SongModulation::default();
+        let target = EffectTarget::Channel(0);
+        let outlet = ModSourceRef::GeneratorOutlet { channel: kick, outlet: 2 };
+        let wheel = ModSourceRef::Performance { channel: kick, source: 0 };
+        song.routes = vec![route(outlet, target, 1), route(outlet, target, 2), route(wheel, target, 3)];
+        let seat_of = |channel: ChannelId| (channel == kick).then_some(5);
+        let before = CompiledModulation::compile(&song, seat_of);
+
+        assert!(song.adopt_channel_routes());
+        assert!(!song.adopt_channel_routes(), "once is all it takes");
+        assert_eq!(song.tags.len(), 2, "one tag per source, shared");
+        assert_eq!(
+            song.tags[0].kind,
+            TagKind::Inlet { bind: Some(InletSource::Outlet { channel: kick, outlet: 2 }) }
+        );
+        assert_eq!(song.routes[0].source, ModSourceRef::Id(song.tags[0].id));
+        assert_eq!(song.routes[1].source, ModSourceRef::Id(song.tags[0].id));
+        assert_eq!(song.routes[2].source, ModSourceRef::Id(song.tags[1].id));
+        let after = CompiledModulation::compile(&song, seat_of);
+        let resolved = |plan: &CompiledModulation| {
+            plan.chain_routes(target).iter().map(|route| route.resolved).collect::<Vec<_>>()
+        };
+        assert_eq!(resolved(&after), resolved(&before));
+        assert_eq!(resolved(&after)[0], CompiledSource::Outlet { seat: 5, outlet: 2 });
+
+        // A copied channel's routes carry the outlet, not the tag.
+        assert_eq!(song.routes_into(0)[0].source, outlet);
+
+        // A bar tag is read from the set; an empty one drives nothing.
+        let bar = song.inlet_tag(InletSource::Bar, None);
+        let empty = song.add_tag(TagKind::Inlet { bind: None }, Default::default());
+        song.routes = vec![route(ModSourceRef::Id(bar), target, 1), route(ModSourceRef::Id(empty), target, 2)];
+        assert_eq!(resolved(&CompiledModulation::compile(&song, seat_of)), [CompiledSource::Tag(2)]);
     }
 
     /// Routes are filed under the chain they land on, a track's included,

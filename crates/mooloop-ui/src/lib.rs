@@ -4542,11 +4542,6 @@ struct UiState {
     /// are models rather than fixed slot properties because the shelf must
     /// show a collection, not four vacant bays.
     modulation_source_model: Rc<VecModel<ModulationSourceRow>>,
-    /// The generator's published control outlets. A separate model rather
-    /// than more rows in the source one: an outlet is not a module, and a
-    /// combined model would have to carry a discriminator into every reorder,
-    /// remove and editor lookup the source rows already do by position.
-    modulation_outlet_model: Rc<VecModel<ModulationOutletRow>>,
     modulation_route_model: Rc<VecModel<ModulationRouteRow>>,
     /// The patch canvas's selection and the gesture under way on it: not
     /// the song's, so not in the session (`patch_canvas.rs`).
@@ -4755,7 +4750,6 @@ impl UiState {
         ]));
         let strip_reductions = Rc::new(VecModel::from(vec![0.0_f32; MAX_BUSES]));
         let modulation_source_model = Rc::new(VecModel::from(Vec::<ModulationSourceRow>::new()));
-        let modulation_outlet_model = Rc::new(VecModel::from(Vec::<ModulationOutletRow>::new()));
         let modulation_route_model = Rc::new(VecModel::from(Vec::<ModulationRouteRow>::new()));
         let mixer_strip_model = Rc::new(VecModel::from(Vec::<MixerStripRow>::new()));
         let browser_row_model = Rc::new(VecModel::from(Vec::<BrowserRow>::new()));
@@ -4777,7 +4771,6 @@ impl UiState {
             meters.set_reduction_db(ModelRc::from(strip_reductions.clone()));
         }
         window.set_modulation_sources(ModelRc::from(modulation_source_model.clone()));
-        window.set_modulation_outlets(ModelRc::from(modulation_outlet_model.clone()));
         window.set_modulation_routes(ModelRc::from(modulation_route_model.clone()));
         window.set_mixer_strips(ModelRc::from(mixer_strip_model.clone()));
         window.set_browser_rows(ModelRc::from(browser_row_model.clone()));
@@ -4814,7 +4807,6 @@ impl UiState {
             strip_levels,
             strip_reductions,
             modulation_source_model,
-            modulation_outlet_model,
             modulation_route_model,
             patch_canvas: patch_canvas::CanvasState::default(),
             mixer_strip_model,
@@ -6111,19 +6103,6 @@ impl UiState {
                 self.modulation_source_model.set_row_data(index, row);
             }
         }
-        for index in 0..self.modulation_outlet_model.row_count() {
-            let Some(mut row) = self.modulation_outlet_model.row_data(index) else {
-                continue;
-            };
-            if row.heading {
-                continue;
-            }
-            let next = level(row.slot);
-            if row.output != next {
-                row.output = next;
-                self.modulation_outlet_model.set_row_data(index, row);
-            }
-        }
         // An unrouted face has nothing to animate, so the offsets are worth
         // working out only for the faces on show that a route lands on.
         let shown = [scope, self.session.effect_target];
@@ -6209,7 +6188,6 @@ impl UiState {
     fn refresh_modulation(&self, window: &MainWindow) {
         let Some(channel) = self.session.channels.get(self.session.selected) else {
             self.modulation_source_model.set_vec(Vec::new());
-            self.modulation_outlet_model.set_vec(Vec::new());
             self.modulation_route_model.set_vec(Vec::new());
             self.session.modulation_selected.set(None);
             self.session.modulation_armed.set(None);
@@ -6232,7 +6210,6 @@ impl UiState {
         let selected = self.session.modulation_selected_index();
         let armed = self.session.modulation_armed_index();
         let bpm = f64::from(window.get_bpm().max(1));
-        let listed = self.session.modulation_sources();
         let sources: Vec<ModulationSourceRow> = self
             .session
             .modulation
@@ -6380,38 +6357,13 @@ impl UiState {
                 }
             })
             .collect();
-        // Every channel's published control outlets and its keyboard's mod
-        // wheel and aftertouch (MOO-128), under the channel's name: sources
-        // with no controls of their own, offered on the same terms as a
-        // module.
-        let mut outlets: Vec<ModulationOutletRow> = Vec::new();
-        let mut heading: Option<&str> = None;
-        for (index, source) in listed.iter().enumerate() {
-            let Some(outlet) = self.session.modulation_outlet(*source) else {
-                continue;
-            };
-            let owner = self.session.modulation_source_channel(*source).unwrap_or_default();
-            if heading != Some(owner) {
-                heading = Some(owner);
-                outlets.push(ModulationOutletRow {
-                    slot: -1,
-                    name: owner.into(),
-                    heading: true,
-                    ..Default::default()
-                });
-            }
-            outlets.push(ModulationOutletRow {
-                slot: index as i32,
-                name: outlet.name.into(),
-                heading: false,
-                bipolar: matches!(outlet.signal, SignalShape::Bipolar),
-                output: self.session.modulation_source_level(*source),
-                selected: selected == Some(index),
-            });
-        }
-        let selected_outlet = selected_source.and_then(|source| self.session.modulation_outlet(source));
+        // A selected tag: what it reads, and for a channel's outlet its
+        // declaration.
+        let selected_tag = selected_source.filter(|source| {
+            matches!(source, ModSourceRef::Id(id) if self.session.modulation.tag(*id).is_some())
+        });
+        let selected_outlet = selected_tag.and_then(|source| self.session.modulation_outlet(source));
         self.modulation_source_model.set_vec(sources);
-        self.modulation_outlet_model.set_vec(outlets);
         self.modulation_route_model.set_vec(routes);
         let armed_source = self.session.modulation_armed.get();
         window.set_modulation_armed_name(
@@ -6421,11 +6373,8 @@ impl UiState {
                 .into(),
         );
         window.set_modulation_assigning(armed_source.is_some());
-        // An outlet is named with its channel, "Bass Mod Wheel", since the
-        // band lists every channel's.
         window.set_modulation_selected_outlet_name(
-            selected_outlet
-                .and(selected_source)
+            selected_tag
                 .and_then(|source| self.session.modulation_source_name(source))
                 .unwrap_or_default()
                 .into(),

@@ -327,7 +327,7 @@ impl ChannelClipboard {
         self.routes
             .iter()
             .filter(|route| match route.source {
-                mooloop_core::ModSourceRef::Id(id) => song.module(id).is_none(),
+                mooloop_core::ModSourceRef::Id(id) => song.module(id).is_none() && song.tag(id).is_none(),
                 mooloop_core::ModSourceRef::LocalSlot(_) => true,
                 _ => false,
             })

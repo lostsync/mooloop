@@ -57,7 +57,7 @@ import { EqSpec, EqDeviceFace } from "eq-device.slint";
 import { ReverbDeviceFace } from "reverb-device.slint";
 import { PlateDeviceFace } from "plate-device.slint";
 import { ModulationDeviceFace } from "modulation-device.slint";
-import { ModulationShelf, ModulationSourceRow, ModulationOutletRow, ModulationRouteRow } from "modulation-shelf.slint";
+import { ModulationShelf, ModulationSourceRow, ModulationRouteRow } from "modulation-shelf.slint";
 import { MixerMetrics, MixerPane, MixerSendRow, MixerStripRow, BusPicker } from "mixer.slint";
 export { MixerMetrics }
 import { BusDeviceFace, BusFaderRow, StripRackRow } from "bus-device.slint";
@@ -2215,7 +2215,6 @@ export component MainWindow inherits Window {
     // The shelf belongs to the selected channel, never the bus chain. Values
     // are plain UI rows; Rust owns their `ModRack` / `ParamAddr` conversion.
     in property <[ModulationSourceRow]> modulation-sources;
-    in property <[ModulationOutletRow]> modulation-outlets;
     in property <[ModulationRouteRow]> modulation-routes;
     in-out property <int> modulation-selected-slot: -1;
     in-out property <int> modulation-armed-slot: -1;
@@ -6819,7 +6818,6 @@ export component MainWindow inherits Window {
                                         horizontal-stretch: 1;
                                         selected-name: root.modulation-selected-name;
                                         sources: root.modulation-sources;
-                                        outlets: root.modulation-outlets;
                                         routes: root.modulation-routes;
                                         selected-slot: root.modulation-selected-slot;
                                         armed-slot: root.modulation-armed-slot;

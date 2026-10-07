@@ -404,22 +404,22 @@ pub(crate) fn lay_out(
         });
     }
 
-    // An assignment tag for every route from a box, where it was put or
-    // stacked under its box. A route from a channel's outlet or keyboard has
-    // nothing on the canvas to come from until step 06's song inlets.
+    // An assignment tag for every route from a box or a tag, where it was
+    // put, or stacked under its box or beside its tag.
     let mut stacked: Vec<(ModSourceId, usize)> = Vec::new();
     let mut route_wires = Vec::new();
     for route in &song.routes {
         let ModSourceRef::Id(id) = route.source else {
             continue;
         };
-        let Some(module) = song.module(id) else {
+        let from_box = song.module(id).map(|module| module.at);
+        let from_tag = song.tag(id).map(|tag| tag.at);
+        let Some(source_at) = from_box.or(from_tag) else {
             continue;
         };
-        let below_box = nodes
-            .iter()
-            .find(|node| node.key == NodeKey::Node(id))
-            .map_or(BOX_HEIGHT, |node| node.height);
+        let source_node = nodes.iter().find(|node| node.key == NodeKey::Node(id));
+        let below_box = source_node.map_or(BOX_HEIGHT, |node| node.height);
+        let source_width = source_node.map_or(0.0, |node| node.width);
         let key = NodeKey::Route {
             source: route.source,
             destination: route.destination,
@@ -437,10 +437,17 @@ pub(crate) fn lay_out(
                         0
                     }
                 };
-                CanvasPoint::new(
-                    module.at.x + 16,
-                    module.at.y + below_box as i32 + 40 + below as i32 * 34,
-                )
+                if from_box.is_some() {
+                    CanvasPoint::new(
+                        source_at.x + 16,
+                        source_at.y + below_box as i32 + 40 + below as i32 * 34,
+                    )
+                } else {
+                    CanvasPoint::new(
+                        source_at.x + source_width as i32 + 48,
+                        source_at.y + below as i32 * 34,
+                    )
+                }
             });
         let label = label_of(route.destination);
         let percent = (route.depth * 100.0).round() as i32;
@@ -1096,7 +1103,14 @@ impl CanvasState {
         let drag = std::mem::take(&mut self.drag);
         match drag {
             Drag::Pending { hit, shift, .. } => match hit {
-                Hit::Outlet(jack) if song.module(jack.node).is_some() => {
+                // A box's outlet, or a bound inlet tag's: a source to arm.
+                Hit::Outlet(jack)
+                    if song.module(jack.node).is_some()
+                        || matches!(
+                            song.tag(jack.node).map(|tag| tag.kind),
+                            Some(TagKind::Inlet { bind: Some(_) })
+                        ) =>
+                {
                     Edit::Arm(ModSourceRef::Id(jack.node))
                 }
                 Hit::Inlet(jack) => {

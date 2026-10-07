@@ -24,9 +24,8 @@ area, and where each behaviour stops.
   it; Panic returns every channel's bend to centre. Bends are live only: they
   are not recorded into patterns and an export does not hear them. **The mod
   wheel (CC 1) and aftertouch are modulation sources** on every channel,
-  whatever its instrument: the shelf's outlet band lists *Mod Wheel* and
-  *Aftertouch* after the generator's own outlets, and they arm and route to
-  any knob the way an outlet does. Aftertouch is channel pressure or,
+  whatever its instrument: an inlet tag on the patch canvas reads *mod wheel*
+  or *aftertouch*, and arms and routes to any knob the way a box does. Aftertouch is channel pressure or,
   from a keyboard that sends it per key, the hardest-pressed key's pressure.
   Both reach the same channels a bend does, stay where the keyboard left
   them when the selection moves, return to rest on Panic, and are live

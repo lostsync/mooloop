@@ -2,7 +2,7 @@ use mooloop_core::{DeviceKind, Ds01EnvParams, Ds01Params, DrumMode, DrumSynthPar
 use mooloop_dsp::DrumSynth;
 use mooloop_ui::{
     device_kind_to_int, effect_kind_index, effect_kind_units, view, ChannelRow, EffectSlotRow,
-    MainWindow, MlP8RouteRow, ModulationOutletRow, ModulationRouteRow, ModulationSourceRow,
+    MainWindow, MlP8RouteRow, ModulationRouteRow, ModulationSourceRow,
     SourceRow, StepCell,
 };
 use slint::platform::WindowEvent;
@@ -366,40 +366,14 @@ fn render_sampler_source_editor() {
     assert_ne!(snapshot.as_bytes(), modulation.as_bytes());
     write_snapshot(&modulation, "MOOLOOP_MODULATION_SHELF_SNAPSHOT");
 
-    // A generator that publishes control outlets grows a pane beside the
-    // module grid, and one of its chips can be the selected and armed source.
-    // The shot is what catches the two failure modes markup review cannot: a
-    // pane that appears when the model is empty, and a module grid that lost a
-    // row of tiles to make space for one that is not.
-    ui.set_modulation_outlets(ModelRc::from(Rc::new(VecModel::from(
-        [
-            ("LFO", true, -0.62_f32),
-            ("Amp Envelope", false, 0.81),
-            ("Filter Envelope", false, 0.35),
-            ("Velocity", false, 0.9),
-            ("Note", false, 0.5),
-            ("Gate", false, 1.0),
-            ("Trigger", false, 1.0),
-        ]
-        .into_iter()
-        .enumerate()
-        .map(|(outlet, (name, bipolar, output))| ModulationOutletRow {
-            // The rack's eight slots, then the outlet band: the same flat
-            // control address space the session arms from.
-            slot: 8 + outlet as i32,
-            name: SharedString::from(name),
-            heading: false,
-            bipolar,
-            output,
-            selected: name == "Trigger",
-        })
-        .collect::<Vec<_>>(),
-    ))));
+    // A selected tag (song patch step 06: a channel's outlets are read
+    // through tags) swaps the box header for what it reads and its arm
+    // button; going back to the box must leave the shelf exactly as it was.
     ui.set_modulation_selected_slot(14);
     ui.set_modulation_armed_slot(14);
-    ui.set_modulation_armed_name(SharedString::from("Trigger"));
+    ui.set_modulation_armed_name(SharedString::from("Kick · trigger"));
     ui.set_modulation_selected_kind(-1);
-    ui.set_modulation_selected_outlet_name(SharedString::from("Trigger"));
+    ui.set_modulation_selected_outlet_name(SharedString::from("Kick · trigger"));
     ui.set_modulation_selected_outlet_signal(SharedString::from(
         "TRIGGER  ·  PER BLOCK  ·  1 BLOCK",
     ));
@@ -407,12 +381,6 @@ fn render_sampler_source_editor() {
     assert_ne!(modulation.as_bytes(), outlets.as_bytes());
     write_snapshot(&outlets, "MOOLOOP_MODULATION_OUTLETS_SNAPSHOT");
 
-    // Back to the module the rest of this test is about, and to a generator
-    // that publishes nothing -- which is the state every other device is in,
-    // and the one that must leave the shelf exactly as it was.
-    ui.set_modulation_outlets(ModelRc::from(Rc::new(VecModel::from(
-        Vec::<ModulationOutletRow>::new(),
-    ))));
     ui.set_modulation_selected_outlet_name(SharedString::new());
     ui.set_modulation_selected_outlet_signal(SharedString::new());
     ui.set_modulation_selected_slot(1);
@@ -423,7 +391,7 @@ fn render_sampler_source_editor() {
     assert_eq!(
         modulation.as_bytes(),
         restored.as_bytes(),
-        "a generator that publishes nothing changed the shelf"
+        "selecting a tag and back changed the shelf"
     );
 
     // Out of assign mode the same knobs must read differently: the value arc

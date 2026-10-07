@@ -43,6 +43,9 @@ pub struct SongModulator {
     /// Tick-major, because a destination reads every route's source at one
     /// tick before moving to the next.
     table: Vec<f32>,
+    /// `tag_table[tick * tags + tag]`: each tag's value at each control
+    /// tick, for a route from a tag (song patch step 06).
+    tag_table: Vec<f32>,
 }
 
 impl std::fmt::Debug for SongModulator {
@@ -83,7 +86,13 @@ impl SongModulator {
         )
         .with_knobs(plan.knobs.iter().copied());
         let table = vec![0.0; plan.modules.len() * MAX_CONTROL_TICKS_PER_BLOCK];
-        Self { plan, set, table }
+        let tag_table = vec![0.0; plan.tags.len() * MAX_CONTROL_TICKS_PER_BLOCK];
+        Self {
+            plan,
+            set,
+            table,
+            tag_table,
+        }
     }
 
     /// `project`'s modulation, resolved against its own seats.
@@ -217,6 +226,13 @@ impl SongModulator {
                 self.set.tick_with(sample_rate, span, bpm, beats, &inputs);
             }
             self.table[tick * modules..(tick + 1) * modules].copy_from_slice(self.set.outputs());
+            let tags = self.plan.tags.len();
+            for (slot, (_, value)) in self.tag_table[tick * tags..(tick + 1) * tags]
+                .iter_mut()
+                .zip(self.set.tag_activity())
+            {
+                *slot = value;
+            }
             tick += 1;
         }
         tick
@@ -231,6 +247,17 @@ impl SongModulator {
             return 0.0;
         }
         self.table.get(tick * modules + at).copied().unwrap_or(0.0)
+    }
+
+    /// Tag `at`'s value at control tick `tick` of this block.
+    #[inline]
+    pub(crate) fn tag_output(&self, tick: usize, at: u16) -> f32 {
+        let tags = self.plan.tags.len();
+        let at = usize::from(at);
+        if at >= tags {
+            return 0.0;
+        }
+        self.tag_table.get(tick * tags + at).copied().unwrap_or(0.0)
     }
 
     /// Set module `at`'s output at control tick `tick`, as if it had ticked
