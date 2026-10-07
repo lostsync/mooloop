@@ -247,6 +247,57 @@ fn a_click_on_an_inlet_opens_its_picker_and_a_pick_feeds_it() {
     assert_eq!(h.steps(), ["Patch wire"]);
 }
 
+/// **A right-click on empty canvas makes a tag, and an inlet asks what it
+/// reads** (song patch step 06): pick Inlet, then Bar from the list that
+/// opens at once; a click on the tag later opens the list again and
+/// rebinds it, and the tag can feed a box's inlet from that box's picker.
+#[test]
+fn a_right_click_makes_an_inlet_tag_and_its_list_binds_it() {
+    use mooloop_core::{InletSource, TagKind};
+    let (h, [lfo, _, _]) = harness();
+    let at = h.at((640.0, 260.0));
+    let pos = LogicalPosition::new(at.0, at.1);
+    let w = h.window.window();
+    w.dispatch_event(WindowEvent::PointerMoved { position: pos });
+    w.dispatch_event(WindowEvent::PointerPressed { position: pos, button: PointerEventButton::Right });
+    w.dispatch_event(WindowEvent::PointerReleased { position: pos, button: PointerEventButton::Right });
+    let patch = h.window.global::<PatchView>();
+    assert!(patch.get_menu_open(), "the right-click opened the menu");
+    let options = || patch.get_menu_options().iter().map(|option| option.to_string()).collect::<Vec<_>>();
+    assert_eq!(options(), ["Inlet", "Notes in", "Notes out"]);
+    patch.invoke_picked(0);
+    let tag = {
+        let st = h.state.borrow();
+        let tag = st.session.modulation.tags.last().expect("a tag was made").clone();
+        assert_eq!(tag.kind, TagKind::Inlet { bind: None });
+        assert_eq!(tag.at, CanvasPoint::new(640, 260));
+        tag.id
+    };
+    assert!(patch.get_menu_open(), "a new inlet asks what it reads");
+    assert_eq!(&options()[..5], ["None", "Beat", "Bar", "Pattern position", "Pattern (topmost row)"]);
+    assert!(options().iter().any(|option| option.ends_with("· gate")));
+    patch.invoke_picked(2);
+    let bind = |h: &Harness| match h.state.borrow().session.modulation.tag(tag).unwrap().kind {
+        TagKind::Inlet { bind } => bind,
+        _ => unreachable!(),
+    };
+    assert_eq!(bind(&h), Some(InletSource::Bar));
+    assert_eq!(h.steps(), ["Patch tag", "Patch tag source"]);
+
+    let node = h.state.borrow().patch_layout().node(patch_canvas::NodeKey::Node(tag)).map(|node| (node.x + 8.0, node.y + 8.0)).unwrap();
+    h.click(node);
+    assert!(patch.get_menu_open(), "a click on the tag opens its list");
+    assert_eq!(patch.get_menu_current(), 2, "lit on what it reads");
+    patch.invoke_picked(1);
+    assert_eq!(bind(&h), Some(InletSource::Beat));
+
+    // The LFO's retrigger inlet can now be fed from the Beat tag.
+    h.click(h.jack(lfo, false, 1));
+    let row = options().iter().position(|option| option == "Beat").expect("the beat tag is offered");
+    patch.invoke_picked(row as i32);
+    assert_eq!(h.feeds(Jack::new(lfo, 1)), Some(Jack::new(tag, 0)));
+}
+
 #[test]
 fn a_double_click_on_empty_canvas_types_a_box_there() {
     let (h, _) = harness();
