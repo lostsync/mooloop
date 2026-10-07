@@ -373,7 +373,8 @@ export component PatchCanvas inherits Rectangle {
                             width: parent.width - 16px;
                             height: parent.height;
                             capture-key-pressed(event) => {
-                                if PatchView.typing-key(event.text) {
+                                // Escape is the field's own: it leaves.
+                                if event.text != Key.Escape && PatchView.typing-key(event.text) {
                                     // Tab may have completed the name: type on
                                     // after it, not where the cursor was.
                                     typing-input.set-selection-offsets(
@@ -403,6 +404,16 @@ export component PatchCanvas inherits Rectangle {
                                 }
                                 accepted => {
                                     PatchView.typing-accepted(self.text);
+                                }
+                                // Escape makes nothing and gives the keys back
+                                // to the canvas, so Space plays again.
+                                key-pressed(event) => {
+                                    if event.text == Key.Escape {
+                                        PatchView.typing-key(event.text);
+                                        self.clear-focus();
+                                        return accept;
+                                    }
+                                    return reject;
                                 }
                             }
                         }
