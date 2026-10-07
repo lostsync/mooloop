@@ -831,6 +831,15 @@ pub(crate) enum Picking {
     Make(f32, f32),
 }
 
+/// The canvas's menu as it is open: its title, its rows, the one lit, and
+/// the canvas point it hangs over.
+pub(crate) struct PatchMenu {
+    pub title: String,
+    pub options: Vec<String>,
+    pub current: Option<usize>,
+    pub anchor: (f32, f32),
+}
+
 /// What a row of the canvas's menu asks of the song.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum Chosen {
@@ -1284,12 +1293,8 @@ impl UiState {
         }
     }
 
-    /// The canvas's menu as it is open now: its title, its rows, the one
-    /// lit, and the point it hangs over.
-    pub(crate) fn patch_menu(
-        &self,
-        layout: &Layout,
-    ) -> Option<(String, Vec<String>, Option<usize>, (f32, f32))> {
+    /// The canvas's menu as it is open now.
+    pub(crate) fn patch_menu(&self, layout: &Layout) -> Option<PatchMenu> {
         match self.patch_canvas.picking? {
             Picking::Feed(inlet) => {
                 let node = layout.node(NodeKey::Node(inlet.node))?;
@@ -1301,12 +1306,12 @@ impl UiState {
                     .into_iter()
                     .map(|(_, name)| name)
                     .collect();
-                Some((
-                    format!("Feed {name} from"),
+                Some(PatchMenu {
+                    title: format!("Feed {name} from"),
                     options,
-                    Some(self.session.patch_feed_choice(inlet)),
-                    (anchor.x, anchor.y),
-                ))
+                    current: Some(self.session.patch_feed_choice(inlet)),
+                    anchor: (anchor.x, anchor.y),
+                })
             }
             Picking::Bind(id) => {
                 let node = layout.node(NodeKey::Node(id))?;
@@ -1320,14 +1325,19 @@ impl UiState {
                 let options = std::iter::once("None".to_string())
                     .chain(sources.into_iter().map(|(_, name)| name))
                     .collect();
-                Some(("Read from".to_string(), options, current, (node.x, node.y)))
+                Some(PatchMenu {
+                    title: "Read from".to_string(),
+                    options,
+                    current,
+                    anchor: (node.x, node.y),
+                })
             }
-            Picking::Make(x, y) => Some((
-                "Make a tag".to_string(),
-                MADE_TAGS.iter().map(|name| name.to_string()).collect(),
-                None,
-                (x, y),
-            )),
+            Picking::Make(x, y) => Some(PatchMenu {
+                title: "Make a tag".to_string(),
+                options: MADE_TAGS.iter().map(|name| name.to_string()).collect(),
+                current: None,
+                anchor: (x, y),
+            }),
         }
     }
 
@@ -1472,7 +1482,12 @@ impl UiState {
             _ => patch.set_marquee(false),
         }
         match self.patch_menu(&layout) {
-            Some((title, options, current, anchor)) => {
+            Some(PatchMenu {
+                title,
+                options,
+                current,
+                anchor,
+            }) => {
                 let options: Vec<SharedString> = options.into_iter().map(Into::into).collect();
                 patch.set_menu_title(title.into());
                 patch.set_menu_options(ModelRc::new(VecModel::from(options)));

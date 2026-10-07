@@ -270,7 +270,7 @@ fn a_right_click_makes_an_inlet_tag_and_its_list_binds_it() {
     patch.invoke_picked(0);
     let tag = {
         let st = h.state.borrow();
-        let tag = st.session.modulation.tags.last().expect("a tag was made").clone();
+        let tag = *st.session.modulation.tags.last().expect("a tag was made");
         assert_eq!(tag.kind, TagKind::Inlet { bind: None });
         assert_eq!(tag.at, CanvasPoint::new(660, 110));
         tag.id
