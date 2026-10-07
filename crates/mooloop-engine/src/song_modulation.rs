@@ -1,8 +1,8 @@
 //! The song's modulation as the audio thread runs it
 //! (`docs/plans/archive/song-modulation/02-the-engine-runs-one-set.md`).
 //!
-//! One set for the whole song, not a rack per channel: the modules tick once
-//! per control tick, in list order, before anything renders, and every chain
+//! One set for the whole song, not a rack per channel: the patch ticks once
+//! per control tick, in its compiled order, before anything renders, and every chain
 //! -- a channel's source, strip and inserts, a track's inserts and fader --
 //! reads the routes filed under it ([`CompiledModulation::chain_routes`]).
 //!
@@ -22,7 +22,8 @@ use mooloop_core::{
     MAX_CHANNELS,
 };
 use mooloop_dsp::{
-    ModuleSpec, ModulatorSet, NoteGateEvents, CONTROL_RATE_FRAMES, MAX_CONTROL_TICKS_PER_BLOCK,
+    ModuleSpec, ModulatorSet, NoteGateEvents, SpecInlet, CONTROL_RATE_FRAMES,
+    MAX_CONTROL_TICKS_PER_BLOCK,
 };
 
 /// The song's modulation set, resolved, with its running modules and every
@@ -59,12 +60,20 @@ impl SongModulator {
     }
 
     fn build(plan: CompiledModulation) -> Self {
-        let set = ModulatorSet::new(plan.modules.iter().map(|module| ModuleSpec {
-            params: module.params,
-            seed: module.seed,
-            gate: module.gate,
-            reads: module.reads,
-        }));
+        let set = ModulatorSet::new(
+            plan.modules.iter().map(|module| ModuleSpec {
+                params: module.params,
+                seed: module.seed,
+                inlets: module.inlets.map(|inlet| {
+                    inlet.map(|inlet| SpecInlet {
+                        node: inlet.node,
+                        delayed: inlet.delayed,
+                    })
+                }),
+            }),
+            plan.tags.iter().map(|tag| tag.gate),
+            plan.order.iter().copied(),
+        );
         let table = vec![0.0; plan.modules.len() * MAX_CONTROL_TICKS_PER_BLOCK];
         Self { plan, set, table }
     }
@@ -89,19 +98,29 @@ impl SongModulator {
         &self.plan
     }
 
-    /// Take every module's running state from `previous` that names the same
-    /// module, wherever it sat there. Audio thread: compares and copies,
-    /// allocating nothing. A search per module, which on a song of a few
-    /// hundred modules is a few tens of thousands of comparisons, once per
-    /// change of shape.
+    /// Take every module's and tag's running state from `previous` that
+    /// names the same node, wherever it sat there. Audio thread: compares
+    /// and copies, allocating nothing. A search per node, which on a song of
+    /// a few hundred boxes is a few tens of thousands of comparisons, once
+    /// per change of shape.
     pub(crate) fn carry_from(&mut self, previous: &SongModulator) {
         for at in 0..self.plan.modules.len() {
             let module = self.plan.modules[at];
             let Some(from) = previous.plan.position_of(module.id) else {
                 continue;
             };
-            let input_changed = previous.plan.modules[from].input != module.input;
+            // The same wires, by where they come from: a node that moved in
+            // the order is not a different input.
+            let wired = |inlets: &[Option<mooloop_core::CompiledInlet>; mooloop_core::MAX_INLETS]| {
+                inlets.map(|inlet| inlet.map(|inlet| inlet.from))
+            };
+            let input_changed = wired(&previous.plan.modules[from].inlets) != wired(&module.inlets);
             self.set.carry(at, &previous.set, from, input_changed);
+        }
+        for at in 0..self.plan.tags.len() {
+            if let Some(from) = previous.plan.tag_position_of(self.plan.tags[at].id) {
+                self.set.carry_tag(at, &previous.set, from);
+            }
         }
     }
 
@@ -199,9 +218,7 @@ impl SongModulator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mooloop_core::{
-        ModLfoParams, ModRandomParams, SongModulation, SongModule,
-    };
+    use mooloop_core::{Jack, ModLfoParams, ModRandomParams, SongModulation, SongModule};
 
     fn module(id: u32, params: ModulatorParams) -> SongModule {
         SongModule {
@@ -225,6 +242,104 @@ mod tests {
             },
             |_| Some(0),
         )
+    }
+
+    /// One control tick (32 frames) with `gates` on every channel, returning
+    /// every module's output.
+    fn tick(set: &mut SongModulator, gates: [NoteGateEvents; MAX_CHANNELS]) -> Vec<f32> {
+        let table = vec![gates; MAX_CONTROL_TICKS_PER_BLOCK];
+        set.tick_block(48_000, 120.0, CONTROL_RATE_FRAMES, &table, &[None; MAX_CONTROL_TICKS_PER_BLOCK]);
+        set.outputs().to_vec()
+    }
+
+    fn patch(modules: Vec<SongModule>) -> SongModulation {
+        let next_source_id = modules.iter().map(|module| module.id.0 + 1).max().unwrap_or(0);
+        SongModulation {
+            modules,
+            next_source_id,
+            ..SongModulation::default()
+        }
+    }
+
+    /// An LFO wired into another LFO's `rate` moves it two octaves for a
+    /// wire at +1: a 1 Hz saw runs at 4 Hz.
+    #[test]
+    fn an_lfo_into_an_lfos_rate_bends_it_by_octaves() {
+        let square = ModulatorParams::Lfo(ModLfoParams {
+            waveform: mooloop_core::ModLfoWaveform::Square,
+            rate_hz: 0.001,
+            ..ModLfoParams::default()
+        });
+        let saw = ModulatorParams::Lfo(ModLfoParams {
+            waveform: mooloop_core::ModLfoWaveform::Saw,
+            rate_hz: 1.0,
+            ..ModLfoParams::default()
+        });
+        let mut song = patch(vec![module(1, saw), module(2, square), module(3, saw)]);
+        song.connect(Jack::new(ModSourceId(2), 0), Jack::new(ModSourceId(1), 0))
+            .expect("out into rate");
+        let mut set = SongModulator::new(CompiledModulation::compile(&song, |_| None));
+        assert_eq!(set.plan().order, [1, 0, 2], "the square runs before the saw it bends");
+        let quiet = [NoteGateEvents::default(); MAX_CHANNELS];
+        let first = tick(&mut set, quiet);
+        assert_eq!((first[0], first[1], first[2]), (-1.0, 1.0, -1.0));
+        let second = tick(&mut set, quiet);
+        let step = 2.0 * CONTROL_RATE_FRAMES as f32 / 48_000.0;
+        assert!((second[2] - (-1.0 + step)).abs() < 1e-5, "the unwired saw at 1 Hz: {}", second[2]);
+        assert!((second[0] - (-1.0 + 4.0 * step)).abs() < 1e-5, "the bent saw at 4 Hz: {}", second[0]);
+    }
+
+    /// A gate tag into a Step's `advance` moves it once per NoteOn, held
+    /// notes and all, and a reset wire takes it back to the first step.
+    #[test]
+    fn a_gate_tag_advances_a_step_once_per_note() {
+        let mut steps = [0.0; mooloop_core::MOD_STEP_MAX_STEPS];
+        steps[..3].copy_from_slice(&[1.0, -1.0, 0.5]);
+        let step = ModulatorParams::Step(mooloop_core::ModStepParams {
+            steps,
+            length: 3,
+            trigger: mooloop_core::ModStepTrigger::NoteAdvance,
+            ..mooloop_core::ModStepParams::default()
+        });
+        let mut song = patch(vec![module(1, step)]);
+        let kick = mooloop_core::ChannelId(5);
+        assert!(song.set_input(ModSourceId(1), mooloop_core::InputSource::ChannelNotes(kick)));
+        let mut set = SongModulator::new(CompiledModulation::compile(&song, |_| Some(3)));
+        let quiet = [NoteGateEvents::default(); MAX_CHANNELS];
+        let mut note = quiet;
+        note[3].note_ons = 1;
+        let mut other = quiet;
+        other[2].note_ons = 1;
+        assert_eq!(tick(&mut set, quiet)[0], 1.0);
+        assert_eq!(tick(&mut set, note)[0], -1.0, "a note advances");
+        assert_eq!(tick(&mut set, quiet)[0], -1.0, "a held note does not again");
+        assert_eq!(tick(&mut set, other)[0], -1.0, "another seat's note does not");
+        assert_eq!(tick(&mut set, note)[0], 0.5, "an overlapping note does");
+        let mut both = note;
+        both[3].note_ons = 2;
+        assert_eq!(tick(&mut set, both)[0], 1.0, "two notes in one tick advance once");
+    }
+
+    /// Two boxes in a loop run: the loop is broken at the first in the
+    /// list, which reads the other's previous tick.
+    #[test]
+    fn a_two_box_loop_runs_a_tick_late() {
+        let add = ModulatorParams::Math(mooloop_core::ModMathParams {
+            op: mooloop_core::ModMathOp::Add,
+            operand: 0.25,
+            ..mooloop_core::ModMathParams::default()
+        });
+        let mut song = patch(vec![module(1, add), module(2, add)]);
+        song.connect(Jack::new(ModSourceId(1), 0), Jack::new(ModSourceId(2), 0)).unwrap();
+        song.connect(Jack::new(ModSourceId(2), 0), Jack::new(ModSourceId(1), 0)).unwrap();
+        let plan = CompiledModulation::compile(&song, |_| None);
+        assert_eq!(plan.order, [0, 1]);
+        assert_eq!(plan.modules[0].inlets[0].map(|inlet| inlet.delayed), Some(true));
+        let mut set = SongModulator::new(plan);
+        let quiet = [NoteGateEvents::default(); MAX_CHANNELS];
+        assert_eq!(tick(&mut set, quiet), [0.25, 0.5]);
+        assert_eq!(tick(&mut set, quiet), [0.75, 1.0]);
+        assert_eq!(tick(&mut set, quiet), [1.0, 1.0], "both clamp at the edge");
     }
 
     /// A set replaced by one with a module more keeps every module that

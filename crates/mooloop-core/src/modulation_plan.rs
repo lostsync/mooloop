@@ -5,11 +5,15 @@
 //! identity up, so this is the same set resolved once, off the audio thread,
 //! against the seats of one song (`docs/plans/archive/song-modulation/02`):
 //!
-//! - every module gets a **list position**, which is the order the engine
-//!   ticks them in. A Math module reads the module it names at that
-//!   position: one listed before it this tick, one listed after it a tick
-//!   late, the rule a rack's slots had;
-//! - every input is the **seat** whose notes it hears;
+//! - every module gets a **list position**, which is where its output is
+//!   read by routes and meters, and every tag a node index after the
+//!   modules;
+//! - the patch's wires become each box's **inlets**, and the boxes and tags
+//!   a **tick order**: topological over the wires, ties in the file's order,
+//!   tags first (`docs/plans/song-patch/02-the-engine-runs-a-graph.md`). A
+//!   wire that would close a loop, and a wire saved [`crate::Wire::late`],
+//!   reads its outlet as of the previous tick;
+//! - every gate tag is the **seat** whose notes it hears;
 //! - every route is **filed under the chain it lands on**, so a device asks
 //!   the routes onto its own chain rather than walking every route in the
 //!   song. Within a chain the routes keep the song's order, so their offsets
@@ -26,9 +30,10 @@
 use crate::mixer::{EffectTarget, MAX_BUSES};
 use crate::mod_metadata::{ModDestinationDescriptor, ModSourceId, ModSourceRef};
 use crate::modulation::{
-    InputSource, ModPolarity, ModulatorParams, ParamAddr, SongModulation, MAX_GENERATOR_OUTLETS,
+    ModPolarity, ModulatorParams, ParamAddr, SongModulation, MAX_GENERATOR_OUTLETS,
     PERFORMANCE_SOURCES,
 };
+use crate::patch::{InletSource, JackSort, TagKind};
 use crate::{ChannelId, MAX_CHANNELS};
 
 /// How many chains a route can land on: every channel, then every track.
@@ -49,6 +54,24 @@ pub fn chain_index(scope: EffectTarget) -> Option<usize> {
     }
 }
 
+/// The most inlets a box has. Inlet storage is a fixed array so a module
+/// stays `Copy` on the audio thread; the jack table decides how many of
+/// them a kind uses.
+pub const MAX_INLETS: usize = 8;
+
+/// The wire into one inlet, as the engine reads it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CompiledInlet {
+    /// The box or tag it comes from, by identity: what tells "the same
+    /// wire, from a node that moved in the order" from "a different wire".
+    pub from: ModSourceId,
+    /// That node's index: a module's list position, or a tag's index past
+    /// the last module.
+    pub node: u16,
+    /// Read the outlet as of the previous control tick.
+    pub delayed: bool,
+}
+
 /// One module as the engine runs it.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CompiledModule {
@@ -56,15 +79,17 @@ pub struct CompiledModule {
     pub params: ModulatorParams,
     /// What its random generator is seeded from ([`crate::SongModule::seed`]).
     pub seed: u32,
-    /// What its input names, by identity. Kept beside the resolved seat so
-    /// that a set compiled after a channel move can tell "the same input, at
-    /// a new seat" from "a different input".
-    pub input: InputSource,
-    /// The seat of the channel whose notes it hears, for the four kinds that
-    /// hear notes.
+    /// The wire into each inlet, by port ([`crate::ModulatorKind::ports`]).
+    pub inlets: [Option<CompiledInlet>; MAX_INLETS],
+}
+
+/// One tag as the engine runs it: a gate tag is the seat whose notes it
+/// hears. Every other tag (an empty slot, a notes tag) sends nothing on a
+/// control wire.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CompiledTag {
+    pub id: ModSourceId,
     pub gate: Option<u8>,
-    /// The list position of the module a Math module reads.
-    pub reads: Option<u16>,
 }
 
 /// A route's source, resolved to where the engine reads it.
@@ -94,6 +119,10 @@ pub struct CompiledRoute {
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct CompiledModulation {
     pub modules: Vec<CompiledModule>,
+    pub tags: Vec<CompiledTag>,
+    /// Every node index (modules, then tags) in the order a control tick
+    /// runs them.
+    pub order: Vec<u16>,
     /// Grouped by the chain each lands on, in chain order; the song's order
     /// within a chain.
     pub routes: Vec<CompiledRoute>,
@@ -105,37 +134,67 @@ pub struct CompiledModulation {
 impl CompiledModulation {
     /// Resolve `song` against the seats `seat_of` gives each channel.
     pub fn compile(song: &SongModulation, seat_of: impl Fn(ChannelId) -> Option<u8>) -> Self {
-        let position_of = |id: ModSourceId| {
-            song.modules
-                .iter()
-                .position(|module| module.id == id)
-                .and_then(|position| u16::try_from(position).ok())
-        };
-        let modules = song
+        // A node index is a u16; a song with more boxes and tags than that
+        // runs the first 65,535 of them.
+        let module_count = song.modules.len().min(usize::from(u16::MAX));
+        let tag_count = song.tags.len().min(usize::from(u16::MAX) - module_count);
+        let mut nodes: std::collections::HashMap<ModSourceId, u16> =
+            std::collections::HashMap::with_capacity(module_count + tag_count);
+        for (index, module) in song.modules.iter().take(module_count).enumerate() {
+            nodes.entry(module.id).or_insert(index as u16);
+        }
+        for (index, tag) in song.tags.iter().take(tag_count).enumerate() {
+            nodes.entry(tag.id).or_insert((module_count + index) as u16);
+        }
+        let position_of = |id: ModSourceId| nodes.get(&id).copied().filter(|&at| usize::from(at) < module_count);
+
+        let mut modules: Vec<CompiledModule> = song
             .modules
             .iter()
-            .filter_map(|module| {
-                // A list position is a u16; a song with more modules than
-                // that runs the first 65,535.
-                position_of(module.id)?;
-                let math = matches!(module.params, ModulatorParams::Math(_));
-                // Until step 02 of `docs/plans/song-patch/` compiles the
-                // graph, a box hears the one wire into its input inlet.
-                let input = song.input_of(module.id);
-                Some(CompiledModule {
-                    id: module.id,
-                    params: module.params,
-                    seed: module.seed,
-                    input,
-                    gate: input.channel().filter(|_| !math).and_then(&seat_of),
-                    reads: input
-                        .module()
-                        .filter(|_| math)
-                        .and_then(position_of),
-                })
+            .take(module_count)
+            .map(|module| CompiledModule {
+                id: module.id,
+                params: module.params,
+                seed: module.seed,
+                inlets: [None; MAX_INLETS],
             })
-            .collect::<Vec<_>>();
+            .collect();
+        let tags: Vec<CompiledTag> = song
+            .tags
+            .iter()
+            .take(tag_count)
+            .map(|tag| CompiledTag {
+                id: tag.id,
+                gate: match tag.kind {
+                    TagKind::Inlet {
+                        bind: Some(InletSource::Gate(channel)),
+                    } => seat_of(channel),
+                    _ => None,
+                },
+            })
+            .collect();
 
+        // Each control wire into a module's inlet. A wire the song should
+        // not hold (integrity drops it on load) is left out here too.
+        for wire in &song.wires {
+            let Some(to) = position_of(wire.to.node) else { continue };
+            let Some(&from) = nodes.get(&wire.from.node) else { continue };
+            let module = &mut modules[usize::from(to)];
+            let port = usize::from(wire.to.port);
+            let fits = song.check_wire(wire.from, wire.to).is_ok()
+                && port < MAX_INLETS
+                && song.ports_of(wire.from.node).and_then(|ports| ports.outlet(wire.from.port)).map(|outlet| outlet.sort)
+                    == Some(JackSort::Control);
+            if !fits || module.inlets[port].is_some() {
+                continue;
+            }
+            module.inlets[port] = Some(CompiledInlet {
+                from: wire.from.node,
+                node: from,
+                delayed: wire.late,
+            });
+        }
+        let order = tick_order(&mut modules, tags.len());
         let mut filed: Vec<(usize, CompiledRoute)> = song
             .routes
             .iter()
@@ -180,6 +239,8 @@ impl CompiledModulation {
         if filed.is_empty() {
             return Self {
                 modules,
+                tags,
+                order,
                 ..Self::default()
             };
         }
@@ -194,6 +255,8 @@ impl CompiledModulation {
         }
         Self {
             modules,
+            tags,
+            order,
             routes: filed.into_iter().map(|(_, route)| route).collect(),
             chains,
         }
@@ -219,6 +282,11 @@ impl CompiledModulation {
         self.modules.iter().position(|module| module.id == id)
     }
 
+    /// The index among the tags of tag `id`.
+    pub fn tag_position_of(&self, id: ModSourceId) -> Option<usize> {
+        self.tags.iter().position(|tag| tag.id == id)
+    }
+
     /// The route from `source` onto `destination`.
     pub fn route_mut(
         &mut self,
@@ -234,21 +302,16 @@ impl CompiledModulation {
 
     /// Whether `other` differs from this set only in module parameters and
     /// in route depths and polarities -- what a narrow edit can carry -- and
-    /// not in which modules there are, in what order, hearing what, or in
-    /// which routes there are.
+    /// not in which modules and tags there are, in what order, wired how, or
+    /// in which routes there are.
     pub fn same_shape(&self, other: &Self) -> bool {
         let module = |module: &CompiledModule| {
-            (
-                module.id,
-                module.params.kind(),
-                module.seed,
-                module.input,
-                module.gate,
-                module.reads,
-            )
+            (module.id, module.params.kind(), module.seed, module.inlets)
         };
         let route = |route: &CompiledRoute| (route.source, route.resolved, route.destination);
         self.chains == other.chains
+            && self.tags == other.tags
+            && self.order == other.order
             && self.modules.len() == other.modules.len()
             && self.routes.len() == other.routes.len()
             && self
@@ -306,10 +369,82 @@ impl CompiledModulation {
     }
 }
 
+/// The order a control tick runs `modules` (node indices `0..modules.len()`)
+/// and `tags` tags (the indices after them) in: Kahn's topological order
+/// over the inlets that are not delayed, taking the tags first and then the
+/// modules in list order whenever more than one node is ready, so a song
+/// whose every wire runs forward in its list keeps its list order. A loop is
+/// broken at the first module in list order still waiting: its inlets from
+/// nodes not yet run are marked delayed, and read the previous tick.
+fn tick_order(modules: &mut [CompiledModule], tags: usize) -> Vec<u16> {
+    let module_count = modules.len();
+    let count = module_count + tags;
+    // Ranks: tags first, then modules in list order.
+    let rank = |node: usize| {
+        if node >= module_count {
+            node - module_count
+        } else {
+            tags + node
+        }
+    };
+    let mut waiting = vec![0u32; count];
+    let mut feeds: Vec<Vec<u16>> = vec![Vec::new(); count];
+    for (to, module) in modules.iter().enumerate() {
+        for inlet in module.inlets.iter().flatten().filter(|inlet| !inlet.delayed) {
+            waiting[to] += 1;
+            feeds[usize::from(inlet.node)].push(to as u16);
+        }
+    }
+    let mut ready: std::collections::BinaryHeap<std::cmp::Reverse<(usize, u16)>> = (0..count)
+        .filter(|&node| waiting[node] == 0)
+        .map(|node| std::cmp::Reverse((rank(node), node as u16)))
+        .collect();
+    let mut placed = vec![false; count];
+    let mut order = Vec::with_capacity(count);
+    while order.len() < count {
+        let node = match ready.pop() {
+            Some(std::cmp::Reverse((_, node))) => usize::from(node),
+            None => {
+                // A loop: every node left waits on another. Break it at the
+                // first module in list order.
+                let Some(node) = (0..module_count).find(|&node| !placed[node]) else {
+                    break;
+                };
+                for inlet in modules[node].inlets.iter_mut().flatten() {
+                    if !inlet.delayed && !placed[usize::from(inlet.node)] {
+                        inlet.delayed = true;
+                        let feeder = &mut feeds[usize::from(inlet.node)];
+                        if let Some(at) = feeder.iter().position(|&to| usize::from(to) == node) {
+                            feeder.swap_remove(at);
+                        }
+                    }
+                }
+                waiting[node] = 0;
+                node
+            }
+        };
+        if placed[node] {
+            continue;
+        }
+        placed[node] = true;
+        order.push(node as u16);
+        for &to in &feeds[node] {
+            let to = usize::from(to);
+            waiting[to] = waiting[to].saturating_sub(1);
+            if waiting[to] == 0 && !placed[to] {
+                ready.push(std::cmp::Reverse((rank(to), to as u16)));
+            }
+        }
+    }
+    order
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::modulation::{ModLfoParams, ModMathParams, ModRoute, SongModule};
+    use crate::patch::Jack;
+    use crate::InputSource;
     use crate::DeviceId;
 
     fn module(id: u32, params: ModulatorParams) -> SongModule {
@@ -367,9 +502,13 @@ mod tests {
         song.set_input(ModSourceId(3), InputSource::Module(ModSourceId(7)));
         let seat_of = |id: ChannelId| (id == ChannelId(30)).then_some(1);
         let plan = CompiledModulation::compile(&song, seat_of);
-        assert_eq!(plan.modules[0].gate, Some(1));
-        assert_eq!(plan.modules[1].reads, Some(0));
-        assert_eq!(plan.modules[1].gate, None);
+        // The gate tag is node 2, after the two modules, and hears seat 1.
+        assert_eq!(plan.tags[0].gate, Some(1));
+        let lfo_retrigger = plan.modules[0].inlets[1].expect("the LFO's retrigger is wired");
+        assert_eq!((lfo_retrigger.node, lfo_retrigger.delayed), (2, false));
+        let math_in = plan.modules[1].inlets[0].expect("the Math box's in is wired");
+        assert_eq!((math_in.from, math_in.node, math_in.delayed), (ModSourceId(7), 0, false));
+        assert_eq!(plan.order, [2, 0, 1], "the tag, then the list");
         let params = |scope| -> Vec<u32> {
             plan.chain_routes(scope)
                 .iter()
@@ -391,5 +530,62 @@ mod tests {
         let mut wider = song;
         wider.routes.push(route(ModSourceRef::Id(ModSourceId(3)), EffectTarget::Channel(0), 2));
         assert!(!plan.same_shape(&CompiledModulation::compile(&wider, seat_of)));
+    }
+
+    fn lfo_song(count: u32) -> SongModulation {
+        let lfo = ModulatorParams::Lfo(ModLfoParams::default());
+        SongModulation {
+            modules: (0..count).map(|id| module(id, lfo)).collect(),
+            next_source_id: count,
+            ..SongModulation::default()
+        }
+    }
+
+    fn wire(song: &mut SongModulation, from: u32, to: u32, port: u8) {
+        song.connect(Jack::new(ModSourceId(from), 0), Jack::new(ModSourceId(to), port))
+            .expect("a control wire");
+    }
+
+    /// A box runs after the boxes that feed it, whatever the list says, and
+    /// boxes nothing orders keep the list's order.
+    #[test]
+    fn the_order_follows_the_wires_and_ties_keep_the_list() {
+        let mut song = lfo_song(4);
+        // 3 -> 0 -> 2; 1 is free.
+        wire(&mut song, 3, 0, 0);
+        wire(&mut song, 0, 2, 0);
+        let plan = CompiledModulation::compile(&song, |_| None);
+        assert_eq!(plan.order, [1, 3, 0, 2]);
+        assert!(plan.modules.iter().flat_map(|module| module.inlets).flatten().all(|inlet| !inlet.delayed));
+    }
+
+    /// A loop runs: it is broken at the first box in the list still
+    /// waiting, whose wire from the loop reads the previous tick.
+    #[test]
+    fn a_loop_is_broken_at_its_first_box_and_reads_a_tick_late() {
+        let mut song = lfo_song(3);
+        // 1 -> 2 -> 1, and 0 -> 1.
+        wire(&mut song, 1, 2, 0);
+        wire(&mut song, 2, 1, 0);
+        wire(&mut song, 0, 1, 1);
+        let plan = CompiledModulation::compile(&song, |_| None);
+        assert_eq!(plan.order, [0, 1, 2]);
+        let into_one = plan.modules[1].inlets;
+        assert_eq!(into_one[0].map(|inlet| inlet.delayed), Some(true), "2 -> 1 closes the loop");
+        assert_eq!(into_one[1].map(|inlet| inlet.delayed), Some(false), "0 -> 1 does not");
+        assert_eq!(plan.modules[2].inlets[0].map(|inlet| inlet.delayed), Some(false));
+    }
+
+    /// A wire saved late (an input that read a module listed after its own)
+    /// reads the previous tick and does not order its boxes.
+    #[test]
+    fn a_late_wire_keeps_the_list_order() {
+        let mut song = lfo_song(2);
+        song.modules[0].params = ModulatorParams::Math(ModMathParams::default());
+        assert!(song.set_input(ModSourceId(0), crate::InputSource::Module(ModSourceId(1))));
+        assert!(song.wires[0].late, "Math reads a module listed after it");
+        let plan = CompiledModulation::compile(&song, |_| None);
+        assert_eq!(plan.order, [0, 1]);
+        assert_eq!(plan.modules[0].inlets[0].map(|inlet| inlet.delayed), Some(true));
     }
 }

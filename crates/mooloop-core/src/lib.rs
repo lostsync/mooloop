@@ -92,7 +92,8 @@ pub use patch::{
     TagKind, Wire, WireRefusal,
 };
 pub use modulation_plan::{
-    chain_index, CompiledModulation, CompiledModule, CompiledRoute, CompiledSource,
+    chain_index, CompiledInlet, CompiledModulation, CompiledModule, CompiledRoute, CompiledSource,
+    CompiledTag, MAX_INLETS,
     MODULATION_CHAINS,
 };
 pub use modulation::{

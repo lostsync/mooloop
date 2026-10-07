@@ -1914,3 +1914,77 @@ fn site_timing_cost() {
         (on - off) / budget * 100.0
     );
 }
+
+/// The song patch's control pass on its own (song patch step 02, and the
+/// sweep MOO-170 left owed): what `SongModulator::tick_block` costs for a
+/// 128-frame block at 64, 256 and 1024 boxes, with no wires (every box an
+/// LFO), wired as a chain (an LFO, then Math boxes each reading the one
+/// before), and as a fan (one LFO read by every other box). Printed, not
+/// asserted; the numbers are recorded in `plans/song-patch/00-status.md`.
+#[test]
+#[ignore = "measures wall time; run deliberately in release"]
+fn patch_control_cost() {
+    use crate::song_modulation::SongModulator;
+    use mooloop_core::{
+        CompiledModulation, Jack, MAX_CHANNELS, ModLfoParams, ModMathParams, ModSourceId,
+        ModulatorParams, SongModulation, SongModule,
+    };
+    use mooloop_dsp::{NoteGateEvents, MAX_CONTROL_TICKS_PER_BLOCK};
+
+    fn song(count: u32, shape: &str) -> SongModulation {
+        let lfo = ModulatorParams::Lfo(ModLfoParams::default());
+        let math = ModulatorParams::Math(ModMathParams::default());
+        let mut song = SongModulation {
+            modules: (0..count)
+                .map(|id| SongModule {
+                    id: ModSourceId(id),
+                    name: String::new(),
+                    seed: id,
+                    at: Default::default(),
+                    open: false,
+                    rack: None,
+                    params: if id == 0 || shape == "none" { lfo } else { math },
+                })
+                .collect(),
+            next_source_id: count,
+            ..SongModulation::default()
+        };
+        for id in 1..count {
+            let from = if shape == "chain" { id - 1 } else { 0 };
+            if shape != "none" {
+                song.connect(Jack::new(ModSourceId(from), 0), Jack::new(ModSourceId(id), 0))
+                    .expect("a control wire");
+            }
+        }
+        song
+    }
+
+    const FRAMES: usize = 128;
+    let gates = vec![[NoteGateEvents::default(); MAX_CHANNELS]; MAX_CONTROL_TICKS_PER_BLOCK];
+    let beats = [None; MAX_CONTROL_TICKS_PER_BLOCK];
+    let budget_nanos = FRAMES as f64 / SAMPLE_RATE as f64 * 1e9;
+    println!();
+    println!("  boxes  shape      ns/block   % of a 128-frame budget");
+    for count in [64u32, 256, 1024] {
+        for shape in ["none", "chain", "fan"] {
+            let plan = CompiledModulation::compile(&song(count, shape), |_| None);
+            let mut set = SongModulator::new(plan);
+            for _ in 0..256 {
+                set.tick_block(SAMPLE_RATE, 120.0, FRAMES, &gates, &beats);
+            }
+            let mut samples: Vec<u128> = (0..2000)
+                .map(|_| {
+                    let started = Instant::now();
+                    set.tick_block(SAMPLE_RATE, 120.0, FRAMES, &gates, &beats);
+                    started.elapsed().as_nanos()
+                })
+                .collect();
+            samples.sort_unstable();
+            let nanos = samples[samples.len() / 2];
+            println!(
+                "  {count:>5}  {shape:<6} {nanos:>12}   {:>6.2}%",
+                nanos as f64 / budget_nanos * 100.0
+            );
+        }
+    }
+}

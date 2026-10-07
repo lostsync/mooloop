@@ -7,7 +7,7 @@
 
 use mooloop_core::{
     ModEnvelopeParams, ModLfoParams, ModLfoWaveform, ModMathOp, ModMathParams, ModRandomParams,
-    ModRandomTrigger, ModStepParams, ModStepTrigger, ModulatorParams, MAX_CHANNELS,
+    ModRandomTrigger, ModStepParams, ModStepTrigger, ModulatorParams, MAX_CHANNELS, MAX_INLETS,
     MOD_STEP_MAX_STEPS,
 };
 
@@ -28,6 +28,9 @@ pub const CONTROL_RATE_FRAMES: usize = 32;
 #[derive(Debug, Clone, Copy)]
 struct Lfo {
     params: ModLfoParams,
+    /// What the `rate` inlet adds this tick, in octaves: a wire at ±1 moves
+    /// the rate two octaves either way.
+    rate_octaves: f32,
     phase: f32,
     /// The song-position cycle `held` was drawn for, while following the
     /// song: the random waveform redraws when this changes, from the cycle
@@ -60,6 +63,7 @@ impl Lfo {
     fn new(params: ModLfoParams) -> Self {
         let mut lfo = Self {
             params,
+            rate_octaves: 0.0,
             phase: params.phase.fract(),
             song_cycle: None,
             fade_elapsed_seconds: 0.0,
@@ -104,10 +108,15 @@ impl Lfo {
     }
 
     fn rate_hz(&self, bpm: f64) -> f32 {
-        if self.params.tempo_sync {
+        let rate = if self.params.tempo_sync {
             self.params.rate_division.rate_hz(bpm)
         } else {
             self.params.rate_hz
+        };
+        if self.rate_octaves == 0.0 {
+            rate
+        } else {
+            rate * self.rate_octaves.exp2()
         }
     }
 
@@ -433,6 +442,13 @@ impl StepSequencer {
         }
     }
 
+    /// Back to the first step, sliding from wherever the output is.
+    fn reset(&mut self) {
+        self.from = self.output;
+        self.elapsed = 0.0;
+        self.step = 0;
+    }
+
     /// Whether this pattern's step is the song position's. See the type.
     fn follows_song(&self) -> bool {
         self.params.trigger == ModStepTrigger::Clock
@@ -707,6 +723,15 @@ enum Source {
     Math(MathSource),
 }
 
+/// One wire into an inlet, as the set reads it: the node it comes from (a
+/// module's position, or a tag's index past the last module) and whether it
+/// reads that node's previous tick (`mooloop_core::CompiledInlet`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SpecInlet {
+    pub node: u16,
+    pub delayed: bool,
+}
+
 /// What one module of a [`ModulatorSet`] is built from: the song's module,
 /// resolved to positions off the audio thread
 /// (`mooloop_core::CompiledModule`).
@@ -715,11 +740,8 @@ pub struct ModuleSpec {
     pub params: ModulatorParams,
     /// What a Random module's generator starts from.
     pub seed: u32,
-    /// The seat of the channel whose notes it hears: the Envelope's gate, the
-    /// LFO's retrigger, the Step's advance, the Random's trigger.
-    pub gate: Option<u8>,
-    /// The list position a Math module reads.
-    pub reads: Option<u16>,
+    /// The wire into each inlet, by port (`ModulatorKind::ports`).
+    pub inlets: [Option<SpecInlet>; MAX_INLETS],
 }
 
 impl ModuleSpec {
@@ -738,35 +760,94 @@ impl ModuleSpec {
 struct Module {
     spec: ModuleSpec,
     source: Source,
+    /// Each inlet's value as of the tick before, which a trigger inlet
+    /// compares with to see a rise through 0.5.
+    last: [f32; MAX_INLETS],
 }
 
-/// The song's modulators and their current outputs, in list order
-/// (`docs/plans/archive/song-modulation/02-the-engine-runs-one-set.md`).
+/// A gate tag: one channel's notes, by seat, as a control signal.
+#[derive(Debug, Clone, Copy, Default)]
+struct Tag {
+    gate: Option<u8>,
+    /// Notes held on the channel, counted from its NoteOns and NoteOffs.
+    held: u16,
+}
+
+/// What a node put on its outlet this tick: a value, and the events that
+/// happened. Only a gate tag has events today: its channel's NoteOns,
+/// NoteOffs and choke, which is what an Envelope's gate counted before the
+/// patch and still counts, so a converted song plays as it did.
+#[derive(Debug, Clone, Copy, Default)]
+struct Signal {
+    value: f32,
+    events: NoteGateEvents,
+}
+
+impl NoteGateEvents {
+    fn any(&self) -> bool {
+        self.note_ons > 0 || self.note_offs > 0 || self.choke
+    }
+}
+
+/// The trigger threshold: a trigger inlet fires when its wire rises through
+/// it, and an Envelope's gate is held while its wire is at or above it.
+const TRIGGER_LEVEL: f32 = 0.5;
+
+/// The song's patch as the audio thread runs it: its boxes, its gate tags
+/// and every node's latest outlet
+/// (`docs/plans/song-patch/02-the-engine-runs-a-graph.md`).
 ///
-/// Built off the audio thread at the size of the song's set and never resized
-/// on it: a module added or removed arrives as a new set, which takes each
-/// surviving module's running state from the one it replaces
-/// ([`Self::carry`]). What a retune can change happens in place
-/// ([`Self::retune`]), and nothing here allocates once built: a module is
-/// `Copy`.
+/// Built off the audio thread at the size of the song's patch and never
+/// resized on it: a box added or removed arrives as a new set, which takes
+/// each surviving node's running state from the one it replaces
+/// ([`Self::carry`], [`Self::carry_tag`]). What a retune can change happens
+/// in place ([`Self::retune`]), and nothing here allocates once built.
 #[derive(Debug, Clone, Default)]
 pub struct ModulatorSet {
     modules: Vec<Module>,
+    tags: Vec<Tag>,
+    /// Node indices (modules, then tags) in the order a tick runs them.
+    order: Vec<u16>,
+    /// Every module's value, by list position: what routes and meters read.
     outputs: Vec<f32>,
+    /// Every node's outlet this tick, and as of the tick before for a
+    /// delayed wire.
+    signals: Vec<Signal>,
+    previous: Vec<Signal>,
 }
 
 impl ModulatorSet {
-    /// Every module fresh, outputs at zero. Allocates.
-    pub fn new(specs: impl IntoIterator<Item = ModuleSpec>) -> Self {
+    /// Every node fresh, outputs at zero. `tags` is each tag's gate seat,
+    /// `order` every node index in tick order. Allocates.
+    pub fn new(
+        specs: impl IntoIterator<Item = ModuleSpec>,
+        tags: impl IntoIterator<Item = Option<u8>>,
+        order: impl IntoIterator<Item = u16>,
+    ) -> Self {
         let modules: Vec<Module> = specs
             .into_iter()
             .map(|spec| Module {
                 spec,
                 source: spec.build(),
+                // Unprimed: the first reading cannot be a rise, so a box
+                // made while its wire is already high does not fire.
+                last: [f32::NAN; MAX_INLETS],
             })
             .collect();
-        let outputs = vec![0.0; modules.len()];
-        Self { modules, outputs }
+        let tags: Vec<Tag> = tags.into_iter().map(|gate| Tag { gate, held: 0 }).collect();
+        let nodes = modules.len() + tags.len();
+        let order = order
+            .into_iter()
+            .filter(|&node| usize::from(node) < nodes)
+            .collect();
+        Self {
+            outputs: vec![0.0; modules.len()],
+            signals: vec![Signal::default(); nodes],
+            previous: vec![Signal::default(); nodes],
+            modules,
+            tags,
+            order,
+        }
     }
 
     pub fn len(&self) -> usize {
@@ -830,11 +911,11 @@ impl ModulatorSet {
 
     /// Take the running state of `from`'s module at `from_at` into this set's
     /// module at `at`, as the same module carried across a new set: its
-    /// phase, cursor, envelope stage and held draw, and its last output,
-    /// which a Math module listed before it reads this tick. Then this set's
-    /// params are retuned onto it by [`Self::retune`]'s rules. A module whose
-    /// kind changed is not carried, and an envelope whose input changed
-    /// releases, as one does when its gate is repointed.
+    /// phase, cursor, envelope stage and held draw, what its inlets last
+    /// read, and its last output, which a delayed wire reads this tick. Then
+    /// this set's params are retuned onto it by [`Self::retune`]'s rules. A
+    /// module whose kind changed is not carried, and an envelope whose input
+    /// changed releases, as one does when its gate is repointed.
     pub fn carry(&mut self, at: usize, from: &ModulatorSet, from_at: usize, input_changed: bool) {
         let (Some(module), Some(previous)) = (self.modules.get(at), from.modules.get(from_at))
         else {
@@ -845,7 +926,9 @@ impl ModulatorSet {
         }
         let params = module.spec.params;
         self.modules[at].source = previous.source;
+        self.modules[at].last = previous.last;
         self.outputs[at] = from.outputs[from_at];
+        self.signals[at] = from.signals[from_at];
         if input_changed {
             if let Source::Envelope(envelope) = &mut self.modules[at].source {
                 envelope.held_notes = 0;
@@ -855,27 +938,47 @@ impl ModulatorSet {
         self.retune(at, params);
     }
 
+    /// Take tag `from_at`'s held notes from `from` into this set's tag `at`:
+    /// the same tag carried across a new set, so a note held through an
+    /// edit is still held.
+    pub fn carry_tag(&mut self, at: usize, from: &ModulatorSet, from_at: usize) {
+        let (Some(tag), Some(previous)) = (self.tags.get(at), from.tags.get(from_at)) else {
+            return;
+        };
+        if tag.gate.is_some() && previous.gate.is_some() {
+            self.tags[at].held = previous.held;
+            let node = self.modules.len() + at;
+            if let Some(signal) = from.signals.get(from.modules.len() + from_at) {
+                self.signals[node] = *signal;
+            }
+        }
+    }
+
     /// Current `-1..1` output of every module, in list order.
     pub fn outputs(&self) -> &[f32] {
         &self.outputs
     }
 
-    /// Deliver this control tick's note gates to every module that hears a
-    /// channel, then evaluate every module for the coming `frames` and
-    /// advance it. `song_beats` is how far into the song this tick starts,
-    /// in quarter-note beats, `None` while the transport is stopped: a
+    /// Run one control tick: every node in the compiled order, each box
+    /// reading its inlets, then evaluating for the coming `frames` and
+    /// advancing. `song_beats` is how far into the song this tick starts, in
+    /// quarter-note beats, `None` while the transport is stopped: a
     /// tempo-synced LFO takes its phase from it (MOO-127), and a clocked
     /// Step and a clocked, synced Random their steps and draws (MOO-373).
     ///
-    /// Modules evaluate in list order within a control tick, so a Math
-    /// module reading one listed before it sees this tick's value and one
-    /// reading itself or a module listed after it sees the previous tick's.
-    /// That single rule is what makes a chain of modules deterministic,
-    /// identical realtime and offline, and bounded without any cycle
-    /// machinery: `outputs` simply still holds last tick's value everywhere
-    /// this pass has not reached yet. It is the rule a channel's rack had
-    /// over its slots, and a converted song lists each rack's modules in
-    /// slot order.
+    /// A wire reads what its node put out this tick, which the order has
+    /// already run, or, if it is delayed (a loop, or saved late), what it put
+    /// out the tick before. That is what keeps a loop bounded and every
+    /// patch deterministic, identical realtime and offline.
+    ///
+    /// What each inlet does with its wire:
+    /// - a **trigger** inlet (the LFO's `retrigger`, the Step's `advance`
+    ///   and `reset`, the Random's `trigger`) fires on a NoteOn from a gate
+    ///   tag, or when the value rises through 0.5, once a tick;
+    /// - the Envelope's **gate** counts a gate tag's notes as it always has,
+    ///   and holds while any other wire is at or above 0.5;
+    /// - the LFO's **rate** adds the value in octaves, ±1 being ±2 octaves;
+    /// - Math's **in** is its operand.
     pub fn tick(
         &mut self,
         sample_rate: u32,
@@ -884,35 +987,51 @@ impl ModulatorSet {
         song_beats: Option<f64>,
         gates: &[NoteGateEvents; MAX_CHANNELS],
     ) {
-        for module in &mut self.modules {
-            let Some(events) = module.spec.gate.and_then(|seat| gates.get(usize::from(seat))) else {
+        self.previous.copy_from_slice(&self.signals);
+        let modules = self.modules.len();
+        for index in 0..self.order.len() {
+            let node = usize::from(self.order[index]);
+            if node >= modules {
+                let tag = &mut self.tags[node - modules];
+                let events = tag
+                    .gate
+                    .and_then(|seat| gates.get(usize::from(seat)))
+                    .copied()
+                    .unwrap_or_default();
+                if events.choke {
+                    tag.held = 0;
+                } else {
+                    tag.held = tag.held.saturating_sub(u16::from(events.note_offs));
+                }
+                tag.held = tag.held.saturating_add(u16::from(events.note_ons));
+                self.signals[node] = Signal {
+                    value: if tag.held > 0 { 1.0 } else { 0.0 },
+                    events,
+                };
                 continue;
-            };
-            let notes = events.note_ons > 0;
-            match &mut module.source {
+            }
+            let mut inlets = [None; MAX_INLETS];
+            for (port, inlet) in self.modules[node].spec.inlets.iter().enumerate() {
+                inlets[port] = inlet.map(|inlet| {
+                    let signals = if inlet.delayed { &self.previous } else { &self.signals };
+                    signals.get(usize::from(inlet.node)).copied().unwrap_or_default()
+                });
+            }
+            let module = &mut self.modules[node];
+            let mut fired = [false; MAX_INLETS];
+            for port in 0..MAX_INLETS {
+                if let Some(signal) = inlets[port] {
+                    fired[port] = signal.events.note_ons > 0
+                        || (module.last[port] < TRIGGER_LEVEL && signal.value >= TRIGGER_LEVEL);
+                    module.last[port] = signal.value;
+                }
+            }
+            let value = match &mut module.source {
                 Source::Lfo(lfo) => {
-                    if notes {
+                    lfo.rate_octaves = inlets[0].map_or(0.0, |signal| signal.value.clamp(-1.0, 1.0) * 2.0);
+                    if fired[1] {
                         lfo.retrigger();
                     }
-                }
-                Source::Envelope(envelope) => envelope.note_events(*events),
-                Source::Step(sequencer) => {
-                    if notes {
-                        sequencer.note_advance();
-                    }
-                }
-                Source::Random(random) => {
-                    if notes {
-                        random.note_trigger();
-                    }
-                }
-                Source::Math(_) => {}
-            }
-        }
-        for at in 0..self.modules.len() {
-            let module = &mut self.modules[at];
-            self.outputs[at] = match &mut module.source {
-                Source::Lfo(lfo) => {
                     if let Some(beats) = song_beats.filter(|_| lfo.follows_song()) {
                         lfo.follow_song(beats);
                     }
@@ -921,11 +1040,32 @@ impl ModulatorSet {
                     value
                 }
                 Source::Envelope(envelope) => {
+                    if let Some(signal) = inlets[0] {
+                        let events = if signal.events.any() {
+                            signal.events
+                        } else {
+                            // A wire with no notes on it is a gate by its
+                            // level: rising through 0.5 is a note on, falling
+                            // back below it the note off.
+                            NoteGateEvents {
+                                note_ons: u8::from(fired[0]),
+                                note_offs: u8::from(envelope.held_notes > 0 && signal.value < TRIGGER_LEVEL),
+                                choke: false,
+                            }
+                        };
+                        envelope.note_events(events);
+                    }
                     let value = envelope.value();
                     envelope.advance(sample_rate, frames, bpm);
                     value
                 }
                 Source::Step(sequencer) => {
+                    if fired[1] {
+                        sequencer.reset();
+                    }
+                    if fired[0] {
+                        sequencer.note_advance();
+                    }
                     match song_beats.filter(|_| sequencer.follows_song()) {
                         Some(beats) => sequencer.follow_song(beats, bpm),
                         None => sequencer.following = false,
@@ -937,6 +1077,9 @@ impl ModulatorSet {
                     value
                 }
                 Source::Random(random) => {
+                    if fired[0] {
+                        random.note_trigger();
+                    }
                     match song_beats.filter(|_| random.follows_song()) {
                         Some(beats) => random.follow_song(beats),
                         None => random.song_cycle = None,
@@ -947,15 +1090,12 @@ impl ModulatorSet {
                     }
                     value
                 }
-                Source::Math(math) => {
-                    let input = module
-                        .spec
-                        .reads
-                        .and_then(|read| self.outputs.get(usize::from(read)))
-                        .copied()
-                        .unwrap_or(0.0);
-                    math.value(input)
-                }
+                Source::Math(math) => math.value(inlets[0].map_or(0.0, |signal| signal.value)),
+            };
+            self.outputs[node] = value;
+            self.signals[node] = Signal {
+                value,
+                events: NoteGateEvents::default(),
             };
         }
     }
@@ -985,6 +1125,60 @@ mod tests {
         choke: false,
     }; MAX_CHANNELS];
 
+    /// A module as song modulation described one before the patch: the
+    /// seat whose notes its input heard, and the list position a Math
+    /// module read. These tests were written against that shape, and
+    /// [`legacy_set`] wires it into a patch exactly as a converted song is
+    /// wired, so every one of them still checks what it checked.
+    #[derive(Debug, Clone, Copy)]
+    struct ModuleSpec {
+        params: ModulatorParams,
+        seed: u32,
+        gate: Option<u8>,
+        reads: Option<u16>,
+    }
+
+    /// One gate tag per seat heard, each module's input wired to its input
+    /// inlet, a Math module's read late when it reads itself or a module
+    /// listed after it; tags first, then the list.
+    fn legacy_set(specs: impl IntoIterator<Item = ModuleSpec>) -> ModulatorSet {
+        let specs: Vec<ModuleSpec> = specs.into_iter().collect();
+        let mut seats: Vec<u8> = Vec::new();
+        for spec in &specs {
+            if let Some(seat) = spec.gate.filter(|_| !matches!(spec.params, ModulatorParams::Math(_))) {
+                if !seats.contains(&seat) {
+                    seats.push(seat);
+                }
+            }
+        }
+        let modules = specs.len();
+        let built = specs.iter().enumerate().map(|(at, spec)| {
+            let mut inlets = [None; MAX_INLETS];
+            let port = usize::from(spec.params.kind().input_port());
+            match spec.params {
+                ModulatorParams::Math(_) => {
+                    inlets[port] = spec.reads.map(|read| super::SpecInlet {
+                        node: read,
+                        delayed: usize::from(read) >= at,
+                    });
+                }
+                _ => {
+                    inlets[port] = spec.gate.map(|seat| super::SpecInlet {
+                        node: (modules + seats.iter().position(|&s| s == seat).unwrap()) as u16,
+                        delayed: false,
+                    });
+                }
+            }
+            super::ModuleSpec {
+                params: spec.params,
+                seed: spec.seed,
+                inlets,
+            }
+        });
+        let order = (modules..modules + seats.len()).chain(0..modules).map(|node| node as u16);
+        ModulatorSet::new(built.collect::<Vec<_>>(), seats.iter().map(|&seat| Some(seat)).collect::<Vec<_>>(), order.collect::<Vec<_>>())
+    }
+
     /// A module as a converted rack's slot `at` would be: seeded with its
     /// position, hearing channel 0, and a Math module reading the position
     /// its `input_slot` names.
@@ -1001,7 +1195,7 @@ mod tests {
     }
 
     fn set_of(modules: &[ModulatorParams]) -> ModulatorSet {
-        ModulatorSet::new(modules.iter().enumerate().map(|(at, params)| spec(at, *params)))
+        legacy_set(modules.iter().enumerate().map(|(at, params)| spec(at, *params)))
     }
 
     fn lfo(params: ModLfoParams) -> ModulatorSet {
@@ -1089,7 +1283,7 @@ mod tests {
         });
         set.run(48_000, 0, 120.0);
         assert_eq!(set.outputs()[0], 0.5);
-        assert!(ModulatorSet::new([]).is_empty());
+        assert!(legacy_set([]).is_empty());
     }
 
     /// Retuning a running LFO must not restart it: an automated rate change
@@ -1378,7 +1572,7 @@ mod tests {
     }
 
     fn envelope_on(seat: u8, params: ModEnvelopeParams) -> ModulatorSet {
-        ModulatorSet::new([ModuleSpec {
+        legacy_set([ModuleSpec {
             gate: Some(seat),
             ..spec(0, ModulatorParams::Envelope(params))
         }])
@@ -1502,7 +1696,7 @@ mod tests {
         let mut steps = [0.0; MOD_STEP_MAX_STEPS];
         steps[0] = 1.0;
         steps[1] = -1.0;
-        let mut set = ModulatorSet::new([ModuleSpec {
+        let mut set = legacy_set([ModuleSpec {
             gate: Some(1),
             ..spec(
                 0,

@@ -1,5 +1,7 @@
-//! A null test for the engine's modulation (song modulation step 02): every
-//! release song, given a busy 0.1.6-style rack on every channel, renders
+//! A null test for the engine's modulation (song modulation step 02, and
+//! song patch step 02): every release song, plain, given a busy 0.1.6-style
+//! rack on every channel, and given a rack where every kind hears
+//! overlapping notes, renders
 //! offline to a file, and a later tree's render of the same songs is held
 //! against it sample by sample.
 //!
@@ -190,6 +192,101 @@ fn busy_rack(project: &Project, seat: usize) -> ModRack {
     rack
 }
 
+/// A rack where every kind hears notes (song patch step 02): an LFO that
+/// retriggers, an Envelope on its own channel's gate, a Step that advances
+/// and a Random that draws on notes, the same on the next channel's notes,
+/// and a Math reading a module listed after it, the old one-tick-late case
+/// that a converted song now plays through a late wire.
+fn note_rack(project: &Project, seat: usize) -> ModRack {
+    let channel = &project.channels[seat];
+    let scope = EffectTarget::Channel(seat as u8);
+    let next = (seat + 1) % project.channels.len();
+    let mut rack = ModRack::default();
+    let modules = [
+        ModulatorParams::Math(ModMathParams {
+            input_slot: 2,
+            op: ModMathOp::Multiply,
+            operand: 0.8,
+            ..ModMathParams::default()
+        }),
+        ModulatorParams::Lfo(ModLfoParams {
+            rate_hz: 3.1 + seat as f32 * 0.2,
+            retrigger: true,
+            ..ModLfoParams::default()
+        }),
+        ModulatorParams::Envelope(ModEnvelopeParams {
+            input_channel: seat as u8,
+            input_channel_id: channel.id,
+            attack_seconds: 0.005,
+            decay_seconds: 0.1,
+            sustain: 0.6,
+            release_seconds: 0.2,
+            ..ModEnvelopeParams::default()
+        }),
+        ModulatorParams::Step(ModStepParams {
+            trigger: ModStepTrigger::NoteAdvance,
+            length: 5,
+            steps: core::array::from_fn(|step| ((step * 5 + seat) % 9) as f32 / 4.0 - 1.0),
+            ..ModStepParams::default()
+        }),
+        ModulatorParams::Random(ModRandomParams {
+            trigger: ModRandomTrigger::NoteTrigger,
+            ..ModRandomParams::default()
+        }),
+        ModulatorParams::Envelope(ModEnvelopeParams {
+            input_channel: next as u8,
+            input_channel_id: project.channels[next].id,
+            attack_seconds: 0.0,
+            decay_seconds: 0.05,
+            sustain: 0.3,
+            release_seconds: 0.0,
+            ..ModEnvelopeParams::default()
+        }),
+    ];
+    for (slot, params) in modules.into_iter().enumerate() {
+        rack.install(slot, params).expect("a free slot");
+    }
+    let destinations = [
+        ParamAddr::strip(scope, STRIP_PARAM_VOLUME),
+        ParamAddr::strip(scope, STRIP_PARAM_PAN),
+    ];
+    for slot in 0..6u8 {
+        let destination = destinations[usize::from(slot) % 2];
+        let polarity = if slot % 3 == 0 {
+            ModPolarity::Unipolar
+        } else {
+            ModPolarity::Bipolar
+        };
+        rack.add_route(ModRoute::to_slot(slot, destination, 0.12, polarity))
+            .expect("room");
+    }
+    rack
+}
+
+/// Notes that overlap: each lasts four steps and one starts every three,
+/// so a channel's gate holds through two notes at a time.
+fn with_overlapping_notes(mut project: Project) -> Project {
+    use mooloop_core::{NoteEvent, TICKS_PER_STEP};
+    let steps = u32::from(project.pattern_lengths[0]);
+    for (seat, channel) in project.channels.iter_mut().enumerate() {
+        let seat = seat as u32;
+        channel.notes[0] = (0..steps)
+            .filter(|step| (step + seat).is_multiple_of(3))
+            .map(|step| {
+                NoteEvent::new(
+                    step + 1,
+                    step * TICKS_PER_STEP,
+                    TICKS_PER_STEP * 4,
+                    (40 + (seat * 3 + step * 5) % 30) as u8,
+                    100,
+                )
+            })
+            .collect();
+        channel.next_note_id = steps + 1;
+    }
+    project
+}
+
 /// The song with notes on every channel in its first pattern, and that
 /// pattern placed four times on the playlist: the starters ship empty.
 fn with_notes(mut project: Project) -> Project {
@@ -240,8 +337,14 @@ fn songs() -> Vec<(String, Project)> {
             busy.channels[seat].setup.preset_modulation = Some(busy_rack(&busy, seat));
         }
         busy.lift_channel_modulation();
+        let mut notes = with_overlapping_notes(project.clone());
+        for seat in 0..notes.channels.len() {
+            notes.channels[seat].setup.preset_modulation = Some(note_rack(&notes, seat));
+        }
+        notes.lift_channel_modulation();
         songs.push((format!("{version}-plain"), project));
         songs.push((format!("{version}-busy"), busy));
+        songs.push((format!("{version}-notes"), notes));
     }
     songs
 }

@@ -52,6 +52,51 @@ session has the verbs. Where it differs from the step file:
   `add_patch_tag`) each return whether they changed the song; step 03 wraps
   each gesture in `with_gesture_history`, a multi-box drag being one call.
 
+**02 (MOO-521).** The engine runs the patch as a graph.
+`CompiledModulation::compile` gives every box its inlets and every node a
+tick order (Kahn's, tags first, ties in list order); a loop is broken at the
+first box in list order still waiting, and that wire reads the previous
+tick. A control wire carries a value and the tick's events. Where it
+differs from the step file:
+
+- **A wire can be saved late** (`Wire::late`). The step file's tie-break
+  alone could not keep a converted Math box that read a module listed after
+  it one tick late: topological order would run its source first. Every
+  path that still speaks in single inputs (`SongModulation::set_input`:
+  conversion on load, channel presets' racks, the shelf's picker) marks a
+  wire from a module listed at or after its reader late, so those songs
+  keep the list-order rule. A wire made on the canvas is not late; only a
+  loop makes one late, at compile time.
+- **The wire's trigger is the gate tag's events, not a bare `fired` flag.**
+  An Envelope's gate counts NoteOns, NoteOffs and chokes, and a bare flag
+  would lose the restarted release a stray NoteOff after a choke gives
+  today. Trigger inlets fire on a NoteOn or a rise through 0.5, as planned;
+  an Envelope fed by any other wire gates by its level.
+- **Modes still gate the triggers.** The LFO's `retrigger` acts only with
+  Retrigger on, the Step's `advance` only in Note mode, the Random's
+  `trigger` only in Note mode, as today. Whether a wire should switch the
+  mode by itself is a question for step 03's faces.
+
+Null test (`engine/tests/modulation_null.rs`, release): every release song
+plain, with the busy rack, and with a new rack where every kind hears
+overlapping notes (with the starter kit's hat choke and a Math reading a
+later slot) renders sample-identical to `main` at 8c036cd, largest
+difference 0, 21 renders.
+
+Cost of the control pass alone (`block_cost.rs` `patch_control_cost`,
+release, this container, median of 2,000 128-frame blocks):
+
+| Boxes | No wires | Chain | Fan |
+| --- | --- | --- | --- |
+| 64 | 5.2 µs (0.19%) | 3.6 µs (0.14%) | 3.5 µs (0.13%) |
+| 256 | 20.6 µs (0.77%) | 14.8 µs (0.56%) | 13.6 µs (0.51%) |
+| 1024 | 82.3 µs (3.09%) | 59.4 µs (2.23%) | 54.8 µs (2.05%) |
+
+The chain and fan are Math boxes after one LFO, and cheaper than all-LFO;
+the graph walk itself is not where the time goes. A thousand boxes is 3% of
+a 128-frame block, so step 04's arithmetic boxes can each be a whole
+module.
+
 ## Adam's rulings
 
 | When | Ruling |
