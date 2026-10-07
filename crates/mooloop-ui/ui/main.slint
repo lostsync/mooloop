@@ -2351,6 +2351,9 @@ export component MainWindow inherits Window {
     in property <[AutomationTargetRow]> automation-targets;
     // The picker's device column; `AutomationTargetRow.group` indexes it.
     in property <[AutomationGroupRow]> automation-groups;
+    // Rows in the picker's longest parameter list, Open lanes included, so
+    // the picker opens tall enough for any device it can show.
+    in property <int> automation-longest-list;
     // Every open lane of the clip, in the order the clip holds them.
     in property <[AutomationLaneCell]> automation-lanes;
     // Every lane's header and drawing height added up, from Rust.
@@ -7365,6 +7368,7 @@ export component MainWindow inherits Window {
                                                                     targets: root.automation-targets;
                                                                     groups: root.automation-groups;
                                                                     has-open: root.automation-lanes.length > 0;
+                                                                    longest-list: root.automation-longest-list;
                                                                     picked(index) => {
                                                                         root.automation-lane-opened(index);
                                                                         add-menu.close();

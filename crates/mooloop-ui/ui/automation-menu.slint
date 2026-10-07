@@ -117,13 +117,23 @@ export component AutomationLaneMenu inherits HorizontalLayout {
     in property <[AutomationGroupRow]> groups;
     // The clip has at least one lane, so the column starts with Open lanes.
     in property <bool> has-open;
+    // Rows in the longest parameter list any device column row (Open lanes
+    // included) can show. Rust counts it, as only Rust walks the groups.
+    in property <int> longest-list;
     callback picked(int);
     // -1 is Open lanes.
     property <int> shown-group: root.has-open ? -1 : 0;
+    // The size never follows the hovered device: a `PopupWindow` takes its
+    // size once, when it opens, so a list longer than the one shown then
+    // hung out of the box, past where it takes the pointer (Joam,
+    // 2026-10-07). Both columns are sized for the longest list and the
+    // widest name instead.
+    property <length> list-height: min(320px, max(device-list.preferred-height,
+        root.longest-list * 20px * Theme.row-growth));
     padding: 4px;
     spacing: 4px;
     ScrollView {
-        height: min(320px, max(device-list.preferred-height, param-list.preferred-height));
+        height: root.list-height;
         width: max(160px, device-list.preferred-width);
         device-list := VerticalLayout {
             spacing: 1px;
@@ -153,10 +163,21 @@ export component AutomationLaneMenu inherits HorizontalLayout {
     Rectangle {
         width: 1px;
         background: Theme.border;
+        // Every parameter row's label as it could ever read, never drawn:
+        // the parameter column is as wide as the widest of them. It sits in
+        // the rule because a child here is outside the row layout.
+        widest := VerticalLayout {
+            visible: false;
+            for row in root.targets : Text {
+                text: row.open ? row.device + " · " + row.param-name : row.param-name;
+                font-size: Theme.text-lg;
+            }
+        }
     }
     ScrollView {
-        height: min(320px, max(device-list.preferred-height, param-list.preferred-height));
-        width: max(190px, param-list.preferred-width);
+        height: root.list-height;
+        // The row's 8px inset, the open mark, and room either side.
+        width: max(190px, widest.preferred-width + 32px);
         param-list := VerticalLayout {
             spacing: 0px;
             alignment: start;
