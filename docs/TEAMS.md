@@ -305,7 +305,7 @@ Files marked *shared* are split in the table above.
 - `session/tests/source_param_kind.rs` (a binding made on one device is inert
   on another and comes back, MOO-135)
 - `ui/ui/`: `modulation-shelf.slint`
-- `ui/tests/`: `shelf_agreement.rs`, `midi_learn_gesture.rs`,
+- `ui/tests/`: `midi_learn_gesture.rs`,
   `slint_face_agreement.rs`, `knob_value_text.rs`
 
 ### 8. Document & Session

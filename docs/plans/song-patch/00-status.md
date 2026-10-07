@@ -175,6 +175,10 @@ by hand (`Wire.bend`, saved since step 01), and Preferences > Appearance has
 - **The shelf keeps its routes.** The per-kind surfaces and the input
   picker under the canvas are gone (a box's inlets are the canvas's); the
   shelf keeps the selected box's name, the outlets, and the routes list.
+  `ui/tests/shelf_agreement.rs` went with them: it held the surfaces'
+  hand-written ids, ranges and captions to the descriptor tables, and a
+  face reads all three from the tables (`patch_face.rs`, whose test covers
+  every kind).
 - **A route onto a knob moves it in its normalized range**, summed per knob
   and clamped, before the box ticks; the source is read as of this tick if
   it ran earlier in the order, else the tick before. The routes are part of
