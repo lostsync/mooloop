@@ -21,10 +21,17 @@ use mooloop_core::{
     CompiledModulation, CompiledSource, ModRoute, ModSourceId, ModulatorParams, Project,
     MAX_CHANNELS,
 };
+use mooloop_core::modulation::{MAX_GENERATOR_OUTLETS, PERFORMANCE_SOURCES};
 use mooloop_dsp::{
-    ModuleSpec, ModulatorSet, NoteGateEvents, SpecInlet, CONTROL_RATE_FRAMES,
-    MAX_CONTROL_TICKS_PER_BLOCK,
+    ModuleSpec, ModulatorSet, NoteGateEvents, SongInputs, SpecInlet, TransportTick,
+    CONTROL_RATE_FRAMES, MAX_CONTROL_TICKS_PER_BLOCK,
 };
+
+/// Each seat's generator outlets and keyboard, as routes read them.
+pub(crate) type ChannelInputs<'a> = (
+    &'a [[f32; MAX_GENERATOR_OUTLETS]; MAX_CHANNELS],
+    &'a [[f32; PERFORMANCE_SOURCES]; MAX_CHANNELS],
+);
 
 /// The song's modulation set, resolved, with its running modules and every
 /// module's output at every control tick of the current block.
@@ -71,7 +78,7 @@ impl SongModulator {
                     })
                 }),
             }),
-            plan.tags.iter().map(|tag| tag.gate),
+            plan.tags.iter().map(|tag| tag.source),
             plan.order.iter().copied(),
         )
         .with_knobs(plan.knobs.iter().copied());
@@ -156,7 +163,9 @@ impl SongModulator {
 
     /// Tick every module for each control subdivision of a `frames`-long
     /// block and capture each output before it advances. The final
-    /// subdivision can be shorter. Returns how many ticks were run.
+    /// subdivision can be shorter. Returns how many ticks were run. The
+    /// tests' form: the render loop passes the transport and outlets too.
+    #[cfg(test)]
     pub(crate) fn tick_block(
         &mut self,
         sample_rate: u32,
@@ -164,6 +173,24 @@ impl SongModulator {
         frames: usize,
         gates: &[[NoteGateEvents; MAX_CHANNELS]],
         song_beats: &[Option<f64>],
+    ) -> usize {
+        self.tick_block_with(sample_rate, bpm, frames, gates, song_beats, &[], None)
+    }
+
+    /// [`Self::tick_block`] with the rest of what the song sends the patch's
+    /// tags: where the transport is at each tick, and each seat's generator
+    /// outlets and keyboard. A tick past the end of `transport` reads it
+    /// stopped or playing as `song_beats` says, at the start of a beat.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn tick_block_with(
+        &mut self,
+        sample_rate: u32,
+        bpm: f64,
+        frames: usize,
+        gates: &[[NoteGateEvents; MAX_CHANNELS]],
+        song_beats: &[Option<f64>],
+        transport: &[TransportTick],
+        sources: Option<ChannelInputs>,
     ) -> usize {
         let modules = self.set.len();
         let mut tick = 0;
@@ -174,7 +201,20 @@ impl SongModulator {
             let span = (frames - offset).min(CONTROL_RATE_FRAMES);
             let beats = song_beats.get(tick).copied().flatten();
             if let Some(gates) = gates.get(tick) {
-                self.set.tick(sample_rate, span, bpm, beats, gates);
+                let at = transport.get(tick).copied().unwrap_or(TransportTick {
+                    playing: beats.is_some(),
+                    ..TransportTick::default()
+                });
+                let inputs = match sources {
+                    Some((outlets, performance)) => SongInputs {
+                        gates,
+                        transport: at,
+                        outlets,
+                        performance,
+                    },
+                    None => SongInputs::quiet(gates, at),
+                };
+                self.set.tick_with(sample_rate, span, bpm, beats, &inputs);
             }
             self.table[tick * modules..(tick + 1) * modules].copy_from_slice(self.set.outputs());
             tick += 1;
@@ -208,8 +248,8 @@ impl SongModulator {
         self.set.outputs()
     }
 
-    /// Each tag's NoteOn count and held gate, in tag order.
-    pub(crate) fn tag_activity(&self) -> impl Iterator<Item = (u32, bool)> + '_ {
+    /// Each tag's NoteOn count and value, in tag order.
+    pub(crate) fn tag_activity(&self) -> impl Iterator<Item = (u32, f32)> + '_ {
         self.set.tag_activity()
     }
 

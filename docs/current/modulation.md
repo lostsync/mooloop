@@ -28,7 +28,8 @@ area, and where each behaviour stops.
   or **Ctrl+6** (`view.pane-modulation`). It opens in the bottom slot and
   moves between panes like any other view. It holds the song's patch canvas:
   boxes where they were put, `gate` tags at the left edge, a tag under each
-  route naming its parameter, device and depth, and the wires; double-click
+  route naming its parameter, device and depth, song inlet tags, and the
+  wires; double-click
   empty canvas to type a box (`lfo tri 1/4`, `counter 4`, `* -0.5`; a
   completion list offers the vocabulary) and double-click a box to retype
   it; drag between jacks to wire, click an outlet to arm Assign, click an
@@ -45,6 +46,20 @@ area, and where each behaviour stops.
 - **Cables bend by hand.** Drag a cable's middle and the run moves along the
   axis it crosses; a double-click on it goes back to automatic routing. The
   bend is saved with the song, and a drag is one undo step.
+- **Song inlets** (song patch step 06). Right-click empty canvas to make an
+  **Inlet**, **Notes in** or **Notes out** tag (the notes tags do nothing
+  yet); a new inlet opens its list at once, and clicking an inlet tag later
+  opens it again. An inlet reads the transport -- **Beat** and **Bar** (a
+  ramp 0 to 1 that fires each beat or bar, counted from the pattern's start
+  in Pattern mode and the song's in Song mode), **Pattern position** (a ramp
+  across the playing pattern, firing as it starts) and **Pattern** (the
+  playing pattern's number as 0 to 1 across the song's patterns, firing on
+  each change; in Song mode the topmost playlist row's) -- or a channel's
+  notes as a gate, one of its generator's control outlets, or its mod wheel
+  or aftertouch. Stopped, the transport tags hold and fire again on play;
+  where no pattern is placed, Pattern and Pattern position hold. An outlet
+  tag reads a block late and its tag says **late**. A box's inlet picker
+  lists every bound inlet tag beside the gates.
 - **Cable activity** (Preferences > Appearance): Off, Subtle (the default) or
   Full. A control wire tints toward the accent with its level and a note
   wire thickens for a moment on each note; Subtle is 30 % of Full.

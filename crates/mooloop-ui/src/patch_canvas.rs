@@ -286,7 +286,8 @@ fn tag_width(kind: &str, name: &str, depth: &str, unbound: bool) -> f32 {
     width + 7.0 * (pieces - 1).max(0) as f32
 }
 
-/// Lay out `song`'s patch. `channel_name` names a channel by id, `label_of`
+/// Lay out `song`'s patch. `channel_name` names a channel by id,
+/// `inlet_kind` says what an inlet tag's source reads, `label_of`
 /// names a route's destination, and `canvas` is the gesture under way: the
 /// nodes a drag holds are moved by how far it has gone and a bend being
 /// dragged is where the pointer has it, so a drag is drawn before it is a
@@ -294,6 +295,7 @@ fn tag_width(kind: &str, name: &str, depth: &str, unbound: bool) -> f32 {
 pub(crate) fn lay_out(
     song: &SongModulation,
     channel_name: impl Fn(mooloop_core::ChannelId) -> Option<String>,
+    inlet_kind: impl Fn(InletSource) -> Option<String>,
     label_of: impl Fn(ParamAddr) -> RouteLabel,
     delayed: impl Fn(Jack) -> bool,
     canvas: &CanvasState,
@@ -358,17 +360,28 @@ pub(crate) fn lay_out(
         let (points_right, kind, note) = match tag.kind {
             TagKind::Inlet { bind } => (
                 true,
-                match bind {
-                    Some(InletSource::Gate(_)) => "gate",
-                    None => "inlet",
-                },
+                bind.and_then(&inlet_kind).unwrap_or_else(|| "inlet".to_string()),
                 false,
             ),
-            TagKind::NotesIn { .. } => (true, "notes", true),
-            TagKind::NotesOut { .. } => (false, "notes to", true),
+            TagKind::NotesIn { .. } => (true, "notes".to_string(), true),
+            TagKind::NotesOut { .. } => (false, "notes to".to_string(), true),
         };
-        let unbound = channel.is_none();
-        let name = channel.unwrap_or_default();
+        // A transport tag reads the song, not a channel.
+        let transport = matches!(
+            tag.kind,
+            TagKind::Inlet { bind: Some(source) } if source.channel().is_none()
+        );
+        let unbound = channel.is_none() && !transport;
+        let name = if transport {
+            "song".to_string()
+        } else {
+            channel.unwrap_or_default()
+        };
+        // An outlet reaches the patch a block late, and its tag says so.
+        let depth = match tag.kind {
+            TagKind::Inlet { bind: Some(source) } if source.late() && !unbound => "late".to_string(),
+            _ => String::new(),
+        };
         let key = NodeKey::Node(tag.id);
         let (dx, dy) = offset(key);
         let ports = tag.kind.ports();
@@ -376,13 +389,13 @@ pub(crate) fn lay_out(
             key,
             x: tag.at.x as f32 + dx,
             y: tag.at.y as f32 + dy,
-            width: tag_width(kind, &name, "", unbound),
+            width: tag_width(&kind, &name, &depth, unbound),
             height: TAG_HEIGHT,
             face: Face::Tag {
                 points_right,
-                kind: kind.into(),
+                kind,
                 name,
-                depth: String::new(),
+                depth,
                 note,
                 unbound,
             },
@@ -807,14 +820,36 @@ pub(crate) enum Drag {
     },
 }
 
-/// The canvas's own state: what is selected, the gesture under way, and the
-/// inlet whose picker is open. None of it is in the song.
+/// What the canvas's one menu is open on.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum Picking {
+    /// What feeds this inlet.
+    Feed(Jack),
+    /// What this inlet tag reads (song patch step 06).
+    Bind(ModSourceId),
+    /// Which tag to make here: a right-click on empty canvas.
+    Make(f32, f32),
+}
+
+/// What a row of the canvas's menu asks of the song.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum Chosen {
+    Feed(Jack, PatchFeed),
+    Bind(ModSourceId, Option<InletSource>),
+    Make(TagKind, CanvasPoint),
+}
+
+/// The tags a right-click on empty canvas offers to make, in order.
+pub(crate) const MADE_TAGS: [&str; 3] = ["Inlet", "Notes in", "Notes out"];
+
+/// The canvas's own state: what is selected, the gesture under way, and
+/// what its menu is open on. None of it is in the song.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct CanvasState {
     pub selected: Vec<NodeKey>,
     pub wire: Option<WireKey>,
     pub drag: Drag,
-    pub picking: Option<Jack>,
+    pub picking: Option<Picking>,
     pub typing: Option<Typing>,
     /// A note wire is thick for a note just sent, so the pump keeps
     /// refreshing the cables until it is not.
@@ -874,8 +909,8 @@ pub(crate) enum Edit {
     Refused(PatchRefusal),
     /// Arm (or disarm) a source for the assignment gesture.
     Arm(ModSourceRef),
-    /// Open the picker for this inlet.
-    Pick(Jack),
+    /// Open the menu on this.
+    Pick(Picking),
     /// Select this box in the surface below.
     Select(ModSourceRef),
     /// Open or fold this box's face.
@@ -900,6 +935,22 @@ impl CanvasState {
             Drag::Bend { inlet: held, bend } if held == inlet => Some(bend),
             _ => saved,
         }
+    }
+
+    /// A right-click at `(x, y)`: on empty canvas, the menu of tags to make
+    /// there; on an inlet tag, what it reads. Anything else closes the menu.
+    pub(crate) fn context(&mut self, layout: &Layout, song: &SongModulation, x: f32, y: f32) {
+        self.typing = None;
+        self.drag = Drag::None;
+        self.picking = match layout.hit(x, y) {
+            Hit::Empty => Some(Picking::Make(x, y)),
+            Hit::Node(NodeKey::Node(id))
+                if matches!(song.tag(id).map(|tag| tag.kind), Some(TagKind::Inlet { .. })) =>
+            {
+                Some(Picking::Bind(id))
+            }
+            _ => None,
+        };
     }
 
     /// A press at `(x, y)`.
@@ -1040,8 +1091,16 @@ impl CanvasState {
                     Edit::Arm(ModSourceRef::Id(jack.node))
                 }
                 Hit::Inlet(jack) => {
-                    self.picking = Some(jack);
-                    Edit::Pick(jack)
+                    self.picking = Some(Picking::Feed(jack));
+                    Edit::Pick(Picking::Feed(jack))
+                }
+                // A click on an inlet tag asks what it reads.
+                Hit::Node(NodeKey::Node(id))
+                    if !shift
+                        && matches!(song.tag(id).map(|tag| tag.kind), Some(TagKind::Inlet { .. })) =>
+                {
+                    self.picking = Some(Picking::Bind(id));
+                    Edit::Pick(Picking::Bind(id))
                 }
                 Hit::Node(NodeKey::Route { source, .. }) if !shift => Edit::Arm(source),
                 Hit::Fold(id) => Edit::Fold(id),
@@ -1177,6 +1236,7 @@ impl UiState {
                     .and_then(|seat| session.channels.get(seat))
                     .map(|channel| channel.name.clone())
             },
+            |source| session.inlet_source_kind(source),
             |destination| route_label(session, destination),
             |inlet| {
                 plan.modules
@@ -1193,6 +1253,82 @@ impl UiState {
             },
             canvas,
         )
+    }
+
+    /// What row `index` of the menu open on `picking` asks for.
+    pub(crate) fn menu_choice(&self, picking: Picking, index: usize) -> Option<Chosen> {
+        match picking {
+            Picking::Feed(inlet) => {
+                let feed = self.session.patch_feed_options(inlet).into_iter().nth(index)?.0;
+                Some(Chosen::Feed(inlet, feed))
+            }
+            Picking::Bind(id) => match index {
+                0 => Some(Chosen::Bind(id, None)),
+                _ => {
+                    let source = self.session.inlet_sources().into_iter().nth(index - 1)?.0;
+                    Some(Chosen::Bind(id, Some(source)))
+                }
+            },
+            Picking::Make(x, y) => {
+                let kind = match index {
+                    0 => TagKind::Inlet { bind: None },
+                    1 => TagKind::NotesIn {
+                        channel: None,
+                        take: false,
+                    },
+                    2 => TagKind::NotesOut { channel: None },
+                    _ => return None,
+                };
+                Some(Chosen::Make(kind, CanvasPoint::new(x.round() as i32, y.round() as i32)))
+            }
+        }
+    }
+
+    /// The canvas's menu as it is open now: its title, its rows, the one
+    /// lit, and the point it hangs over.
+    pub(crate) fn patch_menu(
+        &self,
+        layout: &Layout,
+    ) -> Option<(String, Vec<String>, Option<usize>, (f32, f32))> {
+        match self.patch_canvas.picking? {
+            Picking::Feed(inlet) => {
+                let node = layout.node(NodeKey::Node(inlet.node))?;
+                let anchor = node.anchor(false, usize::from(inlet.port))?;
+                let name = node.inlets.get(usize::from(inlet.port))?.name;
+                let options = self
+                    .session
+                    .patch_feed_options(inlet)
+                    .into_iter()
+                    .map(|(_, name)| name)
+                    .collect();
+                Some((
+                    format!("Feed {name} from"),
+                    options,
+                    Some(self.session.patch_feed_choice(inlet)),
+                    (anchor.x, anchor.y),
+                ))
+            }
+            Picking::Bind(id) => {
+                let node = layout.node(NodeKey::Node(id))?;
+                let TagKind::Inlet { bind } = self.session.modulation.tag(id)?.kind else {
+                    return None;
+                };
+                let sources = self.session.inlet_sources();
+                let current = bind.map_or(Some(0), |bind| {
+                    sources.iter().position(|(source, _)| *source == bind).map(|at| at + 1)
+                });
+                let options = std::iter::once("None".to_string())
+                    .chain(sources.into_iter().map(|(_, name)| name))
+                    .collect();
+                Some(("Read from".to_string(), options, current, (node.x, node.y)))
+            }
+            Picking::Make(x, y) => Some((
+                "Make a tag".to_string(),
+                MADE_TAGS.iter().map(|name| name.to_string()).collect(),
+                None,
+                (x, y),
+            )),
+        }
     }
 
     /// Draw the canvas: its nodes, jacks, wires, the loose wire and the
@@ -1335,25 +1471,14 @@ impl UiState {
             }
             _ => patch.set_marquee(false),
         }
-        let picker = canvas.picking.and_then(|inlet| {
-            let node = layout.node(NodeKey::Node(inlet.node))?;
-            let anchor = node.anchor(false, usize::from(inlet.port))?;
-            let name = node.inlets.get(usize::from(inlet.port))?.name;
-            Some((inlet, anchor, name))
-        });
-        match picker {
-            Some((inlet, anchor, name)) => {
-                let options: Vec<SharedString> = self
-                    .session
-                    .patch_feed_options(inlet)
-                    .into_iter()
-                    .map(|(_, name)| name.into())
-                    .collect();
-                patch.set_menu_title(format!("Feed {name} from").into());
+        match self.patch_menu(&layout) {
+            Some((title, options, current, anchor)) => {
+                let options: Vec<SharedString> = options.into_iter().map(Into::into).collect();
+                patch.set_menu_title(title.into());
                 patch.set_menu_options(ModelRc::new(VecModel::from(options)));
-                patch.set_menu_current(self.session.patch_feed_choice(inlet) as i32);
-                patch.set_menu_x(anchor.x);
-                patch.set_menu_y(anchor.y);
+                patch.set_menu_current(current.map_or(-1, |at| at as i32));
+                patch.set_menu_x(anchor.0);
+                patch.set_menu_y(anchor.1);
                 patch.set_menu_open(true);
             }
             None => patch.set_menu_open(false),
@@ -1824,31 +1949,37 @@ pub(crate) fn wire(
         let weak = window.as_weak();
         patch.on_picked(move |index| {
             let Some(window) = weak.upgrade() else { return };
-            let picked = {
+            let chosen = {
                 let mut state = st.borrow_mut();
-                let inlet = state.patch_canvas.picking.take();
-                inlet.and_then(|inlet| {
-                    let feed = usize::try_from(index)
-                        .ok()
-                        .and_then(|index| {
-                            state
-                                .session
-                                .patch_feed_options(inlet)
-                                .into_iter()
-                                .nth(index)
-                        })?
-                        .0;
-                    Some((inlet, feed))
-                })
+                let picking = state.patch_canvas.picking.take();
+                usize::try_from(index)
+                    .ok()
+                    .zip(picking)
+                    .and_then(|(index, picking)| state.menu_choice(picking, index))
             };
-            let Some((inlet, feed)) = picked else {
+            let Some(chosen) = chosen else {
                 st.borrow_mut().publish_patch_canvas(&window);
                 return;
             };
             let before = project_snapshot(&st.borrow(), &window);
             let changed = {
                 let mut state = st.borrow_mut();
-                let changed = state.session.feed_patch_inlet(inlet, feed);
+                let changed = match chosen {
+                    Chosen::Feed(inlet, feed) => state.session.feed_patch_inlet(inlet, feed),
+                    Chosen::Bind(id, bind) => state.session.bind_patch_tag(id, bind),
+                    Chosen::Make(kind, at) => match state.session.add_patch_tag(kind, at) {
+                        Some(id) => {
+                            // A new inlet is empty: ask straight away what
+                            // it reads.
+                            if matches!(kind, TagKind::Inlet { .. }) {
+                                state.patch_canvas.picking = Some(Picking::Bind(id));
+                            }
+                            state.patch_canvas.selected = vec![NodeKey::Node(id)];
+                            true
+                        }
+                        None => false,
+                    },
+                };
                 if changed {
                     state.modulation_edited(&window);
                 } else {
@@ -1857,13 +1988,30 @@ pub(crate) fn wire(
                 changed
             };
             if changed {
-                let label = if feed == PatchFeed::None {
-                    "Patch wire removed"
-                } else {
-                    "Patch wire"
+                let label = match chosen {
+                    Chosen::Feed(_, PatchFeed::None) => "Patch wire removed",
+                    Chosen::Feed(..) => "Patch wire",
+                    Chosen::Bind(..) => "Patch tag source",
+                    Chosen::Make(..) => "Patch tag",
                 };
                 record_project_history(&commands, before, &st, &window, label);
             }
+        });
+    }
+    {
+        let st = state.clone();
+        let weak = window.as_weak();
+        patch.on_context(move |x, y| {
+            let Some(window) = weak.upgrade() else { return };
+            let mut state = st.borrow_mut();
+            let layout = state.patch_layout();
+            let UiState {
+                patch_canvas,
+                session,
+                ..
+            } = &mut *state;
+            patch_canvas.context(&layout, &session.modulation, x, y);
+            state.publish_patch_canvas(&window);
         });
     }
     {
@@ -2120,6 +2268,11 @@ mod tests {
         lay_out(
             song,
             |_| Some("Kick 1".into()),
+            |source| Some(match source {
+                InletSource::Gate(_) => "gate".into(),
+                InletSource::Beat => "beat".into(),
+                _ => "outlet".into(),
+            }),
             |_| RouteLabel {
                 name: "Cutoff".into(),
                 device: "ML-M1 9".into(),
@@ -2485,9 +2638,9 @@ mod tests {
         canvas.press(&layout, rate.0, rate.1, false);
         assert_eq!(
             canvas.release(&layout, &song, rate.0, rate.1),
-            Edit::Pick(Jack::new(ModSourceId(0), 0))
+            Edit::Pick(Picking::Feed(Jack::new(ModSourceId(0), 0)))
         );
-        assert_eq!(canvas.picking, Some(Jack::new(ModSourceId(0), 0)));
+        assert_eq!(canvas.picking, Some(Picking::Feed(Jack::new(ModSourceId(0), 0))));
         canvas.press(&layout, 1000.0, 500.0, false);
         assert_eq!(canvas.picking, None, "a press elsewhere closes it");
     }

@@ -495,7 +495,7 @@ fn cables_show_their_level_and_flash_for_a_note_as_much_as_the_setting_says() {
     }
     let read = |level: f32, count: u32| {
         let st = h.state.borrow();
-        st.session.read_modulation_levels(|_| level, |_| Default::default(), |_| (count, false));
+        st.session.read_modulation_levels(|_| level, |_| Default::default(), |_| (count, 0.0));
         st.refresh_patch_activity(&h.window);
     };
     let wire = |inlet: Jack| {

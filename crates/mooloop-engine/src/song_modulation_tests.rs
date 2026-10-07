@@ -343,3 +343,71 @@ fn a_box_routed_onto_another_box_knob_moves_it() {
     let moved = run(&project);
     assert!((moved - 0.4).abs() < 1e-5, "routed: {moved}");
 }
+
+/// **The transport tags follow the playhead** (song patch step 06): Beat,
+/// Bar and Pattern position ramp and fall back as a one-bar pattern loops,
+/// and in Song mode, across a bar where nothing is placed, Pattern and
+/// Pattern position hold while Beat and Bar go on with the song.
+#[test]
+fn transport_tags_follow_a_looped_pattern_and_a_song_with_a_gap() {
+    use mooloop_core::{CanvasPoint, InletSource, PlaybackMode, SongTag, TagKind, TICKS_PER_BAR};
+    let tag = |id: u32, source: InletSource| SongTag {
+        id: ModSourceId(id),
+        at: CanvasPoint::default(),
+        kind: TagKind::Inlet { bind: Some(source) },
+    };
+    let mut project = Project::default();
+    project.modulation.tags = vec![
+        tag(1, InletSource::Beat),
+        tag(2, InletSource::Bar),
+        tag(3, InletSource::PatternPosition),
+        tag(4, InletSource::Pattern),
+    ];
+    project.modulation.next_source_id = 5;
+    project.pattern_lengths = vec![16, 16];
+    // Each tag's value after each block.
+    let run = |project: &Project, blocks: usize| {
+        let mut render = RenderState::from_project(SAMPLE_RATE, project, &[]);
+        render.play();
+        (0..blocks)
+            .map(|_| {
+                render.process_once_block(BLOCK);
+                render
+                    .song_modulation()
+                    .tag_activity()
+                    .map(|(_, value)| value)
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>()
+    };
+    let falls = |values: &[Vec<f32>], tag: usize| {
+        values.windows(2).filter(|pair| pair[1][tag] < pair[0][tag]).count()
+    };
+    // Pattern mode: a bar is 375 blocks, so 400 cross four beats and the
+    // loop back to the pattern's start once.
+    let looped = run(&project, 400);
+    assert_eq!(falls(&looped, 0), 4, "a beat ramp falls back on each beat");
+    assert_eq!(falls(&looped, 1), 1, "the bar ramp falls back at the loop");
+    assert_eq!(falls(&looped, 2), 1, "so does the pattern's");
+    assert!(looped.iter().all(|values| values[3] == 0.0), "one pattern plays");
+    assert!(looped[370][1] > 0.95 && looped[380][1] < 0.05, "the bar folds with the loop");
+
+    // Song mode: pattern 0 in bar 1, nothing in bar 2, pattern 1 in bar 3.
+    project.playback_mode = PlaybackMode::Song;
+    project.playlist = vec![
+        PatternPlacement::new(0, 0),
+        PatternPlacement::new(1, 2 * TICKS_PER_BAR),
+    ];
+    let song = run(&project, 3 * 375 - 10);
+    let gap = &song[375 + 10..2 * 375 - 10];
+    assert!(
+        gap.iter().all(|values| values[2] == gap[0][2] && values[3] == 0.0),
+        "with nothing placed, the pattern tags hold"
+    );
+    assert!(gap[0][2] > 0.95, "held where pattern 0 ended: {}", gap[0][2]);
+    assert!(falls(gap, 0) >= 3, "the beat goes on through the gap");
+    let last = song.last().unwrap();
+    assert_eq!(last[3], 1.0, "pattern 1 of 0..1 plays in bar 3");
+    assert!(last[2] > 0.9, "near its end: {}", last[2]);
+    assert!(last[1] > 0.9, "and the bar's: {}", last[1]);
+}

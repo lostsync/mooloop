@@ -81,7 +81,9 @@ pub use analysis::{SpectrumAnalyzer, SPECTRUM_BINS};
 pub use buffer_device::{
     buffer_allocation_key, BufferDevice, BufferDisplay, TimedBufferEvent, WAVEFORM_BINS,
 };
-pub use modulator::{ModuleSpec, ModulatorSet, NoteGateEvents, SpecInlet, CONTROL_RATE_FRAMES};
+pub use modulator::{
+    ModuleSpec, ModulatorSet, NoteGateEvents, SongInputs, SpecInlet, TransportTick, CONTROL_RATE_FRAMES,
+};
 pub use output_guard::{GuardReport, OutputGuard, OUTPUT_CEILING};
 pub use bus::{balance_gains, pan_gains, StereoBus, MAX_BLOCK_SIZE};
 pub use delayline::{DelayLine, ReadHead};

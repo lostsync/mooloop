@@ -7,9 +7,10 @@
 
 use mooloop_core::{
     CompiledKnob, ModDestinationDescriptor, ModEnvelopeParams, ModLfoParams, ModPolarity, ModLfoWaveform, ModMathOp, ModMathParams, ModRandomParams,
-    ModRandomTrigger, ModStepParams, ModStepTrigger, ModulatorParams, MAX_CHANNELS, MAX_INLETS,
-    MOD_STEP_MAX_STEPS,
+    ModRandomTrigger, ModStepParams, ModStepTrigger, ModulatorParams, TagSource, MAX_CHANNELS,
+    MAX_INLETS, MOD_STEP_MAX_STEPS,
 };
+use mooloop_core::modulation::{MAX_GENERATOR_OUTLETS, PERFORMANCE_SOURCES};
 
 /// Frames between modulation updates. The plan allows 32 or 64; 32 keeps a
 /// 20 Hz LFO smooth at 48 kHz while costing one evaluation per 32 frames.
@@ -806,25 +807,131 @@ struct Module {
     last: [f32; MAX_INLETS],
 }
 
-/// A gate tag: one channel's notes, by seat, as a control signal.
+/// A song inlet tag: what it reads, and what it has seen.
 #[derive(Debug, Clone, Copy, Default)]
 struct Tag {
-    gate: Option<u8>,
+    source: Option<TagSource>,
     /// Notes held on the channel, counted from its NoteOns and NoteOffs.
     held: u16,
+    /// What it put out last; a transport tag holds it while stopped.
+    value: f32,
+    /// A transport tag's value the tick before, `None` while stopped: a
+    /// ramp fires when it falls back, a pattern number when it changes.
+    last: Option<f32>,
     /// Every NoteOn the tag has passed, wrapping: what the canvas reads to
     /// see a note go down its wire.
     notes: u32,
 }
 
 /// What a node put on its outlet this tick: a value, and the events that
-/// happened. Only a gate tag has events today: its channel's NoteOns,
-/// NoteOffs and choke, which is what an Envelope's gate counted before the
-/// patch and still counts, so a converted song plays as it did.
+/// happened. Only a gate tag has events: its channel's NoteOns, NoteOffs
+/// and choke, which is what an Envelope's gate counted before the patch and
+/// still counts, so a converted song plays as it did. A transport tag
+/// `fire`s instead: a trigger inlet takes it as a NoteOn, without the
+/// NoteOff an Envelope would wait for.
 #[derive(Debug, Clone, Copy, Default)]
 struct Signal {
     value: f32,
     events: NoteGateEvents,
+    fire: bool,
+}
+
+/// Where the transport is at one control tick, for the transport tags
+/// (song patch step 06). Each ramp runs 0 to 1; `pattern` is the playing
+/// pattern's number across the song's patterns, `None` where none plays.
+/// Stopped, the tags hold and nothing fires.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct TransportTick {
+    pub playing: bool,
+    pub beat: f32,
+    pub bar: f32,
+    pub pattern_position: Option<f32>,
+    pub pattern: Option<f32>,
+}
+
+/// Everything the song sends into the patch for one control tick: each
+/// seat's notes, the transport, and each seat's generator outlets and
+/// keyboard as routes read them.
+#[derive(Debug, Clone, Copy)]
+pub struct SongInputs<'a> {
+    pub gates: &'a [NoteGateEvents; MAX_CHANNELS],
+    pub transport: TransportTick,
+    pub outlets: &'a [[f32; MAX_GENERATOR_OUTLETS]; MAX_CHANNELS],
+    pub performance: &'a [[f32; PERFORMANCE_SOURCES]; MAX_CHANNELS],
+}
+
+static NO_OUTLETS: [[f32; MAX_GENERATOR_OUTLETS]; MAX_CHANNELS] = [[0.0; MAX_GENERATOR_OUTLETS]; MAX_CHANNELS];
+static NO_PERFORMANCE: [[f32; PERFORMANCE_SOURCES]; MAX_CHANNELS] = [[0.0; PERFORMANCE_SOURCES]; MAX_CHANNELS];
+
+impl<'a> SongInputs<'a> {
+    /// The notes and the transport, every outlet and keyboard at rest.
+    pub fn quiet(gates: &'a [NoteGateEvents; MAX_CHANNELS], transport: TransportTick) -> Self {
+        Self {
+            gates,
+            transport,
+            outlets: &NO_OUTLETS,
+            performance: &NO_PERFORMANCE,
+        }
+    }
+}
+
+impl Tag {
+    /// Read what the tag is bound to for one tick.
+    fn tick(&mut self, gates: &[NoteGateEvents; MAX_CHANNELS], inputs: &SongInputs) -> Signal {
+        let transport = inputs.transport;
+        let mut signal = Signal::default();
+        match self.source {
+            None => {}
+            Some(TagSource::Gate(seat)) => {
+                let events = gates.get(usize::from(seat)).copied().unwrap_or_default();
+                if events.choke {
+                    self.held = 0;
+                } else {
+                    self.held = self.held.saturating_sub(u16::from(events.note_offs));
+                }
+                self.held = self.held.saturating_add(u16::from(events.note_ons));
+                self.notes = self.notes.wrapping_add(u32::from(events.note_ons));
+                self.value = if self.held > 0 { 1.0 } else { 0.0 };
+                signal.events = events;
+            }
+            Some(TagSource::Outlet { seat, outlet }) => {
+                self.value = inputs.outlets[usize::from(seat)]
+                    .get(usize::from(outlet))
+                    .copied()
+                    .unwrap_or(0.0);
+            }
+            Some(TagSource::Performance { seat, source }) => {
+                self.value = inputs.performance[usize::from(seat)]
+                    .get(usize::from(source))
+                    .copied()
+                    .unwrap_or(0.0);
+            }
+            Some(source) => {
+                let reading = match source {
+                    TagSource::Beat => Some(transport.beat),
+                    TagSource::Bar => Some(transport.bar),
+                    TagSource::PatternPosition => transport.pattern_position,
+                    _ => transport.pattern,
+                };
+                match reading.filter(|_| transport.playing) {
+                    // Stopped, or no pattern playing here: hold, and the
+                    // next reading after it is a start.
+                    None => self.last = None,
+                    Some(value) => {
+                        signal.fire = match (source, self.last) {
+                            (_, None) => true,
+                            (TagSource::Pattern, Some(last)) => value != last,
+                            (_, Some(last)) => value < last,
+                        };
+                        self.last = Some(value);
+                        self.value = value;
+                    }
+                }
+            }
+        }
+        signal.value = self.value;
+        signal
+    }
 }
 
 impl NoteGateEvents {
@@ -866,11 +973,11 @@ pub struct ModulatorSet {
 }
 
 impl ModulatorSet {
-    /// Every node fresh, outputs at zero. `tags` is each tag's gate seat,
+    /// Every node fresh, outputs at zero. `tags` is what each tag reads,
     /// `order` every node index in tick order. Allocates.
     pub fn new(
         specs: impl IntoIterator<Item = ModuleSpec>,
-        tags: impl IntoIterator<Item = Option<u8>>,
+        tags: impl IntoIterator<Item = Option<TagSource>>,
         order: impl IntoIterator<Item = u16>,
     ) -> Self {
         let modules: Vec<Module> = specs
@@ -883,7 +990,13 @@ impl ModulatorSet {
                 last: [f32::NAN; MAX_INLETS],
             })
             .collect();
-        let tags: Vec<Tag> = tags.into_iter().map(|gate| Tag { gate, held: 0, notes: 0 }).collect();
+        let tags: Vec<Tag> = tags
+            .into_iter()
+            .map(|source| Tag {
+                source,
+                ..Tag::default()
+            })
+            .collect();
         let nodes = modules.len() + tags.len();
         let order = order
             .into_iter()
@@ -1083,9 +1196,12 @@ impl ModulatorSet {
         let (Some(tag), Some(previous)) = (self.tags.get(at), from.tags.get(from_at)) else {
             return;
         };
-        if tag.gate.is_some() && previous.gate.is_some() {
-            self.tags[at].held = previous.held;
-            self.tags[at].notes = previous.notes;
+        if tag.source == previous.source && tag.source.is_some() {
+            let tag = &mut self.tags[at];
+            tag.held = previous.held;
+            tag.notes = previous.notes;
+            tag.value = previous.value;
+            tag.last = previous.last;
             let node = self.modules.len() + at;
             if let Some(signal) = from.signals.get(from.modules.len() + from_at) {
                 self.signals[node] = *signal;
@@ -1099,9 +1215,9 @@ impl ModulatorSet {
     }
 
     /// Each tag, in tag order: how many NoteOns it has passed, wrapping,
-    /// and whether a note is held.
-    pub fn tag_activity(&self) -> impl Iterator<Item = (u32, bool)> + '_ {
-        self.tags.iter().map(|tag| (tag.notes, tag.held > 0))
+    /// and what it put out last.
+    pub fn tag_activity(&self) -> impl Iterator<Item = (u32, f32)> + '_ {
+        self.tags.iter().map(|tag| (tag.notes, tag.value))
     }
 
     /// Run one control tick: every node in the compiled order, each box
@@ -1136,28 +1252,34 @@ impl ModulatorSet {
         song_beats: Option<f64>,
         gates: &[NoteGateEvents; MAX_CHANNELS],
     ) {
+        let inputs = SongInputs::quiet(
+            gates,
+            TransportTick {
+                playing: song_beats.is_some(),
+                ..TransportTick::default()
+            },
+        );
+        self.tick_with(sample_rate, frames, bpm, song_beats, &inputs);
+    }
+
+    /// [`Self::tick`] with everything the song sends: the transport and the
+    /// channels' outlets and keyboards as well as their notes.
+    pub fn tick_with(
+        &mut self,
+        sample_rate: u32,
+        frames: usize,
+        bpm: f64,
+        song_beats: Option<f64>,
+        inputs: &SongInputs,
+    ) {
+        let gates = inputs.gates;
         self.previous.copy_from_slice(&self.signals);
         let modules = self.modules.len();
         for index in 0..self.order.len() {
             let node = usize::from(self.order[index]);
             if node >= modules {
                 let tag = &mut self.tags[node - modules];
-                let events = tag
-                    .gate
-                    .and_then(|seat| gates.get(usize::from(seat)))
-                    .copied()
-                    .unwrap_or_default();
-                if events.choke {
-                    tag.held = 0;
-                } else {
-                    tag.held = tag.held.saturating_sub(u16::from(events.note_offs));
-                }
-                tag.held = tag.held.saturating_add(u16::from(events.note_ons));
-                tag.notes = tag.notes.wrapping_add(u32::from(events.note_ons));
-                self.signals[node] = Signal {
-                    value: if tag.held > 0 { 1.0 } else { 0.0 },
-                    events,
-                };
+                self.signals[node] = tag.tick(gates, inputs);
                 continue;
             }
             let mut inlets = [None; MAX_INLETS];
@@ -1175,6 +1297,7 @@ impl ModulatorSet {
             for port in 0..MAX_INLETS {
                 if let Some(signal) = inlets[port] {
                     fired[port] = signal.events.note_ons > 0
+                        || signal.fire
                         || (module.last[port] < TRIGGER_LEVEL && signal.value >= TRIGGER_LEVEL);
                     module.last[port] = signal.value;
                 }
@@ -1275,7 +1398,7 @@ impl ModulatorSet {
             self.outputs[node] = value;
             self.signals[node] = Signal {
                 value,
-                events: NoteGateEvents::default(),
+                ..Signal::default()
             };
         }
     }
@@ -1361,7 +1484,7 @@ mod tests {
             }
         });
         let order = (modules..modules + seats.len()).chain(0..modules).map(|node| node as u16);
-        ModulatorSet::new(built.collect::<Vec<_>>(), seats.iter().map(|&seat| Some(seat)).collect::<Vec<_>>(), order.collect::<Vec<_>>())
+        ModulatorSet::new(built.collect::<Vec<_>>(), seats.iter().map(|&seat| Some(TagSource::Gate(seat))).collect::<Vec<_>>(), order.collect::<Vec<_>>())
     }
 
     /// A module as a converted rack's slot `at` would be: seeded with its
@@ -1405,14 +1528,89 @@ mod tests {
         let mut gates = NO_GATES;
         gates[0].note_ons = 2;
         set.tick(48_000, 32, 120.0, None, &gates);
-        assert_eq!(set.tag_activity().collect::<Vec<_>>(), [(2, true)]);
+        assert_eq!(set.tag_activity().collect::<Vec<_>>(), [(2, 1.0)]);
         gates[0].note_ons = 1;
         set.tick(48_000, 32, 120.0, None, &gates);
         set.run(48_000, 32, 120.0);
-        assert_eq!(set.tag_activity().collect::<Vec<_>>(), [(3, true)]);
+        assert_eq!(set.tag_activity().collect::<Vec<_>>(), [(3, 1.0)]);
         let mut next = set_of(&[ModulatorParams::Envelope(Default::default())]);
         next.carry_tag(0, &set, 0);
-        assert_eq!(next.tag_activity().collect::<Vec<_>>(), [(3, true)]);
+        assert_eq!(next.tag_activity().collect::<Vec<_>>(), [(3, 1.0)]);
+    }
+
+    /// A transport tag follows its ramp while the song plays and fires as
+    /// the ramp falls back to its start; stopped, it holds and the first
+    /// reading after a start fires (song patch step 06).
+    #[test]
+    fn a_transport_tag_fires_as_its_ramp_wraps_and_holds_while_stopped() {
+        let mut tag = Tag {
+            source: Some(TagSource::Beat),
+            ..Tag::default()
+        };
+        let read = |tag: &mut Tag, playing: bool, beat: f32| {
+            let transport = TransportTick {
+                playing,
+                beat,
+                ..TransportTick::default()
+            };
+            let signal = tag.tick(&NO_GATES, &SongInputs::quiet(&NO_GATES, transport));
+            (signal.value, signal.fire)
+        };
+        assert_eq!(read(&mut tag, true, 0.25), (0.25, true), "the first reading is a start");
+        assert_eq!(read(&mut tag, true, 0.5), (0.5, false));
+        assert_eq!(read(&mut tag, true, 0.75), (0.75, false));
+        assert_eq!(read(&mut tag, true, 0.0), (0.0, true), "a new beat fires");
+        assert_eq!(read(&mut tag, false, 0.6), (0.0, false), "stopped, it holds");
+        assert_eq!(read(&mut tag, true, 0.6), (0.6, true), "and fires again on play");
+    }
+
+    /// A Pattern tag fires when the playing pattern changes, not on each
+    /// tick, and holds where no pattern plays.
+    #[test]
+    fn a_pattern_tag_fires_on_each_change_of_pattern() {
+        let mut tag = Tag {
+            source: Some(TagSource::Pattern),
+            ..Tag::default()
+        };
+        let mut read = |pattern: Option<f32>| {
+            let transport = TransportTick {
+                playing: true,
+                pattern,
+                ..TransportTick::default()
+            };
+            let signal = tag.tick(&NO_GATES, &SongInputs::quiet(&NO_GATES, transport));
+            (signal.value, signal.fire)
+        };
+        assert_eq!(read(Some(0.0)), (0.0, true));
+        assert_eq!(read(Some(0.0)), (0.0, false));
+        assert_eq!(read(Some(0.5)), (0.5, true));
+        assert_eq!(read(None), (0.5, false), "between placements it holds");
+    }
+
+    /// An outlet tag reads its seat's outlet and a keyboard tag its seat's
+    /// mod wheel or aftertouch, as the render loop hands them over.
+    #[test]
+    fn outlet_and_keyboard_tags_read_their_seat() {
+        let mut outlets = [[0.0; MAX_GENERATOR_OUTLETS]; MAX_CHANNELS];
+        let mut performance = [[0.0; PERFORMANCE_SOURCES]; MAX_CHANNELS];
+        outlets[2][1] = 0.7;
+        performance[3][1] = 0.4;
+        let inputs = SongInputs {
+            gates: &NO_GATES,
+            transport: TransportTick::default(),
+            outlets: &outlets,
+            performance: &performance,
+        };
+        let mut outlet = Tag {
+            source: Some(TagSource::Outlet { seat: 2, outlet: 1 }),
+            ..Tag::default()
+        };
+        let mut keyboard = Tag {
+            source: Some(TagSource::Performance { seat: 3, source: 1 }),
+            ..Tag::default()
+        };
+        assert_eq!(outlet.tick(&NO_GATES, &inputs).value, 0.7);
+        assert_eq!(keyboard.tick(&NO_GATES, &inputs).value, 0.4);
     }
 
     /// A Random module keeps its held value in the range its own Bipolar
@@ -2166,7 +2364,7 @@ mod tests {
         fn set(specs: Vec<Spec>, tags: usize) -> ModulatorSet {
             let modules = specs.len() as u16;
             let order: Vec<u16> = (modules..modules + tags as u16).chain(0..modules).collect();
-            ModulatorSet::new(specs, (0..tags).map(|_| Some(0)), order)
+            ModulatorSet::new(specs, (0..tags).map(|_| Some(mooloop_core::TagSource::Gate(0))), order)
         }
 
         #[test]
