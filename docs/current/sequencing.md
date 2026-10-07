@@ -123,15 +123,24 @@ area, and where each behaviour stops.
   whose window manager takes Alt before mooloop sees it, and for a keyboard
   with the two keys transposed. Pointer gestures are unaffected: a gesture
   role can already be assigned Meta outright.
-- Two lanes sit under the roll and toggle independently: a velocity lane
-  drawn as stems with drag heads, and one variable automation lane. The
-  automation lane's picker lists the selected channel's generator, every
-  parameter of every effect on that channel, the channel's fader and pan
-  (as "Channel strip", after its chain), and every effect on every bus,
-  grouped by device, with already-open lanes marked and clear/remove
-  actions. Points are drawn by clicking,
-  dragged to move, right-clicked to remove, and interpolate linearly. Lanes
-  a clip is not currently showing are retained, not discarded.
+- Two lane areas sit under the roll and toggle independently: a velocity
+  lane drawn as stems with drag heads, and the automation lanes. Every open
+  automation lane of the clip is shown, stacked, each with a header whose
+  menu clears or removes it; the area scrolls once it reaches its height,
+  which its top edge sets. A lane's bottom edge resizes it, and Shift-drag
+  resizes every lane (view state, not saved). **Add lane** opens two
+  columns: devices (the selected channel's generator, each effect on that
+  channel, the channel's fader and pan as "Channel strip", and each effect
+  on every bus), and the hovered device's parameters. **Open lanes** heads
+  the device column whenever the clip has a lane, listing just those;
+  devices and parameters with a lane are marked, and picking an open one
+  focuses it. Points are
+  drawn by clicking, dragged to move (Ctrl for a tenth of the travel),
+  right-clicked to remove, and interpolate linearly. Values snap to whole
+  semitones or cents on a semitone or cent amount and to the positions of a
+  stepped parameter; Shift frees both value and time. Value lines mark
+  quarters with the middle stronger, octaves on a semitone amount, and each
+  position of a stepped parameter with up to seventeen.
 - Sixteenth-note rack cells summarize their four 64th-note substeps without
   discarding rests between hits. Each substep is drawn solid where a note is
   struck and dim where one is merely held, so a ratcheted step is

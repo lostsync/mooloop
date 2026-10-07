@@ -1314,7 +1314,8 @@ fn a_missing_plugin_parameter_is_drawn_missing_and_reunited() {
             .expect("the lane's destination is still offered");
         let menu = h.window.get_automation_targets().row_data(at).expect("its menu row");
         let route = st.modulation_route_model.row_data(0).expect("its route row");
-        (menu, h.window.get_automation_lane_missing(), route)
+        let lane = h.window.get_automation_lanes().row_data(0).expect("the lane is shown");
+        (menu, lane.missing, route)
     };
 
     // Gone from the list, as a rescan that drops it leaves it.

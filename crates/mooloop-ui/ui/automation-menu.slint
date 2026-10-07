@@ -1,0 +1,177 @@
+// The piano roll's automation lane picker: a device column and a parameter
+// column in one popup. Its own file so a test can drive it with real pointer
+// events (`tests/automation_lane_menu.rs`), as the other popup menus are.
+import { ScrollView } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+
+// One selectable automation destination in the lane picker. Rust builds the
+// whole catalogue — every param of every effect on the selected channel and on
+// every bus — because only Rust has the descriptor tables.
+export struct AutomationTargetRow {
+    // "Cutoff". Displayed in the menu row and, with `device`, in the header.
+    param-name: string,
+    // "Filter 1" or "Bus 2 · Delay 1". Menu rows are grouped by this.
+    device: string,
+    // First row of a device's run. Precomputed in Rust because Slint's `for`
+    // has no access to the previous element.
+    starts-group: bool,
+    // Index into `automation-groups`: the device column row this parameter
+    // is listed under.
+    group: int,
+    // Already has a lane in this clip: marked, and listed under Open lanes.
+    open: bool,
+    // True when this is the lane currently shown.
+    current: bool,
+    // Something names this destination and it is no longer there to drive:
+    // a plugin parameter the plugin stopped listing (MOO-74). The row stays,
+    // its title thin and italic, and reads normally again when it returns.
+    // Nothing here is plugin-specific, so any address that is kept but
+    // drives nothing can set it.
+    missing: bool,
+}
+
+// One device in the lane picker's first column.
+export struct AutomationGroupRow {
+    // "Filter 1" or "Bus 2 · Delay 1".
+    name: string,
+    // At least one of its parameters has a lane in this clip.
+    open: bool,
+}
+
+// One selectable destination inside the automation lane picker.
+export component AutomationMenuRow inherits Rectangle {
+    in property <string> text;
+    in property <bool> current: false;
+    // Kept, and drives nothing: Adam's "itallicized/thin weight title in the
+    // lane selection menu" (MOO-74).
+    in property <bool> missing: false;
+    callback selected();
+    // 20px at 100%, growing with the text above it (MOO-328, the rule
+    // MOO-278 set for menu rows); the picker takes its height from its
+    // layout, so it grows with its rows.
+    height: 20px * Theme.row-growth;
+    min-width: 150px;
+    // Wide enough for the whole name, and the picker is as wide as its design
+    // width or this, whichever is more, so a long name, or any name at a
+    // large text size, is read whole rather than cut at the picker's edge.
+    preferred-width: label.preferred-width + 16px;
+    background: touch.has-hover ? Theme.surface-raised : transparent;
+    label := Text {
+        x: 8px;
+        text: root.text;
+        color: root.current ? Theme.accent : root.missing ? Theme.text-muted : Theme.text;
+        font-size: Theme.text-lg;
+        font-italic: root.missing;
+        font-weight: root.missing ? 300 : 400;
+        vertical-alignment: center;
+    }
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.selected(); }
+    }
+}
+
+// The lane picker, as two columns in one popup: devices, then the hovered
+// device's parameters. **Open lanes** heads the device column whenever the
+// clip has any, so a lane already drawn is one move away. Columns rather
+// than nested popups because a hand-built `PopupWindow` swallows hover
+// outside itself (`menubar.slint`), so a second popup could never take the
+// pointer -- song automation step 05's reasoning, and the shape that step
+// gives the song panel's picker.
+component AutomationGroupItem inherits Rectangle {
+    in property <string> text;
+    in property <bool> open;
+    in property <bool> shown;
+    callback hovered();
+    height: 20px * Theme.row-growth;
+    min-width: 150px;
+    preferred-width: label.preferred-width + 30px;
+    background: root.shown ? Theme.surface-raised : touch.has-hover ? Theme.surface-raised : transparent;
+    label := Text {
+        x: 8px;
+        text: root.open ? "● " + root.text : root.text;
+        color: root.shown ? Theme.text : Theme.text-muted;
+        font-size: Theme.text-lg;
+        vertical-alignment: center;
+    }
+    Text {
+        x: parent.width - self.width - 6px;
+        text: "›";
+        color: Theme.text-faint;
+        font-size: Theme.text-lg;
+        vertical-alignment: center;
+    }
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        changed has-hover => {
+            if (self.has-hover) {
+                root.hovered();
+            }
+        }
+        clicked => { root.hovered(); }
+    }
+}
+
+export component AutomationLaneMenu inherits HorizontalLayout {
+    in property <[AutomationTargetRow]> targets;
+    in property <[AutomationGroupRow]> groups;
+    // The clip has at least one lane, so the column starts with Open lanes.
+    in property <bool> has-open;
+    callback picked(int);
+    // -1 is Open lanes.
+    property <int> shown-group: root.has-open ? -1 : 0;
+    padding: 4px;
+    spacing: 4px;
+    ScrollView {
+        height: min(320px, max(device-list.preferred-height, param-list.preferred-height));
+        width: max(160px, device-list.preferred-width);
+        device-list := VerticalLayout {
+            spacing: 1px;
+            if root.has-open : AutomationGroupItem {
+                text: "Open lanes";
+                open: false;
+                shown: root.shown-group == -1;
+                hovered => { root.shown-group = -1; }
+            }
+            if root.has-open : Rectangle {
+                height: 5px;
+                Rectangle {
+                    y: 2px;
+                    height: 1px;
+                    width: parent.width;
+                    background: Theme.border;
+                }
+            }
+            for group[index] in root.groups : AutomationGroupItem {
+                text: group.name;
+                open: group.open;
+                shown: root.shown-group == index;
+                hovered => { root.shown-group = index; }
+            }
+        }
+    }
+    Rectangle {
+        width: 1px;
+        background: Theme.border;
+    }
+    ScrollView {
+        height: min(320px, max(device-list.preferred-height, param-list.preferred-height));
+        width: max(190px, param-list.preferred-width);
+        param-list := VerticalLayout {
+            spacing: 0px;
+            alignment: start;
+            // The markup filters; Rust grouped (`group`, `open`).
+            for row[index] in root.targets : VerticalLayout {
+                if root.shown-group == -1 ? row.open : row.group == root.shown-group : AutomationMenuRow {
+                    // Under Open lanes the rows come from every device, so
+                    // each says which.
+                    text: root.shown-group == -1 ? row.device + " · " + row.param-name
+                        : row.open ? "● " + row.param-name : row.param-name;
+                    current: row.current;
+                    missing: row.missing;
+                    selected => { root.picked(index); }
+                }
+            }
+        }
+    }
+}

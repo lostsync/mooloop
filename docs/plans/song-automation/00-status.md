@@ -52,6 +52,14 @@ knob adds (the rule is in step 02).
 
 - **Step 03 (MOO-472):** Adam sees the panel's mock-up before its markup is
   built.
+- **The roll's lane moved first (2026-10-06, MOO-530).** Asked for in the project
+  thread, ahead of this plan: the piano roll now stacks every open pattern
+  lane, resizes each lane by its bottom edge (Shift for all) and the area by
+  its top edge, snaps values to semitones and stepped positions, drags
+  finely with Ctrl, and draws value lines. MOO-467 (the short curve) was
+  `Path`'s default `contain` fit, fixed there. Step 09 still owes the one
+  shared component; heights there are view state, not saved (step 07 is
+  where saving them is decided).
 
 ## Steps
 

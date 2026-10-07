@@ -5,9 +5,58 @@
 
 use crate::session::Session;
 use mooloop_core::{
-    AutomationLane, AutomationPoint, EffectTarget, EngineCommand, ParamAddr, ParamOwner, PointId,
-    MAX_AUTOMATION_LANES_PER_CHANNEL, TICKS_PER_STEP,
+    AutomationLane, AutomationPoint, EffectTarget, EngineCommand, ParamAddr, ParamCurve,
+    ParamDescriptor, ParamOwner, PointId, MAX_AUTOMATION_LANES_PER_CHANNEL, TICKS_PER_STEP,
 };
+
+/// The normalised distance between the values a lane snaps to on
+/// `descriptor`, or `None` when it has no natural step.
+///
+/// A stepped parameter snaps to its positions. A semitone or cent amount
+/// snaps to whole units, which is the step its knob takes: without it, a
+/// lane 62 pixels tall on a 96-semitone range moved in steps of 1.55
+/// semitones and could not land on most notes.
+pub fn lane_value_step(descriptor: &ParamDescriptor) -> Option<f32> {
+    let span = descriptor.max - descriptor.min;
+    match descriptor.curve {
+        ParamCurve::Stepped(steps) if steps >= 2 => Some(1.0 / (steps - 1) as f32),
+        ParamCurve::Linear if matches!(descriptor.unit, "st" | "ct") && span >= 1.0 => {
+            Some(1.0 / span)
+        }
+        _ => None,
+    }
+}
+
+/// The value lines drawn across a lane on `descriptor`: `(value, major)`,
+/// normalised, edges excluded.
+///
+/// Octaves on a semitone amount, with 0 st major; each position of a
+/// stepped parameter with up to sixteen; otherwise quarters with the middle
+/// major.
+pub fn lane_grid(descriptor: Option<&ParamDescriptor>) -> Vec<(f32, bool)> {
+    let quarters = || vec![(0.25, false), (0.5, true), (0.75, false)];
+    let Some(descriptor) = descriptor else {
+        return quarters();
+    };
+    let span = descriptor.max - descriptor.min;
+    match descriptor.curve {
+        ParamCurve::Stepped(steps) if (3..=17).contains(&steps) => (1..steps - 1)
+            .map(|step| {
+                let value = step as f32 / (steps - 1) as f32;
+                (value, (value - 0.5).abs() < 1e-6)
+            })
+            .collect(),
+        ParamCurve::Linear if descriptor.unit == "st" && span >= 24.0 => {
+            let first = (descriptor.min / 12.0).floor() as i32 + 1;
+            (first..)
+                .map(|octave| octave as f32 * 12.0)
+                .take_while(|natural| *natural < descriptor.max)
+                .map(|natural| ((natural - descriptor.min) / span, natural == 0.0))
+                .collect()
+        }
+        _ => quarters(),
+    }
+}
 
 /// A lane in the current pattern that names a generator kind its channel no
 /// longer runs (MOO-135): inert, kept, saved unchanged, and live again when
@@ -167,27 +216,57 @@ impl Session {
         Some(command)
     }
 
-    /// The point nearest `(tick, value)` within `tolerance`, or `None`.
+    /// The point on the lane for `target` nearest `(tick, value)`, within
+    /// `tolerance` ticks and `value_tolerance` of the lane's height, or
+    /// `None`.
     ///
     /// Distance is measured in each axis's own tolerance rather than in
     /// screen units, so a lane that is short and wide does not become
     /// impossible to grab vertically.
-    pub fn automation_point_at(&self, tick: i32, value: f32, tolerance: i32) -> Option<PointId> {
-        const VALUE_TOLERANCE: f32 = 0.12;
-        let lane = self.automation_lane()?;
+    pub fn automation_point_at(
+        &self,
+        target: ParamAddr,
+        tick: i32,
+        value: f32,
+        tolerance: i32,
+        value_tolerance: f32,
+    ) -> Option<PointId> {
+        let lane = self
+            .automation_lanes()?
+            .iter()
+            .find(|lane| lane.target == target)?;
         let tolerance = tolerance.max(1);
+        let value_tolerance = value_tolerance.max(f32::EPSILON);
         lane.points()
             .iter()
             .filter(|point| (point.tick as i32 - tick).abs() <= tolerance)
-            .filter(|point| (point.value - value).abs() <= VALUE_TOLERANCE)
+            .filter(|point| (point.value - value).abs() <= value_tolerance)
             .min_by(|a, b| {
                 let key = |point: &AutomationPoint| {
                     (point.tick as i32 - tick).abs() as f32 / tolerance as f32
-                        + (point.value - value).abs() / VALUE_TOLERANCE
+                        + (point.value - value).abs() / value_tolerance
                 };
                 key(a).total_cmp(&key(b))
             })
             .map(|point| point.id)
+    }
+
+    /// Makes the lane on `target` the one edits act on and the readout
+    /// shows. Not an edit: nothing in the document changes.
+    pub fn focus_automation_lane(&self, target: ParamAddr) {
+        if self.automation_target.get() != Some(target) {
+            self.automation_target.set(Some(target));
+            self.automation_selected_point.set(None);
+        }
+    }
+
+    /// `value` on the shown lane's value grid ([`lane_value_step`]), or
+    /// unchanged when its destination has no step.
+    pub fn snap_automation_value(&self, value: f32) -> f32 {
+        match self.automation_descriptor().and_then(lane_value_step) {
+            Some(step) => ((value / step).round() * step).clamp(0.0, 1.0),
+            None => value,
+        }
     }
 
     /// Clamps a breakpoint into the lane's drawable range.
@@ -425,13 +504,14 @@ mod tests {
         let (low, _) = session.create_automation_point(100, 0.20).expect("open");
         let (high, _) = session.create_automation_point(100, 0.40).expect("open");
 
-        assert_eq!(session.automation_point_at(100, 0.21, 20), Some(low));
-        assert_eq!(session.automation_point_at(100, 0.39, 20), Some(high));
+        let target = session.automation_target.get().unwrap();
+        assert_eq!(session.automation_point_at(target, 100, 0.21, 20, 0.12), Some(low));
+        assert_eq!(session.automation_point_at(target, 100, 0.39, 20, 0.12), Some(high));
         // Outside the value tolerance, nothing is grabbed however close the
         // tick is.
-        assert_eq!(session.automation_point_at(100, 0.9, 20), None);
+        assert_eq!(session.automation_point_at(target, 100, 0.9, 20, 0.12), None);
         // Outside the tick tolerance, likewise.
-        assert_eq!(session.automation_point_at(500, 0.20, 20), None);
+        assert_eq!(session.automation_point_at(target, 500, 0.20, 20, 0.12), None);
     }
 
     /// Removing the selected point unselects it; removing another leaves the
@@ -449,5 +529,65 @@ mod tests {
         session.remove_automation_point(second).expect("exists");
         assert_eq!(session.automation_selected_point.get(), None);
         assert!(session.remove_automation_point(second).is_none());
+    }
+
+    /// A 96-semitone range on a 62-pixel lane moved in steps of 1.55
+    /// semitones, so most notes could not be reached. The lane snaps to
+    /// whole semitones instead, like the knob does, so each is reachable.
+    #[test]
+    fn a_semitone_lane_snaps_to_whole_semitones() {
+        let semis = ParamDescriptor {
+            id: 0,
+            name: "Semis",
+            unit: "st",
+            min: -48.0,
+            max: 48.0,
+            curve: ParamCurve::Linear,
+            default: 0.0,
+        };
+        let step = lane_value_step(&semis).expect("semitones have a step");
+        for semitone in -48..=48 {
+            let normalized = semis.to_normalized(semitone as f32);
+            let snapped = (normalized / step).round() * step;
+            assert!(
+                (semis.from_normalized(snapped) - semitone as f32).abs() < 1e-3,
+                "{semitone} st is not a value the lane lands on"
+            );
+        }
+        // Octave lines, 0 st the major one, edges left out.
+        let grid = lane_grid(Some(&semis));
+        assert_eq!(grid.len(), 7, "{grid:?}");
+        assert_eq!(grid.iter().filter(|(_, major)| *major).count(), 1);
+        assert!(grid.contains(&(0.5, true)));
+    }
+
+    /// Stepped parameters snap to their positions; continuous ones do not
+    /// snap and get quarters with a stronger midpoint.
+    #[test]
+    fn steps_and_grids_follow_the_descriptor() {
+        let wave = ParamDescriptor {
+            id: 0,
+            name: "Wave",
+            unit: "",
+            min: 0.0,
+            max: 3.0,
+            curve: ParamCurve::Stepped(4),
+            default: 0.0,
+        };
+        assert_eq!(lane_value_step(&wave), Some(1.0 / 3.0));
+        assert_eq!(lane_grid(Some(&wave)).len(), 2);
+
+        let cutoff = ParamDescriptor {
+            id: 0,
+            name: "Cutoff",
+            unit: "Hz",
+            min: 20.0,
+            max: 20_000.0,
+            curve: ParamCurve::Exponential,
+            default: 1_000.0,
+        };
+        assert_eq!(lane_value_step(&cutoff), None);
+        assert_eq!(lane_grid(Some(&cutoff)), vec![(0.25, false), (0.5, true), (0.75, false)]);
+        assert_eq!(lane_grid(None), lane_grid(Some(&cutoff)));
     }
 }
