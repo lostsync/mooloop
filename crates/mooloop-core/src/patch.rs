@@ -865,6 +865,33 @@ mod tests {
         assert_eq!(left, [Jack::new(select, 1)]);
     }
 
+    /// Every source an inlet tag can read saves and reopens as it was
+    /// (song patch step 06), and binding one keeps its wires.
+    #[test]
+    fn every_inlet_source_saves_and_reopens() {
+        let (mut song, ids) = song_with(&[ModulatorKind::Lfo]);
+        let sources = [
+            InletSource::Gate(ChannelId(1)),
+            InletSource::Outlet { channel: ChannelId(1), outlet: 2 },
+            InletSource::Performance { channel: ChannelId(1), source: 1 },
+            InletSource::Beat,
+            InletSource::Bar,
+            InletSource::PatternPosition,
+            InletSource::Pattern,
+        ];
+        let unbound = song.add_tag(TagKind::Inlet { bind: None }, CanvasPoint::new(0, 0));
+        song.connect(Jack::new(unbound, 0), Jack::new(ids[0], 1)).unwrap();
+        assert!(song.bind_tag(unbound, Some(InletSource::Bar)));
+        assert!(!song.bind_tag(unbound, Some(InletSource::Bar)), "already bound");
+        assert_eq!(song.wire_into(Jack::new(ids[0], 1)).map(|wire| wire.from.node), Some(unbound));
+        for (index, source) in sources.into_iter().enumerate() {
+            song.add_tag(TagKind::Inlet { bind: Some(source) }, CanvasPoint::new(0, 40 * index as i32));
+        }
+        let saved = toml::to_string(&song).unwrap();
+        let loaded: SongModulation = toml::from_str(&saved).unwrap();
+        assert_eq!(loaded, song);
+    }
+
     #[test]
     fn an_unknown_box_keeps_its_text_through_a_save() {
         use crate::modulation::ModulatorParams;
