@@ -88,8 +88,8 @@ pub use plugin::{
 };
 pub use mlm1_factory::FactoryPatch;
 pub use patch::{
-    grid_place, Bend, BendAxis, CanvasPoint, InletSource, Jack, JackSort, Port, Ports, SongTag,
-    TagKind, Wire, WireRefusal,
+    grid_place, Bend, BendAxis, CanvasPoint, InletSource, Jack, JackSort, Port, Ports, RoutePlace,
+    SongTag, TagKind, Wire, WireRefusal,
 };
 pub use modulation_plan::{
     chain_index, CompiledInlet, CompiledModulation, CompiledModule, CompiledRoute, CompiledSource,

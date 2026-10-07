@@ -256,6 +256,15 @@ pub struct Wire {
     pub late: bool,
 }
 
+/// Where a route's assignment tag was put on the canvas. A route is named
+/// by its source and destination, which a song has one route for.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RoutePlace {
+    pub source: crate::ModSourceRef,
+    pub destination: crate::ParamAddr,
+    pub at: CanvasPoint,
+}
+
 /// Why a wire was refused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WireRefusal {
@@ -456,6 +465,49 @@ impl SongModulation {
         }
     }
 
+    /// Where the assignment tag of the route from `source` to `destination`
+    /// was put, if anyone put it anywhere.
+    pub fn route_at(
+        &self,
+        source: crate::ModSourceRef,
+        destination: crate::ParamAddr,
+    ) -> Option<CanvasPoint> {
+        self.route_places
+            .iter()
+            .find(|place| place.source == source && place.destination == destination)
+            .map(|place| place.at)
+    }
+
+    /// Put the assignment tag of the route from `source` to `destination` at
+    /// `at`. Returns whether the song has that route.
+    pub fn place_route(
+        &mut self,
+        source: crate::ModSourceRef,
+        destination: crate::ParamAddr,
+        at: CanvasPoint,
+    ) -> bool {
+        if !self
+            .routes
+            .iter()
+            .any(|route| route.source == source && route.destination == destination)
+        {
+            return false;
+        }
+        match self
+            .route_places
+            .iter_mut()
+            .find(|place| place.source == source && place.destination == destination)
+        {
+            Some(place) => place.at = at,
+            None => self.route_places.push(RoutePlace {
+                source,
+                destination,
+                at,
+            }),
+        }
+        true
+    }
+
     /// The default place for a new box: the first grid cell nothing sits in.
     pub fn free_place(&self) -> CanvasPoint {
         (0..)
@@ -637,6 +689,49 @@ mod tests {
         let text = toml::to_string(&loaded).unwrap();
         assert!(!text.contains("\ninput ="), "nothing writes an input now:\n{text}");
         assert_eq!(toml::from_str::<SongModulation>(&text).unwrap(), loaded);
+    }
+
+    #[test]
+    fn an_assignment_tag_keeps_its_place_through_a_save() {
+        use crate::modulation::{ModPolarity, ModRoute, UNRESOLVED_SLOT};
+        use crate::{EffectTarget, ModSourceRef, ParamAddr, STRIP_PARAM_PAN, STRIP_PARAM_VOLUME};
+        let (mut song, ids) = song_with(&[ModulatorKind::Lfo]);
+        let source = ModSourceRef::Id(ids[0]);
+        let volume = ParamAddr::strip(EffectTarget::Channel(0), STRIP_PARAM_VOLUME);
+        let pan = ParamAddr::strip(EffectTarget::Channel(0), STRIP_PARAM_PAN);
+        for destination in [volume, pan] {
+            song.routes.push(ModRoute {
+                source,
+                source_slot: UNRESOLVED_SLOT,
+                destination,
+                depth: 0.5,
+                polarity: ModPolarity::Bipolar,
+            });
+        }
+        let gone = ParamAddr::strip(EffectTarget::Channel(1), STRIP_PARAM_VOLUME);
+        assert!(
+            !song.place_route(source, gone, CanvasPoint::new(1, 1)),
+            "no such route"
+        );
+        assert!(song.place_route(source, volume, CanvasPoint::new(40, 300)));
+        assert!(
+            song.place_route(source, volume, CanvasPoint::new(48, 320)),
+            "moved again"
+        );
+        assert_eq!(song.route_places.len(), 1);
+
+        let loaded: SongModulation = toml::from_str(&toml::to_string(&song).unwrap()).unwrap();
+
+        assert_eq!(
+            loaded.route_at(source, volume),
+            Some(CanvasPoint::new(48, 320))
+        );
+        assert_eq!(
+            loaded.route_at(source, pan),
+            None,
+            "never placed, so placed by the canvas"
+        );
+        assert_eq!(loaded, song);
     }
 
     #[test]

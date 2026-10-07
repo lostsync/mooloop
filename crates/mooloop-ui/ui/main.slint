@@ -103,6 +103,7 @@ export { ShortcutRow }
 export { AppearanceSchemeRow }
 export { MidiBindingRow, MidiTransportRow }
 export { AudioFormat, ControlAssign, ControlRequest, CutoffLaw, Gesture, ParamAnswer, ParsedValue } from "controls.slint";
+export { PatchView, PatchNodeRow, PatchJackRow, PatchWireRow } from "patch-canvas.slint";
 
 // How much a held status-bar notice weighs. Info is not here: it is
 // `status-message`, which the next event is allowed to overwrite.
@@ -1536,7 +1537,7 @@ export component MainWindow inherits Window {
     in-out property <length> playlist-dock-height: 376px;
     in-out property <length> steps-dock-height: 300px;
     in-out property <length> mixer-dock-height: 300px;
-    in-out property <length> modulation-dock-height: 300px;
+    in-out property <length> modulation-dock-height: 440px;
     function dock-height(v: int) -> length {
         return v == PaneViews.notes ? root.notes-dock-height
             : v == PaneViews.playlist ? root.playlist-dock-height

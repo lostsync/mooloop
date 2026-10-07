@@ -1,6 +1,7 @@
 import { ComboBox, ScrollView } from "std-widgets.slint";
 import { Theme } from "theme.slint";
 import { NameField } from "toolbar.slint";
+import { PatchCanvas } from "patch-canvas.slint";
 import { Divisions, LedIndicator, MiniKnob, SelectorBank, SyncMiniKnob, ToggleButton, ToolButton, ValueScale } from "controls.slint";
 
 // One module in the song. `slot` is its index in the session's list of
@@ -73,31 +74,6 @@ export struct ModulationRouteRow {
     // greyed with an italic name, and still removable. Not plugin-specific:
     // any kept-but-inert address can set it.
     missing: bool,
-}
-
-// Grid geometry in one place. The pane wraps the grid at whatever its width
-// holds; `columns` is only a tile's default when nothing says otherwise.
-global ModuleGrid {
-    out property <int> columns: 4;
-    out property <length> tile-width: 58px;
-    out property <length> tile-height: 70px;
-    out property <length> gap: 4px;
-    // Rows the pane shows before it scrolls. Capacity is free to exceed
-    // this; it decides how tall the shelf is, not how many modules exist.
-    out property <int> visible-rows: 2;
-    // Stated rather than measured from the children: an overlay sized off a
-    // container that is itself sized by its children is a binding loop.
-    out property <length> row-width: root.columns * root.tile-width + (root.columns - 1) * root.gap;
-    out property <length> column-height: root.visible-rows * root.tile-height + (root.visible-rows - 1) * root.gap;
-
-    /// Rows needed to show `count` cells, which is what capacity decides.
-    public pure function rows-for(count: int) -> int {
-        return ceil(count / root.columns);
-    }
-    public pure function height-for(count: int) -> length {
-        return max(root.column-height,
-            root.rows-for(count) * root.tile-height + (root.rows-for(count) - 1) * root.gap);
-    }
 }
 
 // The outlet band's geometry. One column, beside the module grid rather than
@@ -395,109 +371,6 @@ component StepBank inherits Rectangle {
     }
 }
 
-// One module in the grid: its parameter-derived face, its name, and a live
-// output meter fed from `ModulatorMeters`.
-component ModuleTile inherits Rectangle {
-    in property <string> name;
-    in property <int> waveform;
-    in property <int> kind;
-    in property <float> pulse-width: 0.5;
-    in property <float> amount: 1;
-    in property <float> phase;
-    in property <float> fade-cycles;
-    in property <float> smoothing-cycles;
-    in property <float> attack;
-    in property <float> decay;
-    in property <float> sustain: 0.7;
-    in property <float> release;
-    in property <[float]> steps;
-    in property <int> step-length: 16;
-    in property <int> math-op;
-    in property <float> output;
-    in property <bool> selected;
-    in property <bool> armed;
-    // Position in the grid, which is what a drag names. The rack slot behind
-    // it is the caller's business.
-    in property <int> position;
-    in property <int> count;
-    // How many tiles a row holds, which the pane decides from its width.
-    in property <int> columns: ModuleGrid.columns;
-    callback clicked();
-    callback reorder-requested(int);
-
-    width: ModuleGrid.tile-width;
-    height: ModuleGrid.tile-height;
-    border-radius: Theme.radius-md;
-    border-width: root.selected ? Theme.hairline : 0px;
-    border-color: root.armed ? Theme.focus : Theme.accent;
-    background: tap.pressed ? Theme.surface-active
-        : root.selected ? Theme.surface-raised : Theme.surface;
-
-    VerticalLayout {
-        padding: 2px;
-        spacing: 2px;
-        ModulatorShape {
-            height: 22px;
-            waveform: root.waveform;
-            kind: root.kind;
-            amount: root.amount;
-            phase: root.phase;
-            pulse-width: root.pulse-width;
-            fade-cycles: root.fade-cycles;
-            smoothing-cycles: root.smoothing-cycles;
-            attack: root.attack;
-            decay: root.decay;
-            sustain: root.sustain;
-            release: root.release;
-            steps: root.steps;
-            step-length: root.step-length;
-            math-op: root.math-op;
-            line-color: root.armed ? Theme.focus : Theme.accent;
-        }
-        Text {
-            height: 12px;
-            text: root.name;
-            color: root.selected ? Theme.text : Theme.text-muted;
-            font-size: Theme.text-sm;
-            horizontal-alignment: center;
-            vertical-alignment: center;
-            overflow: elide;
-        }
-        // Live output, centre-origin: this is the one part of a tile that is
-        // telemetry rather than a preview of the configured signal.
-        Rectangle {
-            height: 5px;
-            background: Theme.surface;
-            border-radius: 1px;
-            Rectangle {
-                x: parent.width / 2 + min(0, clamp(root.output, -1, 1)) * parent.width / 2;
-                width: max(1px, abs(clamp(root.output, -1, 1)) * parent.width / 2);
-                height: parent.height;
-                border-radius: 1px;
-                background: root.armed ? Theme.focus : Theme.accent;
-            }
-        }
-    }
-    // One gesture for both jobs, the way the effect rack's header handle
-    // works: on release, a movement past half a cell moves the module and
-    // anything smaller is a plain selection.
-    tap := TouchArea {
-        mouse-cursor: root.selected ? move : pointer;
-        pointer-event(event) => {
-            if (event.kind == PointerEventKind.up) {
-                let across = round((tap.mouse-x - tap.pressed-x) / (ModuleGrid.tile-width + ModuleGrid.gap));
-                let down = round((tap.mouse-y - tap.pressed-y) / (ModuleGrid.tile-height + ModuleGrid.gap));
-                let target = clamp(root.position + across + down * root.columns, 0, root.count - 1);
-                if (target == root.position) {
-                    root.clicked();
-                } else {
-                    root.reorder-requested(target);
-                }
-            }
-        }
-    }
-}
-
 // One published outlet in the picker. A module tile draws the signal it is
 // configured to produce; an outlet has no configuration to draw, so the chip
 // shows its name over the live value instead. The fill *is* the meter rather
@@ -741,12 +614,6 @@ export component ModulationShelf inherits Rectangle {
     background: Theme.surface;
     clip: true;
 
-    // How many tiles fit across the grid, which is as wide as the pane
-    // lets it be. At least one, so a narrow pane still lists every module.
-    private property <int> grid-columns: max(1, floor((grid-view.visible-width + ModuleGrid.gap) / (ModuleGrid.tile-width + ModuleGrid.gap)));
-    private property <length> grid-height: max(grid-view.visible-height,
-        ceil(root.sources.length / root.grid-columns) * (ModuleGrid.tile-height + ModuleGrid.gap));
-
     VerticalLayout {
         spacing: 0px;
 
@@ -797,72 +664,12 @@ export component ModulationShelf inherits Rectangle {
                     vertical-stretch: 1;
                     spacing: 6px;
 
-                // The grid. Every module in the song is one tile with its own
-                // face and a live output meter. It wraps at whatever the
-                // pane's width holds and scrolls downward; there is no limit
-                // on how many modules a song has.
-                Rectangle {
+                // The patch (song patch step 03): every box in the song where
+                // the song put it, the tags at the patch's edges, an
+                // assignment tag for each route from a box, and the wires.
+                PatchCanvas {
                     horizontal-stretch: 1;
-                    min-width: ModuleGrid.tile-width + 12px;
-                    border-width: Theme.hairline;
-                    border-color: Theme.border;
-                    background: Theme.panel;
-                    VerticalLayout {
-                        padding: 4px;
-                        spacing: 3px;
-                        HorizontalLayout {
-                            height: 10px;
-                            Text { text: "MODULES"; color: Theme.text-faint; font-size: Theme.text-sm; vertical-alignment: center; }
-                            Rectangle { horizontal-stretch: 1; }
-                            Text { text: root.sources.length + ""; color: Theme.text-faint; font-size: Theme.text-sm; vertical-alignment: center; }
-                        }
-                        grid-view := ScrollView {
-                            vertical-stretch: 1;
-                            content-width: self.visible-width;
-                            content-height: root.grid-height;
-                            Rectangle {
-                            width: grid-view.visible-width;
-                            height: root.grid-height;
-                            for source[index] in root.sources : ModuleTile {
-                                x: mod(index, root.grid-columns) * (ModuleGrid.tile-width + ModuleGrid.gap);
-                                y: floor(index / root.grid-columns) * (ModuleGrid.tile-height + ModuleGrid.gap);
-                                name: source.name;
-                                kind: source.kind;
-                                waveform: source.waveform;
-                                pulse-width: source.pulse-width;
-                                amount: source.depth;
-                                phase: source.phase;
-                                fade-cycles: source.preview-fade-cycles;
-                                smoothing-cycles: source.preview-smoothing-cycles;
-                                attack: source.preview-attack;
-                                decay: source.preview-decay;
-                                sustain: source.preview-sustain;
-                                release: source.preview-release;
-                                steps: source.steps;
-                                step-length: source.step-length;
-                                math-op: source.math-op;
-                                output: source.output;
-                                selected: source.selected;
-                                armed: root.armed-slot == source.slot;
-                                position: index;
-                                count: root.sources.length;
-                                columns: root.grid-columns;
-                                clicked => { root.source-selected(source.slot); }
-                                reorder-requested(target) => { root.source-moved(source.slot, target); }
-                            }
-                            if root.sources.length == 0 : Text {
-                                width: grid-view.visible-width;
-                                height: ModuleGrid.tile-height;
-                                text: "No modules yet. Add one from the list on the right.";
-                                color: Theme.text-muted;
-                                font-size: Theme.text-md;
-                                horizontal-alignment: center;
-                                vertical-alignment: center;
-                                wrap: word-wrap;
-                            }
-                            }
-                        }
-                    }
+                    min-width: 120px;
                 }
 
                 // The control outlets every channel's generator publishes,

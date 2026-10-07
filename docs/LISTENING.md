@@ -562,3 +562,20 @@ knob. Open a 0.1.6 song with a saved layout: it should open as it was, with
 Modulation in the bottom pane. The device rack should have no shelf under
 it.
 
+
+### 41. The patch canvas (MOO-522): look, in the app
+
+Open a 0.1.6 song with modulation, press Ctrl+6 and zoom the Modulation
+pane. Its modules should sit in a grid where the old tiles were, each
+Envelope, Step and Random gated by a `gate` tag at the left edge naming its
+channel, a Math box wired from what it read, and every route as a tag under
+its box reading the parameter, the device and the depth. Then build the
+prototype's first example: a `gate  Kick 1` tag into an LFO's `retrigger`
+(click the inlet and pick the kick), the LFO's outlet clicked to arm it and
+Cutoff dragged up, then a Math box set to `* -0.5` wired from the LFO and
+armed onto Res. Play: the LFO should restart on every kick and Res should
+move against Cutoff. Drag boxes and tags, marquee two and drag them
+together, drag a tag's wire off its inlet onto nothing; each should be one
+undo. Wire the Math box's outlet back into the LFO's `rate`: the loop should
+play, and the wire it closes should carry a small bar at its inlet. Save,
+reopen, and everything should be where it was left.

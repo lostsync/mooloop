@@ -157,7 +157,7 @@ resolving it.
 
 ## 7. `modulation-shelf.slint`: one exported component for 1735 lines
 
-`ModulatorShape`, `StepBank`, `ModuleTile`, `OutletChip`, `RouteRow` and
+`ModulatorShape`, `StepBank`, `OutletChip`, `RouteRow` and
 `LedToggle` are all private to the file. The step-column math is written
 twice, once in `ModulatorShape`'s step preview and once in `StepBank`. The
 shelf is the fifth-largest `.slint` in the tree and almost none of it is

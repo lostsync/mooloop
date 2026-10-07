@@ -26,8 +26,12 @@ area, and where each behaviour stops.
   per control tick, in list order, before anything renders.
 - **The Modulation pane** is a view of its own: **View > Show Modulation**
   or **Ctrl+6** (`view.pane-modulation`). It opens in the bottom slot and
-  moves between panes like any other view. It holds a module grid that wraps
-  at the pane's width and scrolls; the OUTLETS of every channel that
+  moves between panes like any other view. It holds the song's patch canvas:
+  boxes where they were put, `gate` tags at the left edge, a tag under each
+  route naming its parameter, device and depth, and the wires; drag between
+  jacks to wire, click an outlet to arm Assign, click an inlet to pick what
+  feeds it, marquee and drag to move, Delete to remove. The canvas is larger
+  than the pane and scrolls. Beside it, the OUTLETS of every channel that
   publishes some, under the channel's name; an **Add** list on the right;
   the selected module's surface, with its name edited in its header; and
   beside it the selected source's routes from the whole song, each naming

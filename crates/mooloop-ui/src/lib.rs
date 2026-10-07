@@ -41,9 +41,12 @@ mod display_backend;
 mod plugin_gui;
 mod plugin_scan;
 mod plugin_ui;
+mod patch_canvas;
 mod pump_profile;
 #[cfg(test)]
 mod plugin_ui_tests;
+#[cfg(test)]
+mod patch_canvas_tests;
 #[cfg(test)]
 mod window_probe;
 mod meter;
@@ -4534,6 +4537,9 @@ struct UiState {
     /// remove and editor lookup the source rows already do by position.
     modulation_outlet_model: Rc<VecModel<ModulationOutletRow>>,
     modulation_route_model: Rc<VecModel<ModulationRouteRow>>,
+    /// The patch canvas's selection and the gesture under way on it: not
+    /// the song's, so not in the session (`patch_canvas.rs`).
+    patch_canvas: patch_canvas::CanvasState,
     mixer_strip_model: Rc<VecModel<MixerStripRow>>,
     /// Flattened sample-browser tree, rebuilt whenever locations or folder
     /// expansion change.
@@ -4799,6 +4805,7 @@ impl UiState {
             modulation_source_model,
             modulation_outlet_model,
             modulation_route_model,
+            patch_canvas: patch_canvas::CanvasState::default(),
             mixer_strip_model,
             browser_rows: browser_row_model,
             browser_tab: BrowserTab::default(),
@@ -6194,6 +6201,7 @@ impl UiState {
             window.set_modulation_selected_name(Default::default());
             window.set_modulation_selected_outlet_name(Default::default());
             window.set_modulation_selected_outlet_signal(Default::default());
+            self.publish_patch_canvas(window);
             return;
         };
 
@@ -6550,6 +6558,7 @@ impl UiState {
         // The effect rows carry the focused source's overlay amounts, so a
         // chip selection repaints markers without touching any base value.
         self.sync_effects();
+        self.publish_patch_canvas(window);
     }
 
     /// Re-draws what a modulation edit changed.
@@ -12973,6 +12982,8 @@ impl AppUi {
         // and a pointer-rotating move. The engine runs the same table over
         // its own routes and lanes for the same command.
         //
+        // The song patch canvas in the Modulation pane (song patch step 03).
+        patch_canvas::wire(&window, &state, &command_state);
         // Hosted plugins first: the browser's PLUGINS tab, the insert
         // menu's "Plugin…" row and the plugin face (MOO-83).
         plugin_ui::wire(

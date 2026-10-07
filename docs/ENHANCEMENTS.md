@@ -138,7 +138,7 @@ og drumsynth was simple but honestly sounded pretty good. why has simply updatin
 i want to move and redesign the modulation rack. i have an image somewhere, a mockup from chatgpt. ah its here: reference/img/mooloop-1.0-mockup.png
   **MOVED, 2026-10-06** (`docs/plans/archive/song-modulation/`). Modulation
   belongs to the song, a route reaches any channel or track, and the modules
-  have the Modulation pane (Ctrl+6), holding today's module grid. The
+  have the Modulation pane (Ctrl+6), holding the song patch canvas (song patch step 03). The
   redesign is still open: the mockup's tracker-shaped modulator is the
   `IDEAS.md` question (MOO-159), and the song-wide patching canvas Adam
   prototyped since is the Song Patch proposal
