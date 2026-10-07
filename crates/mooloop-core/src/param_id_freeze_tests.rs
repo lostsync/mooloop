@@ -670,6 +670,9 @@ const FROZEN: &[(Owner, &[(u32, &str)])] = &[
         (3, "Low"),
         (4, "High"),
     ]),
+    (Modulator(ModulatorKind::Counter), &[(0, "Length")]),
+    (Modulator(ModulatorKind::Select), &[(0, "Inputs")]),
+    (Modulator(ModulatorKind::Slew), &[(0, "Time")]),
 ];
 
 fn live(owner: Owner) -> &'static [crate::effect::ParamDescriptor] {

@@ -1944,6 +1944,7 @@ fn patch_control_cost() {
                     open: false,
                     rack: None,
                     params: if id == 0 || shape == "none" { lfo } else { math },
+                    text: String::new(),
                 })
                 .collect(),
             next_source_id: count,

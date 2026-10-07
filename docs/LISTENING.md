@@ -579,3 +579,21 @@ together, drag a tag's wire off its inlet onto nothing; each should be one
 undo. Wire the Math box's outlet back into the LFO's `rate`: the loop should
 play, and the wire it closes should carry a small bar at its inlet. Save,
 reopen, and everything should be where it was left.
+
+### 42. Typing a box, and the LFO sequence (MOO-523): listen, in the app
+
+In the Modulation pane, double-click empty canvas and type `lfo`, then Enter.
+Type three more the same way: `lfo tri 2hz`, `lfo saw 1/8` and `lfo sqr 4hz`.
+Then type `counter 4` and `select 4`. Wire the first LFO's outlet into the
+counter's `advance` (it stands in for the beat until step 06 brings the
+transport in). Wire the counter's `index` into the select's `index`, and the
+four LFOs into `a` to `d`. Click the select's outlet to arm it and drag a
+filter cutoff up. Play: the cutoff should move in four distinct shapes in
+turn, a new one each time the first LFO rises. Type `slew 0.2`, wire the
+select into it, click the select's Cutoff tag and press Delete, then arm
+the slew onto the cutoff: the change from one shape to the next should
+glide rather than jump. Double-click the
+counter and retype it `counter 2`: only `a` and `b` should play. Type
+`chord min7` somewhere: it should stay, outlined in red, doing nothing, and
+save and reopen as it was typed. Typing `*   -.5` should make a box that
+reads `* -0.5`.

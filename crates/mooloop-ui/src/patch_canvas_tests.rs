@@ -121,6 +121,35 @@ impl Harness {
         i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(16));
     }
 
+    /// Two clicks in one place, close enough together to be a double-click.
+    fn double_click(&self, point: (f32, f32)) {
+        let at = self.at(point);
+        let pos = LogicalPosition::new(at.0, at.1);
+        let w = self.window.window();
+        w.dispatch_event(WindowEvent::PointerMoved { position: pos });
+        for _ in 0..2 {
+            w.dispatch_event(WindowEvent::PointerPressed { position: pos, button: PointerEventButton::Left });
+            i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(16));
+            w.dispatch_event(WindowEvent::PointerReleased { position: pos, button: PointerEventButton::Left });
+            i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(16));
+        }
+    }
+
+    fn type_text(&self, text: &str) {
+        crate::window_probe::type_text(&self.window, text);
+    }
+
+    /// What each box on the canvas says, in list order.
+    fn boxes(&self) -> Vec<String> {
+        let st = self.state.borrow();
+        st.session
+            .modulation
+            .modules
+            .iter()
+            .map(|module| mooloop_core::box_text::spell(&module.params, &module.text))
+            .collect()
+    }
+
     fn key(&self, text: &str) {
         let text = slint::SharedString::from(text);
         self.window.window().dispatch_event(WindowEvent::KeyPressed { text: text.clone() });
@@ -218,6 +247,83 @@ fn a_click_on_an_inlet_opens_its_picker_and_a_pick_feeds_it() {
     assert_eq!(h.steps(), ["Patch wire"]);
 }
 
+#[test]
+fn a_double_click_on_empty_canvas_types_a_box_there() {
+    let (h, _) = harness();
+    h.double_click((600.0, 120.0));
+    let patch = h.window.global::<PatchView>();
+    assert!(patch.get_typing(), "the field opened");
+    assert_eq!(patch.get_words().row_count(), mooloop_core::box_text::VOCABULARY.len());
+    h.type_text("counter 4\n");
+    assert!(!patch.get_typing(), "Enter closed it");
+    assert_eq!(h.boxes(), ["lfo", "lfo", "* 1", "counter 4"]);
+    let st = h.state.borrow();
+    let counter = st.session.modulation.modules.last().unwrap();
+    assert_eq!(counter.at, CanvasPoint::new(600, 120));
+    drop(st);
+    assert_eq!(h.steps(), ["Type a box"]);
+}
+
+#[test]
+fn the_completion_list_picks_a_name_and_enter_makes_it() {
+    use slint::Model;
+    let (h, _) = harness();
+    h.double_click((600.0, 120.0));
+    let patch = h.window.global::<PatchView>();
+    h.type_text("s");
+    let names: Vec<String> = patch.get_words().iter().map(|word| word.name.to_string()).collect();
+    assert_eq!(names, ["step", "select", "slew"]);
+    h.type_text("\u{f701}");
+    assert_eq!(patch.get_word_active(), 1);
+    h.type_text("\n");
+    assert_eq!(h.boxes().last().map(String::as_str), Some("select 4"));
+}
+
+#[test]
+fn tab_completes_and_an_unknown_name_stays_as_typed() {
+    let (h, _) = harness();
+    h.double_click((600.0, 120.0));
+    h.type_text("cou\t");
+    let patch = h.window.global::<PatchView>();
+    assert_eq!(patch.get_typing_text(), "counter ");
+    h.type_text("8\n");
+    assert_eq!(h.boxes().last().map(String::as_str), Some("counter 8"));
+
+    h.double_click((600.0, 200.0));
+    h.type_text("chord min7\n");
+    assert_eq!(h.boxes().last().map(String::as_str), Some("chord min7"));
+    assert!(h.window.get_status_message().contains("not a box"), "{}", h.window.get_status_message());
+    let st = h.state.borrow();
+    assert_eq!(st.session.modulation.modules.last().unwrap().params, ModulatorParams::Unknown);
+}
+
+#[test]
+fn a_double_click_on_a_box_retypes_it_and_escape_leaves_it() {
+    let (h, [lfo, _, math]) = harness();
+    h.double_click((240.0, 54.0));
+    let patch = h.window.global::<PatchView>();
+    assert_eq!(patch.get_typing_text(), "lfo", "the field holds what the box says");
+    h.type_text("\u{1b}");
+    assert!(!patch.get_typing());
+    assert_eq!(h.boxes()[0], "lfo");
+
+    h.state.borrow_mut().session.rewire_patch(Jack::new(lfo, 0), Jack::new(math, 0)).unwrap();
+    h.double_click((240.0, 54.0));
+    // The field opens with its text selected, so typing replaces it.
+    h.type_text("slew 0.5\n");
+    assert_eq!(h.boxes()[0], "slew 0.5");
+    let st = h.state.borrow();
+    let slew = st.session.modulation.modules[0].id;
+    assert_ne!(slew, lfo, "a new kind is a new box");
+    assert_eq!(
+        st.session.modulation.wire_into(Jack::new(math, 0)).map(|wire| wire.from),
+        Some(Jack::new(slew, 0)),
+        "its outlet's wire followed it"
+    );
+    drop(st);
+    assert_eq!(h.steps(), ["Retype a box"]);
+}
+
 /// The prototype's first example drawn by the real window, written as a PPM
 /// to `MOOLOOP_PATCH_SNAPSHOT` for a look: `cargo test -p mooloop-ui --lib
 /// patch_canvas_snapshot -- --ignored`. `MOOLOOP_PATCH_SNAPSHOT_DOCK` set
@@ -255,6 +361,16 @@ fn patch_canvas_snapshot() {
         st.session.modulation.routes.push(ModRoute::from_module(math, ParamAddr::strip(EffectTarget::Channel(0), STRIP_PARAM_PAN), 0.5, ModPolarity::Bipolar));
         st.session.select_modulation_source(0);
         st.patch_canvas.selected = vec![patch_canvas::NodeKey::Node(lfo)];
+        // MOOLOOP_PATCH_SNAPSHOT_TYPING set: a field open with its list.
+        if let Ok(text) = std::env::var("MOOLOOP_PATCH_SNAPSHOT_TYPING") {
+            st.patch_canvas.typing = Some(patch_canvas::Typing {
+                at: (700.0, 30.0),
+                retype: None,
+                text: text.clone(),
+                active: 0,
+            });
+            window.global::<PatchView>().set_typing_text(text.into());
+        }
         st.refresh_modulation(&window);
     }
     if std::env::var("MOOLOOP_PATCH_SNAPSHOT_DOCK").is_err() {

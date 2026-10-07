@@ -130,6 +130,36 @@ from the step file:
 - **The route dots' reveal** (song modulation's *Open*) is not in this
   step; it is MOO-531.
 
+**04 (MOO-523).** Double-click empty canvas to type a box; double-click a
+box to retype it. `mooloop-core/src/box_text.rs` holds the vocabulary,
+`parse` and `spell`; a box keeps parameters and is spelled from them.
+`counter`, `select` and `slew` are new `ModulatorParams` variants with
+descriptors and DSP (`mooloop-dsp/src/modulator.rs`); the field and its
+completion list are in `patch-canvas.slint`. The shelf's Add list is gone.
+Where it differs from the step file:
+
+- **Today's Math is the arithmetic boxes; nothing converts.** `+ - * /
+  min max clip` are a Math module with that operator, which is what Math
+  already stored, so a 0.1.6 song's Math module reads as its box with no
+  conversion and the null test is untouched. Each gains an `operand` inlet
+  (port 1) whose wire replaces the typed operand; `clip` has none.
+- **Arguments read:** `lfo` takes a shape (`sin tri saw sqr rnd`) and a
+  rate as a division (`1/4`, `1/8t`, `1/4.`) or in hertz (`2hz`); `step` a
+  length; `slew` seconds or `ms`. A box spells back only the arguments that
+  differ from its defaults, so a plain LFO still reads `lfo`.
+- **An unknown box is outlined in red, not dashed** (Slint draws no
+  dashes), and says so in the status bar when made rather than on hover.
+  It saves its text (`text = "chord min7"`); a song from a later build with
+  a `kind` this one does not know opens with that box unknown, its text
+  kept, and a known kind it cannot read still refuses the song.
+- **A typed box starts unwired.** The Add list gated a new box from the
+  selected channel; typing does not.
+- **Retyping to another kind** keeps wires on jacks of the same name and
+  keeps routes when the new box has the outlet they read (`out`): an LFO
+  retyped to `slew` keeps both, retyped to `counter` (outlet `index`) loses
+  its routes.
+- `MAX_INLETS` is 9: a `select 8` has `index` and `a` to `h`.
+
 ## Adam's rulings
 
 | When | Ruling |

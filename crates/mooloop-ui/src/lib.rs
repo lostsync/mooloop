@@ -101,7 +101,7 @@ use mooloop_core::{
     GeneratorParams, GlideMode, HatCharacter,
     KickCharacter, Kit, LfoWave, LoopMode, ModDestinationDescriptor,
     ModPolarity, ModRandomTrigger, ModSourceRef, ModStepTrigger,
-    ControlRate, ControlTarget, ModulatorKind, ModulatorParams, OutletDescriptor,
+    ControlRate, ControlTarget, ModulatorParams, OutletDescriptor,
     PublishesOutlets, RecordFace, SendTap, Takeover, TransportControl,
     SignalShape,
     aux_in, AuxInParams, EdgeRefusal,
@@ -122,6 +122,9 @@ use mooloop_core::{
     MAX_POLY_VOICES, STRIP_DESCRIPTORS,
     TICKS_PER_64TH, TICKS_PER_BAR, TICKS_PER_STEP,
 };
+// The test modules take the kind from here; the app no longer adds by kind.
+#[cfg(test)]
+use mooloop_core::ModulatorKind;
 use mooloop_dsp::{
     buffer_allocation_key, build_effect_at_tempo, ChannelAudioSnapshot, Ds01, DrumSynth,
     IntegerDelay, SampleData, SpectrumAnalyzer,
@@ -6296,6 +6299,12 @@ impl UiState {
                     ModulatorParams::Math(math) => {
                         row.math_op = math.op.to_index();
                     }
+                    // Step 04's boxes have no surface on the shelf; step 05
+                    // opens a face on the box instead.
+                    ModulatorParams::Counter(_)
+                    | ModulatorParams::Select(_)
+                    | ModulatorParams::Slew(_)
+                    | ModulatorParams::Unknown => {}
                 }
                 row
             })
@@ -12565,54 +12574,6 @@ impl AppUi {
                     .into(),
                     None => "Modulation assignment off \u{2014} controls edit their base values".into(),
                 });
-            });
-        }
-        // One add verb for every kind: the menu chooses a `ModulatorKind`
-        // and the slot is filled from that kind's own defaults, so a new
-        // module family costs a menu entry rather than a callback.
-        {
-            let st = state.clone();
-            let commands = command_state.clone();
-            let weak = window.as_weak();
-            window.on_modulation_source_added(move |kind| {
-                let (Some(window), Some(kind)) = (weak.upgrade(), ModulatorKind::from_index(kind)) else {
-                    return;
-                };
-                let before = project_snapshot(&st.borrow(), &window);
-                {
-                    let mut state = st.borrow_mut();
-                    let sent = state.session.add_modulation_source(kind);
-                    if !sent {
-                        return;
-                    }
-                    state.modulation_edited(&window);
-                }
-                // History labels are `&'static str`, so the per-kind wording is a
-                // match rather than a format.
-                let (history, status) = match kind {
-                    ModulatorKind::Lfo => (
-                        "LFO added",
-                        "LFO added \u{2014} choose Assign when you are ready to route it",
-                    ),
-                    ModulatorKind::Envelope => (
-                        "Envelope added",
-                        "Envelope added \u{2014} choose its gate input, then Assign a destination",
-                    ),
-                    ModulatorKind::Step => (
-                        "Step sequencer added",
-                        "Step sequencer added \u{2014} drag the columns to draw a pattern",
-                    ),
-                    ModulatorKind::Random => (
-                        "Random source added",
-                        "Random source added \u{2014} choose Assign when you are ready to route it",
-                    ),
-                    ModulatorKind::Math => (
-                        "Math module added",
-                        "Math module added \u{2014} choose the module it reads, then Assign it",
-                    ),
-                };
-                record_project_history(&commands, before, &st, &window, history);
-                window.set_status_message(status.into());
             });
         }
         // One descriptor-addressed edit path for every modulator parameter.

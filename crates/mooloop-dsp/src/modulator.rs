@@ -680,8 +680,10 @@ struct MathSource {
 }
 
 impl MathSource {
-    fn value(&self, input: f32) -> f32 {
-        let operand = self.params.operand;
+    /// `input` against the box's operand, or against `operand` when a wire
+    /// feeds that inlet: a wire overrides the typed argument.
+    fn value(&self, input: f32, operand: Option<f32>) -> f32 {
+        let operand = operand.unwrap_or(self.params.operand);
         let raw = match self.params.op {
             ModMathOp::Add => input + operand,
             ModMathOp::Subtract => input - operand,
@@ -714,6 +716,29 @@ impl MathSource {
     }
 }
 
+/// Counts rises on its `advance` inlet and wraps at its length; its outlet
+/// is the count as `0..1` across the length (song patch step 04).
+#[derive(Debug, Clone, Copy)]
+struct Counter {
+    steps: u8,
+    index: u8,
+}
+
+impl Counter {
+    fn value(&self) -> f32 {
+        let last = self.steps.max(2) - 1;
+        f32::from(self.index.min(last)) / f32::from(last)
+    }
+}
+
+/// Follows its input, settling over its time: a one-pole step of
+/// `frames / (time * rate)` of the way each tick, the prototype's rule.
+#[derive(Debug, Clone, Copy)]
+struct Slew {
+    time_seconds: f32,
+    value: f32,
+}
+
 #[derive(Debug, Clone, Copy)]
 enum Source {
     Lfo(Lfo),
@@ -721,6 +746,12 @@ enum Source {
     Step(StepSequencer),
     Random(RandomSource),
     Math(MathSource),
+    Counter(Counter),
+    /// Its input count; what it passes is read from its inlets each tick.
+    Select(u8),
+    Slew(Slew),
+    /// A box this build does not know. It puts out nothing.
+    Silent,
 }
 
 /// One wire into an inlet, as the set reads it: the node it comes from (a
@@ -752,6 +783,16 @@ impl ModuleSpec {
             ModulatorParams::Step(params) => Source::Step(StepSequencer::new(params)),
             ModulatorParams::Random(params) => Source::Random(RandomSource::new(params, self.seed)),
             ModulatorParams::Math(params) => Source::Math(MathSource { params }),
+            ModulatorParams::Counter(params) => Source::Counter(Counter {
+                steps: params.steps,
+                index: 0,
+            }),
+            ModulatorParams::Select(params) => Source::Select(params.inputs),
+            ModulatorParams::Slew(params) => Source::Slew(Slew {
+                time_seconds: params.time_seconds,
+                value: 0.0,
+            }),
+            ModulatorParams::Unknown => Source::Silent,
         }
     }
 }
@@ -905,6 +946,15 @@ impl ModulatorSet {
                 }
             }
             (ModulatorParams::Math(next), Source::Math(math)) => math.params = next,
+            // A shortened counter folds its count back inside, as a step
+            // pattern's cursor does.
+            (ModulatorParams::Counter(next), Source::Counter(counter)) => {
+                counter.steps = next.steps;
+                counter.index %= next.steps.max(2);
+            }
+            (ModulatorParams::Select(next), Source::Select(inputs)) => *inputs = next.inputs,
+            (ModulatorParams::Slew(next), Source::Slew(slew)) => slew.time_seconds = next.time_seconds,
+            (ModulatorParams::Unknown, Source::Silent) => {}
             _ => module.source = module.spec.build(),
         }
     }
@@ -978,7 +1028,11 @@ impl ModulatorSet {
     /// - the Envelope's **gate** counts a gate tag's notes as it always has,
     ///   and holds while any other wire is at or above 0.5;
     /// - the LFO's **rate** adds the value in octaves, ±1 being ±2 octaves;
-    /// - Math's **in** is its operand.
+    /// - an arithmetic box's **in** is what it works on, and a wire into its
+    ///   **operand** replaces the typed one;
+    /// - a counter's **advance** and **reset** are triggers;
+    /// - a select's **index** picks among its inputs `a` to `h`, `0..1`
+    ///   across them; a slew follows its **in**.
     pub fn tick(
         &mut self,
         sample_rate: u32,
@@ -1090,7 +1144,34 @@ impl ModulatorSet {
                     }
                     value
                 }
-                Source::Math(math) => math.value(inlets[0].map_or(0.0, |signal| signal.value)),
+                Source::Math(math) => math.value(
+                    inlets[0].map_or(0.0, |signal| signal.value),
+                    inlets[1].map(|signal| signal.value),
+                ),
+                Source::Counter(counter) => {
+                    // A reset and an advance in one tick land on the first
+                    // count after the reset, as the Step's do.
+                    if fired[1] {
+                        counter.index = 0;
+                    }
+                    if fired[0] {
+                        counter.index = (counter.index + 1) % counter.steps.max(2);
+                    }
+                    counter.value()
+                }
+                Source::Select(inputs) => {
+                    let last = (*inputs).clamp(2, 8) - 1;
+                    let index = inlets[0].map_or(0.0, |signal| signal.value.clamp(0.0, 1.0));
+                    let pick = 1 + (index * f32::from(last)).round() as usize;
+                    inlets[pick].map_or(0.0, |signal| signal.value)
+                }
+                Source::Slew(slew) => {
+                    let target = inlets[0].map_or(0.0, |signal| signal.value);
+                    let span = slew.time_seconds.max(1.0e-3) * sample_rate.max(1) as f32;
+                    slew.value += (target - slew.value) * (frames as f32 / span).min(1.0);
+                    slew.value
+                }
+                Source::Silent => 0.0,
             };
             self.outputs[node] = value;
             self.signals[node] = Signal {
@@ -1108,7 +1189,12 @@ impl ModulatorSet {
                 Source::Lfo(lfo) => lfo.retrigger(),
                 Source::Step(sequencer) => sequencer.note_advance(),
                 Source::Random(random) => random.note_trigger(),
-                Source::Envelope(_) | Source::Math(_) => {}
+                Source::Envelope(_)
+                | Source::Math(_)
+                | Source::Counter(_)
+                | Source::Select(_)
+                | Source::Slew(_)
+                | Source::Silent => {}
             }
         }
     }
@@ -1917,5 +2003,136 @@ mod tests {
         changed.carry(0, &before, 0, false);
         changed.run(48_000, 0, 120.0);
         assert_eq!(changed.outputs()[0], 0.5);
+    }
+
+    /// Song patch step 04's boxes, each driven through its inlets as the
+    /// patch drives it: constant `+` boxes for values, a gate tag for
+    /// triggers.
+    mod vocabulary {
+        use super::super::{ModuleSpec as Spec, ModulatorSet, NoteGateEvents, SpecInlet};
+        use super::NO_GATES;
+        use mooloop_core::{
+            ModCounterParams, ModMathOp, ModMathParams, ModSelectParams, ModSlewParams,
+            ModulatorParams, MAX_INLETS,
+        };
+
+        fn constant(value: f32) -> Spec {
+            box_of(ModulatorParams::Math(ModMathParams {
+                op: ModMathOp::Add,
+                operand: value,
+                ..ModMathParams::default()
+            }), &[])
+        }
+
+        /// A box of `params` with `wires[port]` the node feeding each inlet.
+        fn box_of(params: ModulatorParams, wires: &[(usize, u16)]) -> Spec {
+            let mut inlets = [None; MAX_INLETS];
+            for &(port, node) in wires {
+                inlets[port] = Some(SpecInlet { node, delayed: false });
+            }
+            Spec { params, seed: 1, inlets }
+        }
+
+        fn note_on() -> [NoteGateEvents; mooloop_core::MAX_CHANNELS] {
+            let mut gates = NO_GATES;
+            gates[0].note_ons = 1;
+            gates
+        }
+
+        fn note_off() -> [NoteGateEvents; mooloop_core::MAX_CHANNELS] {
+            let mut gates = NO_GATES;
+            gates[0].note_offs = 1;
+            gates
+        }
+
+        /// The tag runs first, then the boxes in list order.
+        fn set(specs: Vec<Spec>, tags: usize) -> ModulatorSet {
+            let modules = specs.len() as u16;
+            let order: Vec<u16> = (modules..modules + tags as u16).chain(0..modules).collect();
+            ModulatorSet::new(specs, (0..tags).map(|_| Some(0)), order)
+        }
+
+        #[test]
+        fn a_counter_counts_notes_wraps_and_resets() {
+            // Node 1 is the gate tag, past the one box; it advances the
+            // counter, one count per NoteOn.
+            let counter = ModulatorParams::Counter(ModCounterParams { steps: 4 });
+            let mut set = set(vec![box_of(counter, &[(0, 1)])], 1);
+            let mut seen = Vec::new();
+            for _ in 0..5 {
+                set.tick(48_000, 32, 120.0, None, &note_on());
+                seen.push(set.outputs()[0]);
+                set.tick(48_000, 32, 120.0, None, &note_off());
+            }
+            let third = 1.0 / 3.0;
+            assert_eq!(seen, [third, 2.0 * third, 1.0, 0.0, third], "0..1 across four, then round");
+        }
+
+        #[test]
+        fn a_counter_resets_on_its_reset_inlet() {
+            let counter = ModulatorParams::Counter(ModCounterParams { steps: 8 });
+            // Advance and reset from the same tag: the reset lands first,
+            // then the advance, so a note on both reads the first count.
+            let mut set = set(vec![box_of(counter, &[(0, 1), (1, 1)])], 1);
+            set.tick(48_000, 32, 120.0, None, &note_on());
+            assert_eq!(set.outputs()[0], 1.0 / 7.0);
+        }
+
+        #[test]
+        fn a_select_passes_the_input_its_index_picks() {
+            // Nodes 0..4 are constants; node 4 is the select.
+            let values = [0.0, 0.1, 0.2, 0.3];
+            for (index, expected) in [(0.0, 0.1), (0.5, 0.2), (0.6, 0.2), (1.0, 0.3), (-1.0, 0.1)] {
+                let select = ModulatorParams::Select(ModSelectParams { inputs: 3 });
+                let mut specs: Vec<Spec> = values.iter().map(|value| constant(*value)).collect();
+                specs[0] = constant(index);
+                specs.push(box_of(select, &[(0, 0), (1, 1), (2, 2), (3, 3)]));
+                let mut set = set(specs, 0);
+                set.tick(48_000, 32, 120.0, None, &NO_GATES);
+                assert!((set.outputs()[4] - expected).abs() < 1e-6, "index {index}: {}", set.outputs()[4]);
+            }
+        }
+
+        #[test]
+        fn an_unwired_select_input_reads_zero() {
+            let select = ModulatorParams::Select(ModSelectParams { inputs: 2 });
+            let mut set = set(vec![constant(1.0), box_of(select, &[(0, 0)])], 0);
+            set.tick(48_000, 32, 120.0, None, &NO_GATES);
+            assert_eq!(set.outputs()[1], 0.0, "index 1 picks b, which nothing feeds");
+        }
+
+        #[test]
+        fn a_slew_settles_over_its_time() {
+            // 0.01 s at 48 kHz is 480 frames: fifteen 32-frame ticks.
+            let slew = ModulatorParams::Slew(ModSlewParams { time_seconds: 0.01 });
+            let mut set = set(vec![constant(1.0), box_of(slew, &[(0, 0)])], 0);
+            set.tick(48_000, 32, 120.0, None, &NO_GATES);
+            let first = set.outputs()[1];
+            assert!((first - 32.0 / 480.0).abs() < 1e-6, "{first}");
+            for _ in 0..200 {
+                set.tick(48_000, 32, 120.0, None, &NO_GATES);
+            }
+            assert!((set.outputs()[1] - 1.0).abs() < 1e-3, "settled: {}", set.outputs()[1]);
+        }
+
+        #[test]
+        fn a_wire_into_the_operand_replaces_the_typed_one() {
+            let times = ModulatorParams::Math(ModMathParams {
+                op: ModMathOp::Multiply,
+                operand: 0.5,
+                ..ModMathParams::default()
+            });
+            let mut set = set(vec![constant(0.8), constant(-0.25), box_of(times, &[(0, 0)]), box_of(times, &[(0, 0), (1, 1)])], 0);
+            set.tick(48_000, 32, 120.0, None, &NO_GATES);
+            assert!((set.outputs()[2] - 0.4).abs() < 1e-6, "typed: {}", set.outputs()[2]);
+            assert!((set.outputs()[3] + 0.2).abs() < 1e-6, "wired: {}", set.outputs()[3]);
+        }
+
+        #[test]
+        fn an_unknown_box_puts_out_nothing() {
+            let mut set = set(vec![constant(1.0), box_of(ModulatorParams::Unknown, &[])], 0);
+            set.tick(48_000, 32, 120.0, None, &NO_GATES);
+            assert_eq!(set.outputs()[1], 0.0);
+        }
     }
 }

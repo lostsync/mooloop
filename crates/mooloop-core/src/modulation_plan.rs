@@ -57,7 +57,7 @@ pub fn chain_index(scope: EffectTarget) -> Option<usize> {
 /// The most inlets a box has. Inlet storage is a fixed array so a module
 /// stays `Copy` on the audio thread; the jack table decides how many of
 /// them a kind uses.
-pub const MAX_INLETS: usize = 8;
+pub const MAX_INLETS: usize = 9;
 
 /// The wire into one inlet, as the engine reads it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -456,6 +456,7 @@ mod tests {
             open: false,
             rack: None,
             params,
+            text: String::new(),
         }
     }
 

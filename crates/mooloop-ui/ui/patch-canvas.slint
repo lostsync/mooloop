@@ -17,6 +17,9 @@ export struct PatchNodeRow {
     is-box: bool,
     // A box's text, in the mono face: `lfo`, `* -0.5`.
     spelling: string,
+    // A box whose name this build does not know: it keeps its text and
+    // does nothing, and its edge says so (Slint draws no dashes).
+    unknown: bool,
     // A tag's pieces: `gate  Kick 1`, or `Cutoff  ML-M1 9  +40%`.
     kind: string,
     name: string,
@@ -62,6 +65,12 @@ export struct PatchWireRow {
     mark-y: length,
 }
 
+// One name the box being typed could be, as the completion list shows it.
+export struct PatchWordRow {
+    name: string,
+    says: string,
+}
+
 export global PatchView {
     in property <[PatchNodeRow]> nodes;
     in property <[PatchJackRow]> jacks;
@@ -92,6 +101,22 @@ export global PatchView {
     callback key(string) -> bool;
     callback picked(int);
     callback menu-closed();
+    // Typing a box (song patch step 04): a field at (typing-x, typing-y),
+    // and below it the names that start with what is typed.
+    in property <bool> typing;
+    in property <length> typing-x;
+    in property <length> typing-y;
+    in-out property <string> typing-text;
+    in property <[PatchWordRow]> words;
+    in property <int> word-active;
+    // A double-click on the canvas at (x, y): on empty canvas it types a new
+    // box, on a box it retypes that box.
+    callback double-clicked(length, length);
+    callback typing-edited(string);
+    // Up, Down, Tab or Escape in the field; true when the canvas used it.
+    callback typing-key(string) -> bool;
+    callback typing-accepted(string);
+    callback word-picked(int);
 }
 
 global PatchColors {
@@ -227,7 +252,8 @@ export component PatchCanvas inherits Rectangle {
                 if node.is-box : Rectangle {
                     background: PatchColors.box;
                     border-width: node.selected || node.armed ? 2px : Theme.hairline;
-                    border-color: node.selected || node.armed ? Theme.accent : PatchColors.edge;
+                    border-color: node.selected || node.armed ? Theme.accent
+                        : node.unknown ? Theme.destructive : PatchColors.edge;
                     border-radius: Theme.radius-md;
                     Text {
                         x: 12px;
@@ -236,7 +262,7 @@ export component PatchCanvas inherits Rectangle {
                         text: node.spelling;
                         font-family: Theme.font-family-mono;
                         font-size: Theme.text-2xl;
-                        color: Theme.text;
+                        color: node.unknown ? Theme.text-muted : Theme.text;
                         vertical-alignment: center;
                         overflow: elide;
                     }
@@ -320,6 +346,121 @@ export component PatchCanvas inherits Rectangle {
                 moved => {
                     PatchView.moved(self.mouse-x, self.mouse-y);
                 }
+                double-clicked => {
+                    PatchView.double-clicked(self.mouse-x, self.mouse-y);
+                }
+            }
+
+            // The box being typed: a field where the double-click was (or
+            // over the box being retyped), and the names it could be.
+            if PatchView.typing : Rectangle {
+                x: min(PatchView.typing-x, world.width - 260px);
+                y: PatchView.typing-y;
+                width: 260px;
+                height: typing-list.preferred-height;
+                TouchArea { }
+                typing-list := VerticalLayout {
+                    spacing: 4px;
+                    Rectangle {
+                        height: 28px;
+                        width: 180px;
+                        background: PatchColors.box;
+                        border-width: 1px;
+                        border-color: Theme.accent;
+                        border-radius: Theme.radius-md;
+                        typing-keys := FocusScope {
+                            x: 10px;
+                            width: parent.width - 16px;
+                            height: parent.height;
+                            capture-key-pressed(event) => {
+                                // Escape is the field's own: it leaves.
+                                if event.text != Key.Escape && PatchView.typing-key(event.text) {
+                                    // Tab may have completed the name: type on
+                                    // after it, not where the cursor was.
+                                    typing-input.set-selection-offsets(
+                                        typing-input.text.character-count,
+                                        typing-input.text.character-count);
+                                    return accept;
+                                }
+                                return reject;
+                            }
+                            typing-input := TextInput {
+                                width: parent.width;
+                                height: parent.height;
+                                text <=> PatchView.typing-text;
+                                font-family: Theme.font-family-mono;
+                                font-size: Theme.text-2xl;
+                                color: Theme.text;
+                                vertical-alignment: center;
+                                single-line: true;
+                                accessible-role: text-input;
+                                accessible-label: "Box";
+                                init => {
+                                    self.focus();
+                                    self.set-selection-offsets(0, self.text.character-count);
+                                }
+                                edited => {
+                                    PatchView.typing-edited(self.text);
+                                }
+                                accepted => {
+                                    PatchView.typing-accepted(self.text);
+                                }
+                                // Escape makes nothing and gives the keys back
+                                // to the canvas, so Space plays again.
+                                key-pressed(event) => {
+                                    if event.text == Key.Escape {
+                                        PatchView.typing-key(event.text);
+                                        self.clear-focus();
+                                        return accept;
+                                    }
+                                    return reject;
+                                }
+                            }
+                        }
+                    }
+                    if PatchView.words.length > 0 : Rectangle {
+                        background: Theme.surface-raised;
+                        border-width: Theme.hairline;
+                        border-color: PatchColors.edge;
+                        border-radius: Theme.radius-lg;
+                        drop-shadow-blur: 12px;
+                        drop-shadow-color: #00000060;
+                        height: word-list.preferred-height;
+                        word-list := VerticalLayout {
+                            padding: 4px;
+                            spacing: 1px;
+                            for word[index] in PatchView.words : Rectangle {
+                                height: 20px;
+                                border-radius: Theme.radius-sm;
+                                background: index == PatchView.word-active || word-touch.has-hover
+                                    ? Theme.surface-active : transparent;
+                                Text {
+                                    x: 6px;
+                                    width: 56px;
+                                    height: parent.height;
+                                    text: word.name;
+                                    color: Theme.text;
+                                    font-family: Theme.font-family-mono;
+                                    font-size: Theme.text-lg;
+                                    vertical-alignment: center;
+                                }
+                                Text {
+                                    x: 66px;
+                                    width: parent.width - 72px;
+                                    height: parent.height;
+                                    text: word.says;
+                                    color: Theme.text-muted;
+                                    font-size: Theme.text-md;
+                                    vertical-alignment: center;
+                                    overflow: elide;
+                                }
+                                word-touch := TouchArea {
+                                    clicked => { PatchView.word-picked(index); }
+                                }
+                            }
+                        }
+                    }
+                }
             }
 
             // The inlet picker, over the canvas at the inlet. Its rows take
@@ -373,7 +514,7 @@ export component PatchCanvas inherits Rectangle {
     if PatchView.empty : Text {
         width: root.width;
         height: root.height;
-        text: "No boxes yet. Add one from the list on the right.";
+        text: "No boxes yet. Double-click to type one: lfo, counter 4, * -0.5.";
         color: Theme.text-muted;
         font-size: Theme.text-md;
         horizontal-alignment: center;

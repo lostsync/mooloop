@@ -13,7 +13,7 @@
 
 use crate::{project_snapshot, record_project_history, CommandState, MainWindow, UiState};
 use mooloop_core::{
-    CanvasPoint, InletSource, Jack, JackSort, ModMathOp, ModSourceId, ModSourceRef,
+    CanvasPoint, InletSource, Jack, JackSort, ModSourceId, ModSourceRef,
     ModulatorParams, ParamAddr, Port, SongModulation, TagKind,
 };
 use mooloop_session::modulation::{PatchFeed, PatchRefusal};
@@ -98,7 +98,7 @@ pub(crate) struct Anchor {
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum Face {
     /// A box: its spelling in the mono face.
-    Box { spelling: String },
+    Box { spelling: String, unknown: bool },
     /// A tag: an arrow pointing right (a source, its outlet at the point) or
     /// left (a sink, its inlet at the point).
     Tag {
@@ -214,42 +214,9 @@ pub(crate) struct RouteLabel {
     pub device: String,
 }
 
-/// How `params` reads on its box: the five kinds by name, a Math box as the
-/// sum it does, `* -0.5`.
-pub(crate) fn spelling(params: &ModulatorParams) -> String {
-    match params {
-        ModulatorParams::Lfo(_) => "lfo".into(),
-        ModulatorParams::Envelope(_) => "env".into(),
-        ModulatorParams::Step(_) => "step".into(),
-        ModulatorParams::Random(_) => "random".into(),
-        ModulatorParams::Math(math) => {
-            let operand = format_number(math.operand);
-            match math.op {
-                ModMathOp::Add => format!("+ {operand}"),
-                ModMathOp::Subtract => format!("- {operand}"),
-                ModMathOp::Multiply => format!("* {operand}"),
-                ModMathOp::Divide => format!("/ {operand}"),
-                ModMathOp::Min => format!("min {operand}"),
-                ModMathOp::Max => format!("max {operand}"),
-                ModMathOp::Clamp => format!(
-                    "clamp {} {}",
-                    format_number(math.clamp_low),
-                    format_number(math.clamp_high)
-                ),
-            }
-        }
-    }
-}
-
-/// A number as a box spells it: at most two decimals, no trailing zeros.
-fn format_number(value: f32) -> String {
-    let text = format!("{value:.2}");
-    let text = text.trim_end_matches('0').trim_end_matches('.');
-    if text == "-0" {
-        "0".into()
-    } else {
-        text.into()
-    }
+/// How a box reads on the canvas: [`mooloop_core::box_text::spell`].
+pub(crate) fn spelling(params: &ModulatorParams, text: &str) -> String {
+    mooloop_core::box_text::spell(params, text)
 }
 
 fn text_width(text: &str, char_width: f32) -> f32 {
@@ -290,8 +257,9 @@ pub(crate) fn lay_out(
 ) -> Layout {
     let mut nodes = Vec::new();
     for module in &song.modules {
-        let ports = module.params.kind().ports();
-        let spelling = spelling(&module.params);
+        let ports = module.params.ports();
+        let spelling = spelling(&module.params, &module.text);
+        let unknown = module.params == ModulatorParams::Unknown;
         let jacks = ports.inlets.len().max(ports.outlets.len()) as f32;
         let width = (26.0 + text_width(&spelling, MONO_CHAR))
             .max(64.0)
@@ -304,7 +272,7 @@ pub(crate) fn lay_out(
             y: module.at.y as f32 + dy,
             width,
             height: BOX_HEIGHT,
-            face: Face::Box { spelling },
+            face: Face::Box { spelling, unknown },
             inlets: ports.inlets.to_vec(),
             outlets: ports.outlets.to_vec(),
         });
@@ -716,6 +684,40 @@ pub(crate) struct CanvasState {
     pub wire: Option<WireKey>,
     pub drag: Drag,
     pub picking: Option<Jack>,
+    pub typing: Option<Typing>,
+}
+
+/// A box being typed (song patch step 04): where its field is, the box it
+/// retypes if any, what is typed so far, and which completion is lit.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct Typing {
+    pub at: (f32, f32),
+    pub retype: Option<ModSourceId>,
+    pub text: String,
+    pub active: usize,
+}
+
+impl Typing {
+    /// The names the field could complete to: none once a space shows the
+    /// name is done.
+    pub(crate) fn words(&self) -> Vec<mooloop_core::box_text::Word> {
+        if self.text.contains(char::is_whitespace) && !self.text.trim().is_empty() {
+            return Vec::new();
+        }
+        mooloop_core::box_text::completions(&self.text).collect()
+    }
+
+    /// What Enter makes: the text as typed once it has settings or names a
+    /// box outright, else the lit completion, as the prototype does.
+    pub(crate) fn entered(&self) -> String {
+        let text = self.text.trim();
+        let words = self.words();
+        let exact = words.iter().any(|word| word.name == text);
+        match words.get(self.active) {
+            Some(word) if !exact && !text.contains(char::is_whitespace) => word.name.to_string(),
+            _ => text.to_string(),
+        }
+    }
 }
 
 /// What a gesture asks of the song when it ends.
@@ -756,6 +758,7 @@ impl CanvasState {
     /// A press at `(x, y)`.
     pub(crate) fn press(&mut self, layout: &Layout, x: f32, y: f32, shift: bool) -> Edit {
         self.picking = None;
+        self.typing = None;
         let hit = layout.hit(x, y);
         let mut edit = Edit::None;
         match hit {
@@ -903,6 +906,33 @@ impl CanvasState {
         }
     }
 
+    /// A double-click at `(x, y)`: on empty canvas, a field to type a new
+    /// box there; on a box, a field over it holding what it says, to retype
+    /// it. Anywhere else, nothing. Returns whether a field opened.
+    pub(crate) fn double_click(&mut self, layout: &Layout, song: &SongModulation, x: f32, y: f32) -> bool {
+        self.typing = match layout.hit(x, y) {
+            Hit::Empty => Some(Typing {
+                at: (x.round(), y.round()),
+                retype: None,
+                text: String::new(),
+                active: 0,
+            }),
+            Hit::Node(NodeKey::Node(id)) => song.module(id).map(|module| Typing {
+                at: (module.at.x as f32, module.at.y as f32),
+                retype: Some(id),
+                text: spelling(&module.params, &module.text),
+                active: 0,
+            }),
+            // A jack or a wire: two clicks there are two clicks, so a
+            // double-click on an outlet arms and disarms it.
+            _ => None,
+        };
+        if self.typing.is_some() {
+            self.drag = Drag::None;
+        }
+        self.typing.is_some()
+    }
+
     /// The pointer's wire while one is being drawn, and the inlet it would
     /// land in with whether the song takes it there.
     pub(crate) fn loose_wire(&self, layout: &Layout, song: &SongModulation) -> Option<LooseWire> {
@@ -1003,9 +1033,10 @@ impl UiState {
                 ..Default::default()
             };
             match &node.face {
-                Face::Box { spelling } => {
+                Face::Box { spelling, unknown } => {
                     row.is_box = true;
                     row.spelling = spelling.into();
+                    row.unknown = *unknown;
                 }
                 Face::Tag {
                     points_right,
@@ -1113,7 +1144,25 @@ impl UiState {
             }
             None => patch.set_menu_open(false),
         }
-        patch.set_empty(layout.nodes.is_empty());
+        match &canvas.typing {
+            Some(typing) => {
+                let words: Vec<crate::PatchWordRow> = typing
+                    .words()
+                    .into_iter()
+                    .map(|word| crate::PatchWordRow {
+                        name: word.name.into(),
+                        says: word.says.into(),
+                    })
+                    .collect();
+                patch.set_words(ModelRc::new(VecModel::from(words)));
+                patch.set_word_active(typing.active as i32);
+                patch.set_typing_x(typing.at.0);
+                patch.set_typing_y(typing.at.1);
+                patch.set_typing(true);
+            }
+            None => patch.set_typing(false),
+        }
+        patch.set_empty(layout.nodes.is_empty() && canvas.typing.is_none());
     }
 }
 
@@ -1296,6 +1345,62 @@ fn delete_selection(
     true
 }
 
+/// Make what the field holds, as one edit: a new box, or the box being
+/// retyped made over. Says in the status bar what came of it.
+fn commit_typing(
+    state: &Rc<RefCell<UiState>>,
+    commands: &Rc<RefCell<CommandState>>,
+    window: &MainWindow,
+    text: &str,
+) {
+    let Some(typing) = state.borrow_mut().patch_canvas.typing.take() else {
+        return;
+    };
+    let text = text.trim().to_string();
+    let before = project_snapshot(&state.borrow(), window);
+    let made = {
+        let mut st = state.borrow_mut();
+        let made = match typing.retype {
+            Some(id) => st.session.retype_patch_box(id, &text),
+            None => st.session.type_patch_box(
+                &text,
+                CanvasPoint::new(typing.at.0 as i32, typing.at.1 as i32),
+            ),
+        };
+        match made {
+            Some(id) => {
+                st.patch_canvas.selected = vec![NodeKey::Node(id)];
+                st.patch_canvas.wire = None;
+                st.modulation_edited(window);
+            }
+            None => st.publish_patch_canvas(window),
+        }
+        made
+    };
+    let Some(id) = made else {
+        return;
+    };
+    let label = if typing.retype.is_some() {
+        "Retype a box"
+    } else {
+        "Type a box"
+    };
+    record_project_history(commands, before, state, window, label);
+    let st = state.borrow();
+    let Some(module) = st.session.modulation.module(id) else {
+        return;
+    };
+    let spelled = spelling(&module.params, &module.text);
+    window.set_status_message(
+        if module.params == ModulatorParams::Unknown {
+            format!("\u{201c}{spelled}\u{201d} is not a box this build knows, so it does nothing")
+        } else {
+            format!("Made {spelled}")
+        }
+        .into(),
+    );
+}
+
 /// Install the canvas's handlers: the pointer, the keys it takes while it
 /// has the focus, and the inlet picker.
 pub(crate) fn wire(
@@ -1437,6 +1542,107 @@ pub(crate) fn wire(
     {
         let st = state.clone();
         let weak = window.as_weak();
+        patch.on_double_clicked(move |x, y| {
+            let Some(window) = weak.upgrade() else { return };
+            let mut state = st.borrow_mut();
+            let layout = state.patch_layout();
+            let UiState {
+                patch_canvas,
+                session,
+                ..
+            } = &mut *state;
+            if patch_canvas.double_click(&layout, &session.modulation, x, y) {
+                let text = patch_canvas.typing.as_ref().map(|typing| typing.text.clone());
+                window
+                    .global::<crate::PatchView>()
+                    .set_typing_text(text.unwrap_or_default().into());
+                state.publish_patch_canvas(&window);
+            }
+        });
+    }
+    {
+        let st = state.clone();
+        let weak = window.as_weak();
+        patch.on_typing_edited(move |text| {
+            let Some(window) = weak.upgrade() else { return };
+            let mut state = st.borrow_mut();
+            if let Some(typing) = &mut state.patch_canvas.typing {
+                typing.text = text.to_string();
+                typing.active = 0;
+            }
+            state.publish_patch_canvas(&window);
+        });
+    }
+    {
+        let st = state.clone();
+        let weak = window.as_weak();
+        patch.on_typing_key(move |key| {
+            let Some(window) = weak.upgrade() else {
+                return false;
+            };
+            let mut state = st.borrow_mut();
+            let Some(typing) = &mut state.patch_canvas.typing else {
+                return false;
+            };
+            let words = typing.words();
+            match key.as_str() {
+                // Slint's Up and Down arrows.
+                "\u{f700}" => typing.active = typing.active.saturating_sub(1),
+                "\u{f701}" => typing.active = (typing.active + 1).min(words.len().saturating_sub(1)),
+                "\t" => {
+                    let Some(word) = words.get(typing.active) else {
+                        return true;
+                    };
+                    typing.text = format!("{} ", word.name);
+                    let text = typing.text.clone();
+                    window
+                        .global::<crate::PatchView>()
+                        .set_typing_text(text.into());
+                }
+                "\u{1b}" => state.patch_canvas.typing = None,
+                _ => return false,
+            }
+            state.publish_patch_canvas(&window);
+            true
+        });
+    }
+    {
+        let st = state.clone();
+        let commands = commands.clone();
+        let weak = window.as_weak();
+        patch.on_typing_accepted(move |text| {
+            let Some(window) = weak.upgrade() else { return };
+            let entered = {
+                let mut state = st.borrow_mut();
+                let Some(typing) = &mut state.patch_canvas.typing else {
+                    return;
+                };
+                typing.text = text.to_string();
+                typing.entered()
+            };
+            commit_typing(&st, &commands, &window, &entered);
+        });
+    }
+    {
+        let st = state.clone();
+        let commands = commands.clone();
+        let weak = window.as_weak();
+        patch.on_word_picked(move |index| {
+            let Some(window) = weak.upgrade() else { return };
+            let word = st
+                .borrow()
+                .patch_canvas
+                .typing
+                .as_ref()
+                .and_then(|typing| typing.words().get(index as usize).copied());
+            if let Some(word) = word {
+                commit_typing(&st, &commands, &window, word.name);
+            }
+        });
+    }
+    {
+        let st = state.clone();
+        let weak = window.as_weak();
         patch.on_menu_closed(move || {
             let Some(window) = weak.upgrade() else { return };
             let mut state = st.borrow_mut();
@@ -1450,7 +1656,7 @@ pub(crate) fn wire(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mooloop_core::{ChannelId, ModLfoParams, ModMathParams, ModulatorKind, SongModule, Wire};
+    use mooloop_core::{ChannelId, ModLfoParams, ModMathOp, ModMathParams, ModulatorKind, SongModule, Wire};
 
     fn module(id: u32, params: ModulatorParams, at: (i32, i32)) -> SongModule {
         SongModule {
@@ -1461,6 +1667,7 @@ mod tests {
             open: false,
             rack: None,
             params,
+            text: String::new(),
         }
     }
 
@@ -1518,20 +1725,37 @@ mod tests {
     }
 
     #[test]
+    fn enter_takes_the_lit_name_until_the_typing_is_a_box_of_its_own() {
+        let typing = |text: &str, active| Typing {
+            at: (0.0, 0.0),
+            retype: None,
+            text: text.into(),
+            active,
+        };
+        assert_eq!(typing("s", 1).entered(), "select", "the lit completion");
+        assert_eq!(typing("step", 0).entered(), "step", "a whole name stands");
+        assert_eq!(typing("min", 1).entered(), "min", "even when another is lit");
+        assert_eq!(typing("counter 8", 0).entered(), "counter 8", "settings: as typed");
+        assert_eq!(typing("chord", 0).entered(), "chord", "nothing to complete");
+        assert!(typing("counter 8", 0).words().is_empty(), "the name is done");
+        assert_eq!(typing("", 0).words().len(), mooloop_core::box_text::VOCABULARY.len());
+    }
+
+    #[test]
     fn boxes_spell_what_they_do() {
         let math = |op, operand| {
             spelling(&ModulatorParams::Math(ModMathParams {
                 op,
                 operand,
                 ..ModMathParams::default()
-            }))
+            }), "")
         };
         assert_eq!(math(ModMathOp::Multiply, -0.5), "* -0.5");
         assert_eq!(math(ModMathOp::Add, 1.0), "+ 1");
         assert_eq!(math(ModMathOp::Min, 0.25), "min 0.25");
         assert_eq!(math(ModMathOp::Divide, -0.0001), "/ 0");
         assert_eq!(
-            spelling(&ModulatorParams::Lfo(ModLfoParams::default())),
+            spelling(&ModulatorParams::Lfo(ModLfoParams::default()), ""),
             "lfo"
         );
         assert_eq!(ModulatorKind::Lfo.ports().inlets.len(), 2);

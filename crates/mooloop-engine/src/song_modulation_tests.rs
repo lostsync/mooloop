@@ -90,6 +90,7 @@ fn song(steps: &[u32], bars: u16, lfo: ModLfoParams, destinations: &[Drives]) ->
         open: false,
         rack: None,
         params: ModulatorParams::Lfo(lfo),
+        text: String::new(),
     });
     project.modulation.next_source_id = 2;
     for destination in destinations {
@@ -260,6 +261,7 @@ fn a_set_grown_past_what_it_held_installs_without_allocating() {
                 rate_hz: 0.5 + id as f32 * 0.1,
                 ..ModLfoParams::default()
             }),
+            text: String::new(),
         });
         for destination in [
             ParamAddr::strip(EffectTarget::Channel(0), STRIP_PARAM_VOLUME),

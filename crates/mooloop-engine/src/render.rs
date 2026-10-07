@@ -14417,6 +14417,7 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
                 open: false,
                 rack: None,
                 params: mooloop_core::ModulatorParams::Lfo(mooloop_core::ModLfoParams::default()),
+                text: String::new(),
             }],
             routes: vec![mooloop_core::ModRoute::from_module(
                 mooloop_core::ModSourceId(1),
@@ -16245,6 +16246,7 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
                     phase,
                     ..mooloop_core::ModLfoParams::default()
                 }),
+                text: String::new(),
             });
         }
         let mut render = RenderState::from_project(48_000, &project, &[]);

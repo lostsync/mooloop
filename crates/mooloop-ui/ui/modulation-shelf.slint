@@ -563,9 +563,6 @@ export component ModulationShelf inherits Rectangle {
     // reorders, so the destination is a grid position rather than a slot.
     callback source-moved(int, int);
     callback assignment-toggled();
-    // One add verb for every kind, carrying `ModulatorKind::to_index`. The
-    // menu grew from two entries to five without growing the contract.
-    callback source-added(int);
     // One descriptor-addressed edit path: (slot, id, value). The edit-started
     // / edit-finished pair brackets knob drags so a gesture lands as one undo
     // step; discrete edits arrive bare and record individually.
@@ -596,18 +593,6 @@ export component ModulationShelf inherits Rectangle {
     pure function jack-label(kind: int) -> string {
         return kind == 0 ? "RESET" : kind == 1 ? "GATE" : kind == 4 ? "INPUT" : "CLOCK";
     }
-    pure function kind-badge(kind: int) -> string {
-        return kind == 0 ? "LFO" : kind == 1 ? "ENV" : kind == 2 ? "STEP"
-            : kind == 3 ? "RND" : "MATH";
-    }
-    pure function kind-tooltip(kind: int) -> string {
-        return kind == 0 ? "Add a low-frequency oscillator"
-            : kind == 1 ? "Add a gate-driven ADSR envelope"
-            : kind == 2 ? "Add a clocked step pattern"
-            : kind == 3 ? "Add a sample-and-hold random source"
-            : "Add a math module that reads another module";
-    }
-
     border-width: Theme.hairline;
     border-color: root.assigning ? Theme.accent : Theme.border;
     border-radius: Theme.radius-md;
@@ -721,27 +706,6 @@ export component ModulationShelf inherits Rectangle {
                                     }
                                 }
                             }
-                        }
-                    }
-                }
-
-                // What can be added, as a narrow list on the right: one entry
-                // per kind, always there, so adding never covers the grid.
-                Rectangle {
-                    width: 72px;
-                    border-width: Theme.hairline;
-                    border-color: Theme.border;
-                    background: Theme.panel;
-                    VerticalLayout {
-                        padding: 4px;
-                        spacing: 3px;
-                        alignment: start;
-                        Text { height: 10px; text: "ADD"; color: Theme.text-faint; font-size: Theme.text-sm; vertical-alignment: center; }
-                        for kind in [0, 1, 2, 3, 4] : ToolButton {
-                            min-height: 18px; max-height: 18px;
-                            text: root.kind-badge(kind);
-                            tooltip: root.kind-tooltip(kind);
-                            clicked => { root.source-added(kind); }
                         }
                     }
                 }

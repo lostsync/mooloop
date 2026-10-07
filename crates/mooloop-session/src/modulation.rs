@@ -411,6 +411,9 @@ impl Session {
         if module.params.get(id) == previous {
             return false;
         }
+        // A select set to fewer inputs, or an arithmetic box made a clip,
+        // loses the jacks it no longer has and the wires in them.
+        self.modulation.drop_dead_wires();
         if self.gesture_open() {
             self.gesture_changed = true;
         }
@@ -469,6 +472,127 @@ impl Session {
         let id = self.modulation.modules.last()?.id;
         self.modulation.move_node(id, at);
         Some(id)
+    }
+
+    /// Makes the box `text` names at `at`, unwired (song patch step 04): its
+    /// first word is the box and what follows its settings
+    /// ([`mooloop_core::box_text::parse`]). A name the vocabulary does not
+    /// have makes an unknown box that keeps `text`. `None` for empty text.
+    pub fn type_patch_box(&mut self, text: &str, at: CanvasPoint) -> Option<ModSourceId> {
+        let text = text.trim();
+        if text.is_empty() {
+            return None;
+        }
+        let params = mooloop_core::box_text::parse(text).unwrap_or(ModulatorParams::Unknown);
+        let (home, name) = self
+            .channels
+            .get(self.selected)
+            .map(|channel| (channel.id, channel.name.clone()))
+            .unwrap_or_default();
+        let id = self
+            .modulation
+            .add_module(params, InputSource::None, home, &name);
+        let module = self.modulation.module_mut(id)?;
+        module.at = at;
+        if params == ModulatorParams::Unknown {
+            module.text = text.to_string();
+        }
+        self.modulation_selected.set(Some(ModSourceRef::Id(id)));
+        Some(id)
+    }
+
+    /// Retypes box `id` to what `text` names. A box that stays its kind
+    /// keeps its identity and takes the new settings, losing only the wires
+    /// into jacks it no longer has. A box that becomes another kind is a new
+    /// box in its place, with a new id: each wire follows it onto the jack
+    /// of the same name, if it has one, and its routes follow it if it
+    /// still has the outlet they came from. Returns the box's id after, or
+    /// `None` when nothing changed (or `text` is empty).
+    pub fn retype_patch_box(&mut self, id: ModSourceId, text: &str) -> Option<ModSourceId> {
+        let text = text.trim();
+        let old = self.modulation.module(id)?.clone();
+        if text.is_empty() {
+            return None;
+        }
+        let params = mooloop_core::box_text::parse(text).unwrap_or(ModulatorParams::Unknown);
+        let unknown_text = if params == ModulatorParams::Unknown {
+            text.to_string()
+        } else {
+            String::new()
+        };
+        if params.kind() == old.params.kind() {
+            if params == old.params && unknown_text == old.text {
+                return None;
+            }
+            let module = self.modulation.module_mut(id)?;
+            module.params = params;
+            module.text = unknown_text;
+            self.modulation.drop_dead_wires();
+            return Some(id);
+        }
+        let (home, name) = self
+            .channels
+            .get(self.selected)
+            .map(|channel| (channel.id, channel.name.clone()))
+            .unwrap_or_default();
+        let new = self
+            .modulation
+            .add_module(params, InputSource::None, home, &name);
+        // In the old box's place: on the canvas, and in the list, which is
+        // the order the boxes are listed and tie-broken in.
+        let index = self.modulation.modules.iter().position(|module| module.id == id)?;
+        let mut module = self.modulation.modules.pop()?;
+        module.at = old.at;
+        module.text = unknown_text;
+        self.modulation.modules.insert(index, module);
+        // Wires, by jack name.
+        let (before, after) = (old.params.ports(), params.ports());
+        let same = |from: Option<mooloop_core::Port>, ports: &[mooloop_core::Port]| {
+            from.and_then(|port| ports.iter().position(|other| other.name == port.name))
+                .and_then(|port| u8::try_from(port).ok())
+        };
+        let mut wires = Vec::new();
+        for wire in &self.modulation.wires {
+            let mut wire = *wire;
+            if wire.to.node == id {
+                let Some(port) = same(before.inlet(wire.to.port), after.inlets) else {
+                    continue;
+                };
+                wire.to = Jack::new(new, port);
+            }
+            if wire.from.node == id {
+                let Some(port) = same(before.outlet(wire.from.port), after.outlets) else {
+                    continue;
+                };
+                wire.from = Jack::new(new, port);
+            }
+            wires.push(wire);
+        }
+        self.modulation.wires = wires;
+        // Routes, if the outlet they read is still there.
+        let follows = same(before.outlet(0), after.outlets).is_some();
+        let (from, to) = (ModSourceRef::Id(id), ModSourceRef::Id(new));
+        if follows {
+            for route in &mut self.modulation.routes {
+                if route.source == from {
+                    route.source = to;
+                }
+            }
+            for place in &mut self.modulation.route_places {
+                if place.source == from {
+                    place.source = to;
+                }
+            }
+        }
+        self.modulation.route_places.retain(|place| place.source != from);
+        self.modulation.remove_module(id);
+        if self.modulation_selected.get() == Some(from) {
+            self.modulation_selected.set(Some(to));
+        }
+        if self.modulation_armed.get() == Some(from) {
+            self.modulation_armed.set(follows.then_some(to));
+        }
+        Some(new)
     }
 
     /// Moves boxes and tags on the canvas, all of them as one edit: a drag
@@ -1021,6 +1145,92 @@ mod tests {
         assert!(session.modulation.wires.is_empty());
         assert!(session.remove_patch_node(notes));
         assert!(!session.remove_patch_node(notes));
+    }
+
+    /// Typing makes the box its first word names, with what follows as its
+    /// settings and no wires; a name the vocabulary lacks makes an unknown
+    /// box that keeps what was typed.
+    #[test]
+    fn typing_makes_the_box_it_names() {
+        use mooloop_core::box_text::spell;
+        let mut session = Session::default();
+        assert_eq!(session.type_patch_box("   ", CanvasPoint::new(0, 0)), None);
+        let times = session
+            .type_patch_box("*   -.5", CanvasPoint::new(40, 60))
+            .unwrap();
+        let module = session.modulation.module(times).unwrap();
+        assert_eq!(spell(&module.params, &module.text), "* -0.5");
+        assert_eq!(module.at, CanvasPoint::new(40, 60));
+        assert!(session.modulation.wires.is_empty(), "a typed box starts unwired");
+        assert_eq!(
+            session.modulation_selected.get(),
+            Some(ModSourceRef::Id(times))
+        );
+
+        let chord = session
+            .type_patch_box("chord min7", CanvasPoint::new(40, 120))
+            .unwrap();
+        let module = session.modulation.module(chord).unwrap();
+        assert_eq!(module.params, ModulatorParams::Unknown);
+        assert_eq!(spell(&module.params, &module.text), "chord min7");
+    }
+
+    /// Retyping within a kind keeps the box and drops only the wires into
+    /// jacks it lost; retyping to another kind is a new box that takes the
+    /// wires on jacks of the same name, and the routes when it keeps the
+    /// outlet they read.
+    #[test]
+    fn retyping_keeps_what_still_fits() {
+        use mooloop_core::{EffectTarget, ParamAddr, STRIP_PARAM_VOLUME};
+        let mut session = Session::default();
+        let at = |x| CanvasPoint::new(x, 40);
+        let lfo = session.type_patch_box("lfo", at(0)).unwrap();
+        let other = session.type_patch_box("lfo", at(100)).unwrap();
+        let select = session.type_patch_box("select 4", at(200)).unwrap();
+        let out = Jack::new(lfo, 0);
+        for port in [0, 1, 4] {
+            session.rewire_patch(out, Jack::new(select, port)).unwrap();
+        }
+        assert_eq!(session.retype_patch_box(select, "select 4"), None, "nothing changed");
+        assert_eq!(session.retype_patch_box(select, "select 2"), Some(select));
+        let into: Vec<_> = session.modulation.wires.iter().map(|wire| wire.to.port).collect();
+        assert_eq!(into, [0, 1], "e went with the inputs past b");
+
+        // An LFO with a route, a wire in and a wire out, retyped to a slew:
+        // `rate` is gone, `out` is not.
+        let volume = ParamAddr::strip(EffectTarget::Channel(0), STRIP_PARAM_VOLUME);
+        session.modulation.routes.push(ModRoute::from_module(
+            other,
+            volume,
+            0.5,
+            ModPolarity::Bipolar,
+        ));
+        session.rewire_patch(out, Jack::new(other, 0)).unwrap();
+        session.rewire_patch(Jack::new(other, 0), Jack::new(select, 2)).unwrap();
+        session.modulation_armed.set(Some(ModSourceRef::Id(other)));
+        let slew = session.retype_patch_box(other, "slew 0.5").unwrap();
+        assert_ne!(slew, other, "a new kind is a new box");
+        assert!(session.modulation.module(other).is_none());
+        assert_eq!(session.modulation.module(slew).unwrap().at, at(100));
+        assert_eq!(
+            session.modulation.wire_into(Jack::new(select, 2)).map(|wire| wire.from),
+            Some(Jack::new(slew, 0)),
+            "its outlet's wire followed"
+        );
+        assert_eq!(
+            session.modulation.wire_into(Jack::new(slew, 0)),
+            None,
+            "rate is not slew's in"
+        );
+        assert_eq!(session.modulation.routes[0].source, ModSourceRef::Id(slew));
+        assert_eq!(session.modulation_armed.get(), Some(ModSourceRef::Id(slew)));
+
+        // A counter's outlet is `index`, not `out`: the routes stay behind.
+        let counter = session.retype_patch_box(slew, "counter 4").unwrap();
+        assert!(session.modulation.routes.is_empty());
+        assert_eq!(session.modulation_armed.get(), None);
+        assert_eq!(session.modulation.wire_into(Jack::new(select, 2)), None);
+        assert_eq!(session.modulation.module(counter).unwrap().at, at(100));
     }
 
     /// The canvas's own verbs: a drop replaces an inlet's wire, the inlet

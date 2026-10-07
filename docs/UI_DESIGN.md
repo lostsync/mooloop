@@ -506,8 +506,9 @@ when it moved.
 It holds the song's patch canvas (`ui/patch-canvas.slint`, song patch step
 03): boxes where the song put them, tags at the patch's edges, an assignment
 tag under each route, and the wires, in a canvas larger than the pane that
-scrolls; with the OUTLETS of every channel that publishes some under the channel's name; a
-narrow **Add** list to the grid's right; the selected source's surface, with
+scrolls, where a double-click types a box (step 04); with the OUTLETS of
+every channel that publishes some under the channel's name; the selected
+source's surface, with
 its name edited in its header; and that source's routes, from the whole song.
 A route row names its chain, device and parameter ("Kick Filter 1 · Cutoff"),
 because a route can land on any channel or track. Because it is one pane for
