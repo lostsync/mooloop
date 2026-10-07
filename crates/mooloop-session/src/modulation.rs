@@ -554,8 +554,8 @@ impl Session {
 
     /// Where module `id`'s input sits in [`Self::module_input_options`], and
     /// what is worth saying about it: a gate is a channel's notes, and a
-    /// Math module reads a module listed before it this tick and one listed
-    /// after it a tick late.
+    /// Math module reads a module picked while listed before it this tick
+    /// and one picked while listed after it a tick late ([`mooloop_core::Wire::late`]).
     pub fn module_input_choice(&self, id: ModSourceId) -> (usize, &'static str) {
         let Some(module) = self.modulation.module(id) else {
             return (0, "");
@@ -567,12 +567,15 @@ impl Session {
             .unwrap_or(0);
         let note = match (module.params, self.modulation.input_of(id)) {
             (ModulatorParams::Envelope(_), _) => "CHANNEL NOTE GATE",
-            (ModulatorParams::Math(_), InputSource::Module(read)) => {
-                let at = |id| self.modulation.modules.iter().position(|module| module.id == id);
-                if at(read) < at(id) {
-                    "READS THIS TICK"
-                } else {
+            (ModulatorParams::Math(_), InputSource::Module(_)) => {
+                let late = self
+                    .modulation
+                    .wire_into(mooloop_core::Jack::new(id, module.params.kind().input_port()))
+                    .is_some_and(|wire| wire.late);
+                if late {
                     "READS THE PREVIOUS TICK"
+                } else {
+                    "READS THIS TICK"
                 }
             }
             _ => "",

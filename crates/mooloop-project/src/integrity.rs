@@ -3652,6 +3652,7 @@ mod tests {
             from: Jack::new(from, 0),
             to: math_in,
             bend: None,
+            late: false,
         };
         project.modulation.wires.extend([
             wire(ModSourceId(97)),

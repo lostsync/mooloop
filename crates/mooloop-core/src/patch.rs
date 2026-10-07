@@ -246,6 +246,14 @@ pub struct Wire {
     pub to: Jack,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bend: Option<Bend>,
+    /// The wire reads its outlet as of the previous control tick, whatever
+    /// the order says. Set on the wires a single input used to be where
+    /// that input read a module listed at or after its own: song
+    /// modulation's list-order rule, kept so a song converted from it plays
+    /// as it did. A wire made on the canvas is never late by itself; a loop
+    /// is broken at compile time instead ([`crate::CompiledModulation`]).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub late: bool,
 }
 
 /// Why a wire was refused.
@@ -323,6 +331,7 @@ impl SongModulation {
             from,
             to,
             bend: None,
+            late: false,
         });
         Ok(())
     }
@@ -399,6 +408,12 @@ impl SongModulation {
     /// that channel's gate tag, made at the tag column if the song has none;
     /// a module from its outlet. `None` removes the wire. Returns whether the
     /// module is in the song.
+    ///
+    /// A module listed at or after `id` is read through a [`Wire::late`]
+    /// wire, which is what an input meant when the song ran its list in
+    /// order: this keeps every path that still speaks in inputs (a
+    /// converted song, a channel preset's rack, the shelf's picker) playing
+    /// what it played.
     pub fn set_input(&mut self, id: ModSourceId, input: InputSource) -> bool {
         let Some(module) = self.module(id) else {
             return false;
@@ -415,6 +430,15 @@ impl SongModulation {
         };
         if self.connect(from, inlet).is_err() {
             self.disconnect(inlet);
+            return true;
+        }
+        let position = |node| self.modules.iter().position(|module| module.id == node);
+        let late = matches!(
+            (position(from.node), position(id)),
+            (Some(read), Some(reader)) if read >= reader
+        );
+        if let Some(wire) = self.wires.iter_mut().find(|wire| wire.to == inlet) {
+            wire.late = late;
         }
         true
     }

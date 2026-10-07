@@ -151,9 +151,37 @@ The song holds one modulation set: `Project.modulation`, a `SongModulation`
 (`crates/mooloop-core/src/modulation.rs`) of every module (`SongModule`) and
 every route. A channel holds none. A route runs from one source to one
 `ParamAddr` anywhere in the song: any channel's generator, inserts and strip,
-and any track's inserts and strip, the master's included. Modules tick once
-per control tick in list order, before anything renders, so a Math module
-reading one listed before it reads that tick's value.
+and any track's inserts and strip, the master's included. The set is a
+patch (`plans/song-patch/`): the modules are boxes, the song's tags bring
+its sources in (a gate tag is one channel's notes), and wires run from an
+outlet to an inlet, one wire per inlet. The patch ticks once per control
+tick, before anything renders, in a compiled order: topological over the
+wires, tags first, ties in list order (`CompiledModulation::compile`).
+
+**What a control wire carries.** A value, and the events of the tick it was
+sent. Only a gate tag sends events today: its channel's NoteOns, NoteOffs
+and choke, the counts an Envelope's gate has always taken. Its value is 1
+while any note is held on the channel and 0 otherwise.
+
+- A **trigger inlet** (the LFO's `retrigger`, the Step's `advance` and
+  `reset`, the Random's `trigger`) fires once a tick, on a NoteOn or when
+  its wire rises through 0.5. A box made while its wire is already high
+  does not fire for that. The LFO's retrigger, the Step's advance and the
+  Random's trigger still act only in the modes that follow notes.
+- The Envelope's **gate** counts a gate tag's notes as before (so
+  overlapping notes and chokes behave as they did), and treats any other
+  wire as a gate by its level: held while at or above 0.5.
+- The LFO's **rate** adds its wire in octaves: ±1 moves the rate two
+  octaves either way.
+- Math's **in** is its operand.
+
+**A loop runs a tick late.** A wire that closes a loop reads its outlet as of
+the previous control tick, which keeps every patch bounded and identical
+realtime and offline (`AUDIO_ARCHITECTURE.md`'s rule that feedback is an
+explicit delayed edge). The loop is broken at the first box in list order
+still waiting. A wire saved `late` reads the previous tick too: songs from
+before the patch read a module listed at or after the reader that way, and
+keep doing so.
 
 **There is no count a user meets.** The set is sized from the song, not
 reserved: any edit that changes its shape (a module or route added, removed
