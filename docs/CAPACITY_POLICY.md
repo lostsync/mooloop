@@ -238,6 +238,14 @@ engine, which is exactly the fault this document opens by naming.
   policy's grow-by-replacement rule (`MODULATION.md`, *Song collection*).
   Only a channel preset's rack keeps the old constants, eight modules and
   sixteen routes, because it is the shape 0.1.6 reads.
+- **A note wire holds 64 notes sounding at once** (`note_patch::MAX_LINK_NOTES`,
+  song patch step 07), as many as a channel's sequenced-voice table, because
+  every source's voice pool is smaller: a link that fills it is already
+  stealing. A NoteOn past it, or one its channel's 256-event list has no room
+  for, is refused whole and counted, never half-played, and its NoteOff then
+  releases nothing; the notes-out tag's edge goes red for a moment.
+  `note_patch::tests::a_full_link_refuses_and_counts` is the boundary test.
+  Releases owed by a change of set past 256 become a Choke on the channel.
 
 - Typed audio edges reserve nothing at all, which is the shape this policy
   asks for. A channel's subscription is one optional value; the *buffers* are

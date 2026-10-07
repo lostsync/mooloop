@@ -163,6 +163,7 @@ pub mod load;
 #[doc(hidden)]
 pub mod record_check;
 mod meters;
+mod note_patch;
 mod null_driver;
 mod offline;
 mod render;
@@ -236,6 +237,8 @@ mod take_tests;
 mod track_edit_tests;
 #[cfg(test)]
 mod song_modulation_tests;
+#[cfg(test)]
+mod note_patch_tests;
 
 use executor::{Executor, ExecutorIo};
 #[cfg(target_os = "macos")]

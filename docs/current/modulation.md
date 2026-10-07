@@ -47,8 +47,7 @@ area, and where each behaviour stops.
   axis it crosses; a double-click on it goes back to automatic routing. The
   bend is saved with the song, and a drag is one undo step.
 - **Song inlets** (song patch step 06). Right-click empty canvas to make an
-  **Inlet**, **Notes in** or **Notes out** tag (the notes tags do nothing
-  yet); a new inlet opens its list at once, and clicking an inlet tag later
+  **Inlet**, **Notes in** or **Notes out** tag; a new inlet opens its list at once, and clicking an inlet tag later
   opens it again. An inlet reads the transport -- **Beat** and **Bar** (a
   ramp 0 to 1 that fires each beat or bar, counted from the pattern's start
   in Pattern mode and the song's in Song mode), **Pattern position** (a ramp
@@ -60,6 +59,20 @@ area, and where each behaviour stops.
   where no pattern is placed, Pattern and Pattern position hold. An outlet
   tag reads a block late and its tag says **late**. A box's inlet picker
   lists every bound inlet tag beside the gates.
+- **Notes through the patch** (song patch step 07). A **Notes in** tag reads
+  a channel's notes and a **Notes out** tag plays notes on a channel; a new
+  one asks which channel at once, and a click on it later asks again. A
+  wire between them plays the first channel's part on the second as well,
+  in the same block at the same offsets, live and in a render. A Notes in
+  tag copies by default: its list's **Take its notes** turns the take on,
+  and its tag reads **takes**, so the channel's own notes reach only the
+  patch (its chokes, bends and parameters still reach it). A notes-in tag
+  reads the channel's own part, not what the patch sends it. Every note the
+  patch plays has an id of its own, and a NoteOff, a choke, a seek, a panic,
+  a stop, a mute, a pattern switch or a loop fold releases it; deleting the
+  wire or rebinding a tag releases what went through it on the next block.
+  A wire holds 64 notes at once; one more is refused and the Notes out tag
+  goes red. A note wire cannot close a loop. Note boxes come with step 08.
 - **Cable activity** (Preferences > Appearance): Off, Subtle (the default) or
   Full. A control wire tints toward the accent with its level and a note
   wire thickens for a moment on each note; Subtle is 30 % of Full.

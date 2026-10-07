@@ -31,6 +31,11 @@ export struct PatchNodeRow {
     note: bool,
     // Bound to nothing: the `[ ]` slot shows what it expects.
     unbound: bool,
+    // The box or tag it draws, -1 for an assignment tag.
+    node-id: int,
+    // A notes-out tag that just refused a note (song patch step 07): its
+    // link held all it can, or its channel's list was full.
+    refused: bool,
     selected: bool,
     // Armed for the assignment gesture.
     armed: bool,
@@ -182,6 +187,7 @@ component PatchTag inherits Rectangle {
         viewbox-height: self.height / 1px;
         fill: root.node.armed ? PatchColors.armed-fill : PatchColors.box;
         stroke: root.node.selected || root.node.armed ? Theme.accent
+            : root.node.refused ? Theme.destructive
             : root.node.unbound ? Theme.text-faint : PatchColors.edge;
         stroke-width: root.node.selected ? 2px : 1px;
         commands: root.node.points-right

@@ -7407,6 +7407,12 @@ impl RenderState {
         &self.song_modulation
     }
 
+    /// What channel `channel` was sent in the last block, as it rendered it.
+    #[cfg(test)]
+    pub(crate) fn events_of(&self, channel: usize) -> Vec<TimedEvent> {
+        self.events[channel].iter().copied().collect()
+    }
+
     /// Run `project`'s modulation set from the next block, as the session's
     /// reconciler sends it (`StructuralCommand::SetModulation`).
     #[cfg(test)]
@@ -10321,6 +10327,12 @@ impl RenderState {
             self.on_discontinuity(Discontinuity::LoopFold);
         }
         self.dispatch_auditions(frames);
+        // Every list is complete: the patch's note wires copy or take each
+        // channel's notes onto the channels they lead to, before anything
+        // renders and before the gate table reads what each channel plays
+        // (song patch step 07).
+        let live = self.live_channels();
+        self.song_modulation.pass_notes(&mut self.events, live, panicked);
 
         let context = ProcessContext {
             sample_rate: self.sample_rate,

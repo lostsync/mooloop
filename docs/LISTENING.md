@@ -631,3 +631,18 @@ the same way. Stop and play again: it should start from the bar, not from
 where it stopped. A tag bound to a channel's generator outlet carries a
 small **late** mark: it reads that outlet a block behind. Does that matter
 anywhere you hear it?
+
+### 45. Notes through the patch: Keys doubled, then taken (MOO-526): listen, in the app
+
+Put a short melody on a Keys channel and add an ML-M1 channel with no notes
+of its own. In the patch canvas, right-click empty space and pick **Notes
+in**; its list opens at once: pick Keys. Make a **Notes out** tag the same
+way and pick ML-M1. Drag from the Notes in tag's outlet to the Notes out
+tag's inlet. Play: ML-M1 should double Keys exactly, note for note, with no
+flam between them. The note wire should flash on every note.
+
+Now click the Notes in tag and turn **Take its notes** on; the tag should
+read **takes**. Play: only ML-M1 should sound. Stop, seek, switch patterns,
+mute Keys and press panic while a long note holds: ML-M1 should never be
+left droning. Delete the wire while a note holds: it should stop on the
+next block. Does the take toggle belong in the list, or on the tag itself?

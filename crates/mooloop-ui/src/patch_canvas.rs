@@ -44,6 +44,9 @@ const JACK_REACH: f32 = 8.0;
 const WIRE_REACH: f32 = 5.0;
 /// How many pump ticks a note wire stays thick for a note: about 120 ms.
 const FLASH_TICKS: i32 = 15;
+/// How many pump refreshes a notes-out tag's edge stays red after it
+/// refuses a note: about a second.
+const REFUSED_TICKS: i32 = 120;
 /// How far the pointer travels before a press becomes a drag.
 const DRAG_THRESHOLD: f32 = 4.0;
 /// The canvas is at least this big, and this much bigger than what is on it.
@@ -380,6 +383,9 @@ pub(crate) fn lay_out(
         // An outlet reaches the patch a block late, and its tag says so.
         let depth = match tag.kind {
             TagKind::Inlet { bind: Some(source) } if source.late() && !unbound => "late".to_string(),
+            // A notes-in tag that takes its channel's notes says so: the
+            // channel then plays only what the patch sends it.
+            TagKind::NotesIn { take: true, .. } => "takes".to_string(),
             _ => String::new(),
         };
         let key = NodeKey::Node(tag.id);
@@ -832,7 +838,8 @@ pub(crate) enum Drag {
 pub(crate) enum Picking {
     /// What feeds this inlet.
     Feed(Jack),
-    /// What this inlet tag reads (song patch step 06).
+    /// What this inlet tag reads (song patch step 06), or which channel a
+    /// notes tag reads or plays (step 07).
     Bind(ModSourceId),
     /// Which tag to make here: a right-click on empty canvas.
     Make(f32, f32),
@@ -852,6 +859,10 @@ pub(crate) struct PatchMenu {
 pub(crate) enum Chosen {
     Feed(Jack, PatchFeed),
     Bind(ModSourceId, Option<InletSource>),
+    /// A notes tag's channel.
+    Channel(ModSourceId, Option<mooloop_core::ChannelId>),
+    /// Whether a notes-in tag takes its channel's notes.
+    Take(ModSourceId, bool),
     Make(TagKind, CanvasPoint),
 }
 
@@ -870,6 +881,9 @@ pub(crate) struct CanvasState {
     /// A note wire is thick for a note just sent, so the pump keeps
     /// refreshing the cables until it is not.
     pub flashing: std::cell::Cell<bool>,
+    /// Each notes-out tag's refused count as last seen, and how many more
+    /// refreshes its edge stays red for (song patch step 07).
+    pub refusals: std::cell::RefCell<Vec<(ModSourceId, u32, i32)>>,
 }
 
 /// A box being typed (song patch step 04): where its field is, the box it
@@ -954,17 +968,14 @@ impl CanvasState {
     }
 
     /// A right-click at `(x, y)`: on empty canvas, the menu of tags to make
-    /// there; on an inlet tag, what it reads. Anything else closes the menu.
+    /// there; on a tag, what it reads or plays. Anything else closes the
+    /// menu.
     pub(crate) fn context(&mut self, layout: &Layout, song: &SongModulation, x: f32, y: f32) {
         self.typing = None;
         self.drag = Drag::None;
         self.picking = match layout.hit(x, y) {
             Hit::Empty => Some(Picking::Make(x, y)),
-            Hit::Node(NodeKey::Node(id))
-                if matches!(song.tag(id).map(|tag| tag.kind), Some(TagKind::Inlet { .. })) =>
-            {
-                Some(Picking::Bind(id))
-            }
+            Hit::Node(NodeKey::Node(id)) if song.tag(id).is_some() => Some(Picking::Bind(id)),
             _ => None,
         };
     }
@@ -1117,11 +1128,9 @@ impl CanvasState {
                     self.picking = Some(Picking::Feed(jack));
                     Edit::Pick(Picking::Feed(jack))
                 }
-                // A click on an inlet tag asks what it reads.
-                Hit::Node(NodeKey::Node(id))
-                    if !shift
-                        && matches!(song.tag(id).map(|tag| tag.kind), Some(TagKind::Inlet { .. })) =>
-                {
+                // A click on a tag asks what it reads, or which channel it
+                // plays.
+                Hit::Node(NodeKey::Node(id)) if !shift && song.tag(id).is_some() => {
                     self.picking = Some(Picking::Bind(id));
                     Edit::Pick(Picking::Bind(id))
                 }
@@ -1240,6 +1249,9 @@ pub(crate) fn refusal_text(refusal: PatchRefusal) -> &'static str {
             "Notes and control do not mix: a note outlet goes into a note inlet"
         }
         PatchRefusal::Wire(mooloop_core::WireRefusal::IntoItself) => "A box cannot feed itself",
+        PatchRefusal::Wire(mooloop_core::WireRefusal::NoteLoop) => {
+            "Notes cannot run in a loop: a note cannot arrive a tick late"
+        }
         PatchRefusal::Wire(mooloop_core::WireRefusal::NoSuchJack) => "That jack is gone",
         PatchRefusal::InletTaken => "That inlet already has a wire",
     }
@@ -1285,11 +1297,24 @@ impl UiState {
                 let feed = self.session.patch_feed_options(inlet).into_iter().nth(index)?.0;
                 Some(Chosen::Feed(inlet, feed))
             }
-            Picking::Bind(id) => match index {
-                0 => Some(Chosen::Bind(id, None)),
-                _ => {
-                    let source = self.session.inlet_sources().into_iter().nth(index - 1)?.0;
-                    Some(Chosen::Bind(id, Some(source)))
+            Picking::Bind(id) => match self.session.modulation.tag(id)?.kind {
+                TagKind::Inlet { .. } => match index {
+                    0 => Some(Chosen::Bind(id, None)),
+                    _ => {
+                        let source = self.session.inlet_sources().into_iter().nth(index - 1)?.0;
+                        Some(Chosen::Bind(id, Some(source)))
+                    }
+                },
+                kind => {
+                    let channels = self.session.channels.len();
+                    match index {
+                        0 => Some(Chosen::Channel(id, None)),
+                        _ if index <= channels => Some(Chosen::Channel(id, self.session.channel_id(index - 1))),
+                        _ => match kind {
+                            TagKind::NotesIn { take, .. } if index == channels + 1 => Some(Chosen::Take(id, !take)),
+                            _ => None,
+                        },
+                    }
                 }
             },
             Picking::Make(x, y) => {
@@ -1329,8 +1354,33 @@ impl UiState {
             }
             Picking::Bind(id) => {
                 let node = layout.node(NodeKey::Node(id))?;
-                let TagKind::Inlet { bind } = self.session.modulation.tag(id)?.kind else {
-                    return None;
+                let kind = self.session.modulation.tag(id)?.kind;
+                let TagKind::Inlet { bind } = kind else {
+                    // A notes tag: None, every channel, and a notes-in
+                    // tag's take.
+                    let channel = kind.channel();
+                    let session = &self.session;
+                    let current = channel.map_or(Some(0), |channel| session.channel_index(channel).map(|at| at + 1));
+                    let mut options: Vec<String> = std::iter::once("None".to_string())
+                        .chain(session.channels.iter().map(|channel| channel.name.clone()))
+                        .collect();
+                    let title = match kind {
+                        TagKind::NotesIn { take, .. } => {
+                            options.push(if take {
+                                "Take its notes: on".to_string()
+                            } else {
+                                "Take its notes: off".to_string()
+                            });
+                            "Notes from"
+                        }
+                        _ => "Play notes on",
+                    };
+                    return Some(PatchMenu {
+                        title: title.to_string(),
+                        options,
+                        current,
+                        anchor: (node.x, node.y),
+                    });
                 };
                 let sources = self.session.inlet_sources();
                 let current = bind.map_or(Some(0), |bind| {
@@ -1385,8 +1435,19 @@ impl UiState {
                 height: node.height,
                 selected,
                 armed: armed_here,
+                node_id: match node.key {
+                    NodeKey::Node(id) => id.0 as i32,
+                    NodeKey::Route { .. } => -1,
+                },
                 ..Default::default()
             };
+            if let NodeKey::Node(id) = node.key {
+                row.refused = canvas
+                    .refusals
+                    .borrow()
+                    .iter()
+                    .any(|&(tag, _, left)| tag == id && left > 0);
+            }
             match &node.face {
                 Face::Box {
                     spelling,
@@ -1568,6 +1629,7 @@ impl UiState {
         }
         let flashing = &self.patch_canvas.flashing;
         flashing.set(false);
+        self.refresh_refusals(window);
         if window.global::<crate::DisplayPrefs>().get_cable_activity() == 0 {
             return;
         }
@@ -1597,6 +1659,47 @@ impl UiState {
             flashing.set(flashing.get() || row.flash > 0);
             if changed {
                 wires.set_row_data(index, row);
+            }
+        }
+    }
+
+    /// Redden a notes-out tag's edge for a while after it refuses a note,
+    /// whatever the cable-activity setting: a refusal is a fault, not
+    /// activity.
+    fn refresh_refusals(&self, window: &MainWindow) {
+        let nodes = window.global::<crate::PatchView>().get_nodes();
+        let mut refusals = self.patch_canvas.refusals.borrow_mut();
+        let flashing = &self.patch_canvas.flashing;
+        for index in 0..nodes.row_count() {
+            let Some(mut row) = nodes.row_data(index) else {
+                continue;
+            };
+            let Ok(id) = u32::try_from(row.node_id).map(ModSourceId) else {
+                continue;
+            };
+            if !matches!(self.session.modulation.tag(id).map(|tag| tag.kind), Some(TagKind::NotesOut { .. })) {
+                continue;
+            }
+            let refused = self.session.patch_node_activity(id).0 as u32;
+            let at = match refusals.iter().position(|&(tag, ..)| tag == id) {
+                Some(at) => at,
+                None => {
+                    // First seen: what it refused before is not news.
+                    refusals.push((id, refused, 0));
+                    refusals.len() - 1
+                }
+            };
+            let (_, seen, left) = &mut refusals[at];
+            if refused != *seen {
+                *seen = refused;
+                *left = REFUSED_TICKS;
+            } else if *left > 0 {
+                *left -= 1;
+            }
+            flashing.set(flashing.get() || *left > 0);
+            if row.refused != (*left > 0) {
+                row.refused = *left > 0;
+                nodes.set_row_data(index, row);
             }
         }
     }
@@ -1996,13 +2099,13 @@ pub(crate) fn wire(
                 let changed = match chosen {
                     Chosen::Feed(inlet, feed) => state.session.feed_patch_inlet(inlet, feed),
                     Chosen::Bind(id, bind) => state.session.bind_patch_tag(id, bind),
+                    Chosen::Channel(id, channel) => state.session.bind_notes_tag(id, channel),
+                    Chosen::Take(id, take) => state.session.set_notes_take(id, take),
                     Chosen::Make(kind, at) => match state.session.add_patch_tag(kind, at) {
                         Some(id) => {
-                            // A new inlet is empty: ask straight away what
-                            // it reads.
-                            if matches!(kind, TagKind::Inlet { .. }) {
-                                state.patch_canvas.picking = Some(Picking::Bind(id));
-                            }
+                            // A new tag is empty: ask straight away what it
+                            // reads or plays.
+                            state.patch_canvas.picking = Some(Picking::Bind(id));
                             state.patch_canvas.selected = vec![NodeKey::Node(id)];
                             true
                         }
@@ -2020,7 +2123,9 @@ pub(crate) fn wire(
                 let label = match chosen {
                     Chosen::Feed(_, PatchFeed::None) => "Patch wire removed",
                     Chosen::Feed(..) => "Patch wire",
-                    Chosen::Bind(..) => "Patch tag source",
+                    Chosen::Bind(..) | Chosen::Channel(..) => "Patch tag source",
+                    Chosen::Take(_, true) => "Notes taken",
+                    Chosen::Take(_, false) => "Notes copied",
                     Chosen::Make(..) => "Patch tag",
                 };
                 record_project_history(&commands, before, &st, &window, label);
