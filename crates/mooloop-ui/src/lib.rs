@@ -5179,6 +5179,13 @@ impl UiState {
                 }
             })
             .collect();
+        // The longest list the picker can show: one device's run, or Open
+        // lanes, which lists every open lane.
+        let mut longest = rows.iter().filter(|row| row.open).count();
+        for group in 0..groups.len() as i32 {
+            longest = longest.max(rows.iter().filter(|row| row.group == group).count());
+        }
+        window.set_automation_longest_list(longest as i32);
         self.automation_target_model.set_vec(rows);
         self.automation_group_model.set_vec(groups);
 
