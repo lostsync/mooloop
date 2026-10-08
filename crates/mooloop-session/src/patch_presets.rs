@@ -21,6 +21,18 @@ impl Session {
         (!fragment.modules.is_empty() || !fragment.tags.is_empty()).then_some(fragment)
     }
 
+    /// Begin saving `nodes` as a patch preset: the fragment is lifted now,
+    /// and the save dialog's confirmation writes it. `false` when `nodes`
+    /// holds nothing to save.
+    pub fn begin_patch_preset_save(&mut self, nodes: &[ModSourceId]) -> bool {
+        let Some(fragment) = self.patch_fragment(nodes) else {
+            return false;
+        };
+        self.pending_patch = Some(fragment);
+        self.pending_preset_save = Some(crate::session::PresetSaveTarget::Patch);
+        true
+    }
+
     /// Land patch preset `fragment` with its top-left at `at`, and select
     /// what landed. Returns the new ids, boxes first.
     pub fn land_patch(&mut self, fragment: &SongModulation, at: CanvasPoint) -> Vec<ModSourceId> {
@@ -117,6 +129,11 @@ mod tests {
         assert_eq!(fragment.loose.len(), 1);
         assert!(fragment.loose[0].hint.starts_with("Volume on "), "{}", fragment.loose[0].hint);
         assert!(session.patch_fragment(&[]).is_none());
+        assert!(!session.begin_patch_preset_save(&[]));
+        assert!(session.begin_patch_preset_save(&[gate, envelope]));
+        let source = session.take_preset_save(120, 0).unwrap();
+        assert_eq!(source.patch.as_ref(), Some(&fragment), "what was selected when the dialog opened");
+        assert!(session.pending_patch.is_none());
 
         let landed = session.land_patch(&fragment, CanvasPoint::new(600, 400));
         let (new_envelope, loose) = (landed[0], landed[2]);

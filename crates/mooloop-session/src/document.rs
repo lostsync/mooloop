@@ -609,6 +609,8 @@ pub struct PresetSource {
     /// (MOO-222): which plugin, its list and pins, and the state it holds
     /// now. A plugin row saves with this or not at all.
     pub plugin: Option<mooloop_core::PluginSlotState>,
+    /// The fragment a patch preset save writes, when `target` is one.
+    pub patch: Option<mooloop_core::SongModulation>,
 }
 
 impl Session {
@@ -766,12 +768,17 @@ impl Session {
             _ => None,
         };
         let plugin = effect.and_then(|effect| self.plugin_preset_state(&effect));
+        let patch = match target {
+            PresetSaveTarget::Patch => Some(self.pending_patch.take()?),
+            _ => None,
+        };
         Some(PresetSource {
             target,
             setup,
             effect,
             run,
             plugin,
+            patch,
         })
     }
 

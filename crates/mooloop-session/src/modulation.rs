@@ -646,7 +646,9 @@ impl Session {
                 .module(node)
                 .map(|module| module.at)
                 .or_else(|| self.modulation.tag(node).map(|tag| tag.at));
-            if was.is_some_and(|was| was != at) {
+            // An unbound assignment that was never put anywhere moves too.
+            let loose = self.modulation.loose_route(node).map(|route| route.at);
+            if was.is_some_and(|was| was != at) || loose.is_some_and(|was| was != Some(at)) {
                 moved |= self.modulation.move_node(node, at);
             }
         }

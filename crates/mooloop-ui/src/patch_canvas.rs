@@ -75,6 +75,9 @@ pub(crate) enum NodeKey {
         source: ModSourceRef,
         destination: ParamAddr,
     },
+    /// An assignment a patch preset brought in, not bound yet (song patch
+    /// step 09).
+    Loose(ModSourceId),
 }
 
 /// A wire, by what it ends in.
@@ -87,6 +90,8 @@ pub(crate) enum WireKey {
         source: ModSourceRef,
         destination: ParamAddr,
     },
+    /// The wire from a box to one of its unbound assignments.
+    Loose(ModSourceId),
 }
 
 /// Which way a jack faces, which is the way its wire leaves it.
@@ -130,6 +135,9 @@ pub(crate) enum Face {
         depth: String,
         note: bool,
         unbound: bool,
+        /// What an unbound tag was bound to when its patch was saved, shown
+        /// in its empty slot (song patch step 09).
+        hint: String,
     },
 }
 
@@ -269,7 +277,7 @@ fn text_width(text: &str, char_width: f32) -> f32 {
 
 /// A tag's width for what it says: padding, the arrow's point, each piece
 /// and the gaps between them, as `PatchTag` lays them out.
-fn tag_width(kind: &str, name: &str, depth: &str, unbound: bool) -> f32 {
+fn tag_width(kind: &str, name: &str, depth: &str, unbound: bool, hint: &str) -> f32 {
     let mut width = 10.0 + 22.0;
     let mut pieces = 0;
     for (text, char_width) in [(kind, SMALL_CHAR), (name, LABEL_CHAR)] {
@@ -279,7 +287,7 @@ fn tag_width(kind: &str, name: &str, depth: &str, unbound: bool) -> f32 {
         }
     }
     if unbound {
-        width += 26.0;
+        width += if hint.is_empty() { 26.0 } else { text_width(hint, SMALL_CHAR) + 12.0 };
         pieces += 1;
     }
     if !depth.is_empty() {
@@ -391,11 +399,16 @@ pub(crate) fn lay_out(
         let key = NodeKey::Node(tag.id);
         let (dx, dy) = offset(key);
         let ports = tag.kind.ports();
+        let hint = if unbound {
+            song.hint(tag.id).unwrap_or_default().to_string()
+        } else {
+            String::new()
+        };
         nodes.push(Node {
             key,
             x: tag.at.x as f32 + dx,
             y: tag.at.y as f32 + dy,
-            width: tag_width(&kind, &name, &depth, unbound),
+            width: tag_width(&kind, &name, &depth, unbound, &hint),
             height: TAG_HEIGHT,
             face: Face::Tag {
                 points_right,
@@ -404,6 +417,7 @@ pub(crate) fn lay_out(
                 depth,
                 note,
                 unbound,
+                hint,
             },
             inlets: ports.inlets.to_vec(),
             outlets: ports.outlets.to_vec(),
@@ -467,7 +481,7 @@ pub(crate) fn lay_out(
             key,
             x: at.x as f32 + dx,
             y: at.y as f32 + dy,
-            width: tag_width(&label.device, &label.name, &depth, false),
+            width: tag_width(&label.device, &label.name, &depth, false, ""),
             height: TAG_HEIGHT,
             face: Face::Tag {
                 points_right: false,
@@ -476,6 +490,7 @@ pub(crate) fn lay_out(
                 depth,
                 note: false,
                 unbound: false,
+                hint: String::new(),
             },
             inlets: vec![Port {
                 name: "in",
@@ -484,6 +499,68 @@ pub(crate) fn lay_out(
             outlets: Vec::new(),
         });
         route_wires.push((Jack::new(id, 0), key));
+    }
+    // An unbound assignment a patch preset brought in: an assignment tag
+    // with an empty slot showing what it was aimed at, stacked with its
+    // box's bound ones until it is put somewhere.
+    let mut loose_wires = Vec::new();
+    for route in &song.loose {
+        let Some(source_node) = nodes.iter().find(|node| node.key == NodeKey::Node(route.source)) else {
+            continue;
+        };
+        let is_box = source_node.is_box();
+        let (source_x, source_y) = (source_node.x, source_node.y);
+        let (below_box, source_width) = (source_node.height, source_node.width);
+        let at = route.at.unwrap_or_else(|| {
+            let below = match stacked.iter_mut().find(|(source, _)| *source == route.source) {
+                Some((_, count)) => {
+                    *count += 1;
+                    *count
+                }
+                None => {
+                    stacked.push((route.source, 0));
+                    0
+                }
+            };
+            if is_box {
+                CanvasPoint::new(
+                    source_x as i32 + 16,
+                    source_y as i32 + below_box as i32 + 40 + below as i32 * 34,
+                )
+            } else {
+                CanvasPoint::new(source_x as i32 + source_width as i32 + 48, source_y as i32 + below as i32 * 34)
+            }
+        });
+        let percent = (route.depth * 100.0).round() as i32;
+        let depth = if percent > 0 {
+            format!("+{percent}%")
+        } else {
+            format!("{percent}%")
+        };
+        let key = NodeKey::Loose(route.id);
+        let (dx, dy) = offset(key);
+        nodes.push(Node {
+            key,
+            x: at.x as f32 + dx,
+            y: at.y as f32 + dy,
+            width: tag_width("", "", &depth, true, &route.hint),
+            height: TAG_HEIGHT,
+            face: Face::Tag {
+                points_right: false,
+                kind: String::new(),
+                name: String::new(),
+                depth,
+                note: false,
+                unbound: true,
+                hint: route.hint.clone(),
+            },
+            inlets: vec![Port {
+                name: "in",
+                sort: JackSort::Control,
+            }],
+            outlets: Vec::new(),
+        });
+        loose_wires.push((route.source, route.id));
     }
 
     let find = |key: NodeKey| nodes.iter().find(|node| node.key == key);
@@ -539,6 +616,21 @@ pub(crate) fn lay_out(
             note: false,
             delayed: false,
             source: from_jack.node,
+        });
+    }
+    for (source, id) in loose_wires {
+        let (Some(from), Some(to)) = (find(NodeKey::Node(source)), find(NodeKey::Loose(id))) else {
+            continue;
+        };
+        let (Some(start), Some(end)) = (from.anchor(true, 0), to.anchor(false, 0)) else {
+            continue;
+        };
+        wires.push(WireLine {
+            key: WireKey::Loose(id),
+            points: route_points(start, end),
+            note: false,
+            delayed: false,
+            source,
         });
     }
 
@@ -841,8 +933,11 @@ pub(crate) enum Picking {
     /// What this inlet tag reads (song patch step 06), or which channel a
     /// notes tag reads or plays (step 07).
     Bind(ModSourceId),
-    /// Which tag to make here: a right-click on empty canvas.
+    /// Which tag to make here, or which patch preset to land here: a
+    /// right-click on empty canvas.
     Make(f32, f32),
+    /// What to do with the selection: a right-click on a box.
+    Selection(f32, f32),
 }
 
 /// The canvas's menu as it is open: its title, its rows, the one lit, and
@@ -864,10 +959,19 @@ pub(crate) enum Chosen {
     /// Whether a notes-in tag takes its channel's notes.
     Take(ModSourceId, bool),
     Make(TagKind, CanvasPoint),
+    /// Save the selection as a patch preset (song patch step 09).
+    SavePatch,
+    /// Land the patch preset at this row of [`CanvasState::patch_presets`]
+    /// here.
+    Patch(usize, CanvasPoint),
 }
 
-/// The tags a right-click on empty canvas offers to make, in order.
+/// The tags a right-click on empty canvas offers to make, in order. The
+/// patch presets follow them.
 pub(crate) const MADE_TAGS: [&str; 3] = ["Inlet", "Notes in", "Notes out"];
+
+/// What a right-click on a box offers.
+pub(crate) const SAVE_PATCH: &str = "Save as patch preset\u{2026}";
 
 /// The canvas's own state: what is selected, the gesture under way, and
 /// what its menu is open on. None of it is in the song.
@@ -884,6 +988,9 @@ pub(crate) struct CanvasState {
     /// Each notes-out tag's refused count as last seen, and how many more
     /// refreshes its edge stays red for (song patch step 07).
     pub refusals: std::cell::RefCell<Vec<(ModSourceId, u32, i32)>>,
+    /// The patch presets the empty-canvas menu offers, by name and bundle,
+    /// read when it opens (song patch step 09).
+    pub patch_presets: Vec<(String, std::path::PathBuf)>,
 }
 
 /// A box being typed (song patch step 04): where its field is, the box it
@@ -939,6 +1046,9 @@ pub(crate) enum Edit {
     Refused(PatchRefusal),
     /// Arm (or disarm) a source for the assignment gesture.
     Arm(ModSourceRef),
+    /// Arm (or disarm) the assignment gesture from an unbound assignment,
+    /// which the next knob it lands on binds.
+    ArmLoose(ModSourceId),
     /// Open the menu on this.
     Pick(Picking),
     /// Select this box in the surface below.
@@ -975,6 +1085,12 @@ impl CanvasState {
         self.drag = Drag::None;
         self.picking = match layout.hit(x, y) {
             Hit::Empty => Some(Picking::Make(x, y)),
+            Hit::Node(key @ NodeKey::Node(id)) if song.module(id).is_some() => {
+                if !self.selected.contains(&key) {
+                    self.selected = vec![key];
+                }
+                Some(Picking::Selection(x, y))
+            }
             Hit::Node(NodeKey::Node(id)) if song.tag(id).is_some() => Some(Picking::Bind(id)),
             _ => None,
         };
@@ -1135,6 +1251,7 @@ impl CanvasState {
                     Edit::Pick(Picking::Bind(id))
                 }
                 Hit::Node(NodeKey::Route { source, .. }) if !shift => Edit::Arm(source),
+                Hit::Node(NodeKey::Loose(id)) if !shift => Edit::ArmLoose(id),
                 Hit::Fold(id) => Edit::Fold(id),
                 _ => Edit::None,
             },
@@ -1318,6 +1435,7 @@ impl UiState {
                 }
             },
             Picking::Make(x, y) => {
+                let at = CanvasPoint::new(x.round() as i32, y.round() as i32);
                 let kind = match index {
                     0 => TagKind::Inlet { bind: None },
                     1 => TagKind::NotesIn {
@@ -1325,10 +1443,15 @@ impl UiState {
                         take: false,
                     },
                     2 => TagKind::NotesOut { channel: None },
-                    _ => return None,
+                    _ => {
+                        let preset = index - MADE_TAGS.len();
+                        self.patch_canvas.patch_presets.get(preset)?;
+                        return Some(Chosen::Patch(preset, at));
+                    }
                 };
-                Some(Chosen::Make(kind, CanvasPoint::new(x.round() as i32, y.round() as i32)))
+                Some(Chosen::Make(kind, at))
             }
+            Picking::Selection(..) => (index == 0).then_some(Chosen::SavePatch),
         }
     }
 
@@ -1398,7 +1521,22 @@ impl UiState {
             }
             Picking::Make(x, y) => Some(PatchMenu {
                 title: "Make a tag".to_string(),
-                options: MADE_TAGS.iter().map(|name| name.to_string()).collect(),
+                options: MADE_TAGS
+                    .iter()
+                    .map(|name| name.to_string())
+                    .chain(
+                        self.patch_canvas
+                            .patch_presets
+                            .iter()
+                            .map(|(name, _)| format!("Patch: {name}")),
+                    )
+                    .collect(),
+                current: None,
+                anchor: (x, y),
+            }),
+            Picking::Selection(x, y) => Some(PatchMenu {
+                title: "Selection".to_string(),
+                options: vec![SAVE_PATCH.to_string()],
                 current: None,
                 anchor: (x, y),
             }),
@@ -1424,10 +1562,15 @@ impl UiState {
             let source = match node.key {
                 NodeKey::Node(id) => Some(ModSourceRef::Id(id)),
                 NodeKey::Route { source, .. } => Some(source),
+                NodeKey::Loose(id) => self
+                    .session
+                    .armed_loose_route()
+                    .filter(|route| route.id == id)
+                    .map(|route| ModSourceRef::Id(route.source)),
             };
             let armed_here = armed.is_some()
                 && armed == source
-                && (node.is_box() || matches!(node.key, NodeKey::Route { .. }));
+                && (node.is_box() || matches!(node.key, NodeKey::Route { .. } | NodeKey::Loose(_)));
             let mut row = crate::PatchNodeRow {
                 x: node.x,
                 y: node.y,
@@ -1437,7 +1580,7 @@ impl UiState {
                 armed: armed_here,
                 node_id: match node.key {
                     NodeKey::Node(id) => id.0 as i32,
-                    NodeKey::Route { .. } => -1,
+                    NodeKey::Route { .. } | NodeKey::Loose(_) => -1,
                 },
                 ..Default::default()
             };
@@ -1471,6 +1614,7 @@ impl UiState {
                     depth,
                     note,
                     unbound,
+                    hint,
                 } => {
                     row.points_right = *points_right;
                     row.kind = kind.into();
@@ -1478,6 +1622,7 @@ impl UiState {
                     row.depth = depth.into();
                     row.note = *note;
                     row.unbound = *unbound;
+                    row.hint = hint.into();
                 }
             }
             nodes.push(row);
@@ -1794,7 +1939,7 @@ fn apply(
                 let nodes: Vec<_> = moves
                     .iter()
                     .filter_map(|(key, at)| match key {
-                        NodeKey::Node(id) => Some((*id, *at)),
+                        NodeKey::Node(id) | NodeKey::Loose(id) => Some((*id, *at)),
                         NodeKey::Route { .. } => None,
                     })
                     .collect();
@@ -1813,7 +1958,7 @@ fn apply(
                                 route.source == *source && route.destination == *destination
                             })
                             .map(|index| (index, *at)),
-                        NodeKey::Node(_) => None,
+                        NodeKey::Node(_) | NodeKey::Loose(_) => None,
                     })
                     .collect();
                 let moved = st.session.move_patch_nodes(&nodes);
@@ -1845,6 +1990,19 @@ fn apply(
             });
             return;
         }
+        Edit::ArmLoose(id) => {
+            let mut st = state.borrow_mut();
+            let armed = st.session.arm_loose_route(id);
+            st.refresh_modulation(window);
+            window.set_status_message(match armed {
+                Some(name) => format!(
+                    "Binding {name}\u{2019}s assignment \u{2014} drag the control it should move"
+                )
+                .into(),
+                None => "Modulation assignment off \u{2014} controls edit their base values".into(),
+            });
+            return;
+        }
         Edit::Pick(_) => {}
         Edit::Fold(id) => {
             let open = state
@@ -1869,6 +2027,32 @@ fn apply(
     state.borrow_mut().publish_patch_canvas(window);
 }
 
+/// Open the save dialog for the canvas selection as a patch preset: the
+/// boxes and tags selected, lifted now (song patch step 09).
+fn save_selection(state: &Rc<RefCell<UiState>>, window: &MainWindow) {
+    let mut st = state.borrow_mut();
+    let nodes: Vec<ModSourceId> = st
+        .patch_canvas
+        .selected
+        .iter()
+        .filter_map(|key| match key {
+            NodeKey::Node(id) => Some(*id),
+            NodeKey::Route { .. } | NodeKey::Loose(_) => None,
+        })
+        .collect();
+    if !st.session.begin_patch_preset_save(&nodes) {
+        window.set_status_message("Select the boxes to save as a patch first".into());
+        st.publish_patch_canvas(window);
+        return;
+    }
+    st.publish_patch_canvas(window);
+    drop(st);
+    window.set_save_preset_title("Save Patch Preset".into());
+    window.set_save_preset_name("".into());
+    window.set_save_preset_category("".into());
+    window.set_save_preset_open(true);
+}
+
 /// Remove what is selected on the canvas, as one edit.
 fn delete_selection(
     state: &Rc<RefCell<UiState>>,
@@ -1889,7 +2073,7 @@ fn delete_selection(
         let mut routes = Vec::new();
         for key in &canvas.selected {
             match *key {
-                NodeKey::Node(id) => nodes.push(id),
+                NodeKey::Node(id) | NodeKey::Loose(id) => nodes.push(id),
                 NodeKey::Route {
                     source,
                     destination,
@@ -1903,6 +2087,7 @@ fn delete_selection(
                 source,
                 destination,
             }) => routes.extend(route_index(source, destination)),
+            Some(WireKey::Loose(id)) => nodes.push(id),
             None => {}
         }
         (nodes, inlets, routes)
@@ -2093,6 +2278,33 @@ pub(crate) fn wire(
                 st.borrow_mut().publish_patch_canvas(&window);
                 return;
             };
+            if chosen == Chosen::SavePatch {
+                save_selection(&st, &window);
+                return;
+            }
+            // Read before the edit opens: a preset that does not load
+            // changes nothing.
+            let landing = match chosen {
+                Chosen::Patch(index, _) => {
+                    let path = st.borrow().patch_canvas.patch_presets.get(index).map(|(_, path)| path.clone());
+                    match path.map(|path| mooloop_project::load_bundle(&path)) {
+                        Some(Ok(mooloop_project::LoadReport {
+                            document: mooloop_project::LoadedDocument::Patch(fragment),
+                            ..
+                        })) => Some(fragment),
+                        Some(Err(error)) => {
+                            window.set_status_message(format!("Could not load this patch: {error}").into());
+                            st.borrow_mut().publish_patch_canvas(&window);
+                            return;
+                        }
+                        _ => {
+                            st.borrow_mut().publish_patch_canvas(&window);
+                            return;
+                        }
+                    }
+                }
+                _ => None,
+            };
             let before = project_snapshot(&st.borrow(), &window);
             let changed = {
                 let mut state = st.borrow_mut();
@@ -2111,6 +2323,26 @@ pub(crate) fn wire(
                         }
                         None => false,
                     },
+                    Chosen::Patch(_, at) => match &landing {
+                        Some(fragment) => {
+                            let landed = state.session.land_patch(fragment, at);
+                            let named = fragment.modules.len() + fragment.tags.len();
+                            state.patch_canvas.selected = landed
+                                .iter()
+                                .enumerate()
+                                .map(|(index, id)| {
+                                    if index < named {
+                                        NodeKey::Node(*id)
+                                    } else {
+                                        NodeKey::Loose(*id)
+                                    }
+                                })
+                                .collect();
+                            !landed.is_empty()
+                        }
+                        None => false,
+                    },
+                    Chosen::SavePatch => false,
                 };
                 if changed {
                     state.modulation_edited(&window);
@@ -2127,6 +2359,7 @@ pub(crate) fn wire(
                     Chosen::Take(_, true) => "Notes taken",
                     Chosen::Take(_, false) => "Notes copied",
                     Chosen::Make(..) => "Patch tag",
+                    Chosen::Patch(..) | Chosen::SavePatch => "Load patch preset",
                 };
                 record_project_history(&commands, before, &st, &window, label);
             }
@@ -2145,6 +2378,13 @@ pub(crate) fn wire(
                 ..
             } = &mut *state;
             patch_canvas.context(&layout, &session.modulation, x, y);
+            if matches!(patch_canvas.picking, Some(Picking::Make(..))) {
+                patch_canvas.patch_presets = mooloop_project::list_presets(&crate::settings::patch_presets_dir())
+                    .into_iter()
+                    .filter(|preset| preset.kind == mooloop_project::PresetKind::Patch)
+                    .map(|preset| (preset.name, preset.path))
+                    .collect();
+            }
             state.publish_patch_canvas(&window);
         });
     }

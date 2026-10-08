@@ -1532,6 +1532,12 @@ pub(crate) fn channel_presets_dir() -> PathBuf {
     config_dir().join("presets/channels")
 }
 
+/// Directory holding patch presets: pieces of the song patch, for no device
+/// (song patch step 09).
+pub(crate) fn patch_presets_dir() -> PathBuf {
+    config_dir().join("presets/patches")
+}
+
 /// Directory holding one subdirectory of effect presets per [`EffectKind`],
 /// e.g. `presets/effects/delay/`.
 ///

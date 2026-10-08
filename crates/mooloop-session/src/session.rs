@@ -56,6 +56,9 @@ pub enum PresetSaveTarget {
     /// hard to find later. An id cannot land on the wrong device: it either
     /// resolves to the one the dialog was opened from or to nothing at all.
     Effect { target: ChainKey, device: DeviceId },
+    /// A piece of the song patch (song patch step 09): the fragment lifted
+    /// when the save began, held in [`Session::pending_patch`].
+    Patch,
 }
 
 pub struct Session {
@@ -133,6 +136,10 @@ pub struct Session {
     /// The unbound assignment (song patch step 09) the armed gesture binds
     /// when it lands on a knob, if it was armed from one's tag.
     pub modulation_loose: Cell<Option<mooloop_core::ModSourceId>>,
+    /// The canvas selection a patch preset save was started from, lifted
+    /// as a fragment when the dialog opened, so what is saved is what was
+    /// selected then.
+    pub pending_patch: Option<mooloop_core::SongModulation>,
     /// Every source's latest output, read off the engine on the pump tick:
     /// what the knobs on any chain draw their live offsets from.
     pub modulation_levels: std::cell::RefCell<crate::modulation::ModulationLevels>,
@@ -373,6 +380,7 @@ impl Default for Session {
             selected_source: None,
             modulation_armed: Cell::new(None),
             modulation_loose: Cell::new(None),
+            pending_patch: None,
             modulation_levels: Default::default(),
             compensation_sent: crate::engine::CompensationSent::default(),
             console_sums_sent: [false; MAX_BUSES],
