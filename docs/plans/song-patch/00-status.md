@@ -248,6 +248,37 @@ the canvas. Where it differs from the step file:
 - **A tag can move a box's knob**: a knob route's source is a node index,
   boxes then tags.
 
+**07 (MOO-526).** Note wires carry notes from a Notes in tag to a Notes out
+tag: the engine's note pass (`engine/src/note_patch.rs`) runs once a block
+after `dispatch_auditions` and before the gate table, copies or takes each
+linked channel's notes, plays them on the target under ids of its own
+(from `0xC000_0000_0000_0000`), and keeps a 64-note table per link from
+the id it heard to the id it played. `CompiledModulation` gains `notes`
+(one `CompiledNoteLink` per wire between two bound notes tags) and `taken`
+(the seats a notes-in tag takes). A set that drops a link owes its held
+notes a NoteOff at the next block, on the channel's new seat if it moved;
+past 256 owed, a Choke. Where it differs from the step file:
+
+- **No note boxes yet**, so a link is exactly one wire from a notes-in tag
+  to a notes-out tag. Step 08 grows a link into a path through boxes; the
+  per-link table becomes a per-box one there. `WireRefusal::NoteLoop`
+  exists and integrity drops a saved note loop, but no loop can be drawn
+  before step 08 gives note boxes an inlet and an outlet both.
+- **A notes-in tag reads the channel's own part**, the list as it stands
+  before the pass, so a channel taking its notes and playing them back to
+  itself does not hear its output again.
+- **A taken channel is taken whether or not its tag is wired**: take means
+  only the patch's output reaches the channel, and an unwired patch sends
+  none.
+- **The take toggle is the last row of the tag's list**, *Take its notes:
+  on/off*, and the tag reads **takes** while it is on, rather than a
+  control drawn on the tag. A notes tag's list is None and every channel.
+- **The note pass counts each tag's notes for the canvas itself**; a
+  notes-in tag no longer compiles to a gate tag. A notes-out tag's refusals
+  ride in the tag meter's value and redden its edge for about a second.
+- **Control inlets read as of the previous tick** is step 08's to record in
+  `MODULATION.md`: nothing reads a control inlet in the note pass yet.
+
 ## Adam's rulings
 
 | When | Ruling |

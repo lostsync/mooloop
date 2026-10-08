@@ -110,6 +110,9 @@ pub struct EventList {
 }
 
 impl EventList {
+    /// How many events one list holds.
+    pub const CAPACITY: usize = MAX_EVENTS;
+
     pub const fn empty() -> Self {
         const DUMMY: TimedEvent = TimedEvent {
             offset: 0,
@@ -187,6 +190,19 @@ impl EventList {
     pub fn iter(&self) -> impl Iterator<Item = &TimedEvent> {
         self.buf[..self.len()].iter()
     }
+
+    /// Keep only the events `keep` says to, in their order. Allocates
+    /// nothing: the patch's note pass takes a channel's notes with it.
+    pub fn retain(&mut self, mut keep: impl FnMut(&TimedEvent) -> bool) {
+        let mut kept = 0;
+        for at in 0..self.len() {
+            if keep(&self.buf[at]) {
+                self.buf[kept] = self.buf[at];
+                kept += 1;
+            }
+        }
+        self.len = kept as u32;
+    }
 }
 
 fn event_sort_key(event: &TimedEvent) -> (u32, u8) {
@@ -226,6 +242,28 @@ mod tests {
         assert_eq!(list.len(), 3);
         list.clear();
         assert!(list.is_empty());
+    }
+
+    #[test]
+    fn retain_keeps_the_rest_in_order() {
+        let mut list = EventList::empty();
+        for i in 0..5u32 {
+            list.push(TimedEvent {
+                offset: i,
+                event: if i % 2 == 0 {
+                    Event::NoteOn {
+                        id: u64::from(i),
+                        note: 60,
+                        velocity: 100,
+                    }
+                } else {
+                    Event::Choke
+                },
+            });
+        }
+        list.retain(|event| !matches!(event.event, Event::NoteOn { .. }));
+        let offsets: Vec<u32> = list.iter().map(|e| e.offset).collect();
+        assert_eq!(offsets, [1, 3]);
     }
 
     #[test]

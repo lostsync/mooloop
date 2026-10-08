@@ -22,8 +22,9 @@ use mooloop_core::{
     MAX_CHANNELS,
 };
 use mooloop_core::modulation::{MAX_GENERATOR_OUTLETS, PERFORMANCE_SOURCES};
+use crate::note_patch::NotePass;
 use mooloop_dsp::{
-    ModuleSpec, ModulatorSet, NoteGateEvents, SongInputs, SpecInlet, TransportTick,
+    EventList, ModuleSpec, ModulatorSet, NoteGateEvents, SongInputs, SpecInlet, TransportTick,
     CONTROL_RATE_FRAMES, MAX_CONTROL_TICKS_PER_BLOCK,
 };
 
@@ -46,6 +47,8 @@ pub struct SongModulator {
     /// `tag_table[tick * tags + tag]`: each tag's value at each control
     /// tick, for a route from a tag (song patch step 06).
     tag_table: Vec<f32>,
+    /// The note wires (song patch step 07).
+    notes: NotePass,
 }
 
 impl std::fmt::Debug for SongModulator {
@@ -87,11 +90,13 @@ impl SongModulator {
         .with_knobs(plan.knobs.iter().copied());
         let table = vec![0.0; plan.modules.len() * MAX_CONTROL_TICKS_PER_BLOCK];
         let tag_table = vec![0.0; plan.tags.len() * MAX_CONTROL_TICKS_PER_BLOCK];
+        let notes = NotePass::new(&plan);
         Self {
             plan,
             set,
             table,
             tag_table,
+            notes,
         }
     }
 
@@ -139,7 +144,15 @@ impl SongModulator {
                 self.set.carry_tag(at, &previous.set, from);
             }
         }
+        self.notes.carry_from(&previous.notes);
     }
+
+    /// Run the note wires over the first `live` channels' complete event
+    /// lists ([`NotePass::process`]).
+    pub(crate) fn pass_notes(&mut self, events: &mut [Box<EventList>], live: usize, panicked: bool) {
+        self.notes.process(events, live, panicked);
+    }
+
 
     /// Retune module `id` in place. Returns whether the set holds it.
     pub(crate) fn retune(&mut self, id: ModSourceId, params: ModulatorParams) -> bool {
@@ -275,9 +288,18 @@ impl SongModulator {
         self.set.outputs()
     }
 
-    /// Each tag's NoteOn count and value, in tag order.
+    /// Each tag's NoteOn count and value, in tag order. A notes tag's
+    /// count is the notes the note pass ran through it, and its value how
+    /// many a notes-out tag has refused.
     pub(crate) fn tag_activity(&self) -> impl Iterator<Item = (u32, f32)> + '_ {
-        self.set.tag_activity()
+        self.set
+            .tag_activity()
+            .zip(self.notes.tag_counts())
+            .zip(&self.plan.tags)
+            .map(|(((notes, value), (passed, refused)), tag)| match tag.source {
+                Some(_) => (notes, value),
+                None => (passed, refused as f32),
+            })
     }
 
     /// How far a source's wire output can travel from zero; see

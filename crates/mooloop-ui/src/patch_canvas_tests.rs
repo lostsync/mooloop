@@ -308,6 +308,82 @@ fn a_right_click_makes_an_inlet_tag_and_its_list_binds_it() {
     );
 }
 
+/// **A notes tag picks its channel, and a notes-in tag takes or copies**
+/// (song patch step 07): Notes in from the right-click menu asks at once
+/// which channel it reads; its list then offers the take, which its tag
+/// shows. A notes-out tag that refuses a note goes red.
+#[test]
+fn a_notes_tag_picks_its_channel_and_takes() {
+    use mooloop_core::TagKind;
+    use slint::Model;
+    let (h, _) = harness();
+    let at = h.at((660.0, 110.0));
+    let pos = LogicalPosition::new(at.0, at.1);
+    let w = h.window.window();
+    w.dispatch_event(WindowEvent::PointerMoved { position: pos });
+    w.dispatch_event(WindowEvent::PointerPressed { position: pos, button: PointerEventButton::Right });
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(200));
+    w.dispatch_event(WindowEvent::PointerReleased { position: pos, button: PointerEventButton::Right });
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(16));
+    let patch = h.window.global::<PatchView>();
+    patch.invoke_picked(1);
+    let (tag, first, channels) = {
+        let st = h.state.borrow();
+        let tag = st.session.modulation.tags.last().expect("a tag was made").id;
+        (tag, st.session.channel_id(0).unwrap(), st.session.channels.len())
+    };
+    assert!(patch.get_menu_open(), "a new notes tag asks which channel");
+    let options = || patch.get_menu_options().iter().map(|option| option.to_string()).collect::<Vec<_>>();
+    assert_eq!(options().len(), channels + 2);
+    assert_eq!(options()[0], "None");
+    assert_eq!(options().last().map(String::as_str), Some("Take its notes: off"));
+    patch.invoke_picked(1);
+    let kind = |h: &Harness| h.state.borrow().session.modulation.tag(tag).unwrap().kind;
+    assert_eq!(kind(&h), TagKind::NotesIn { channel: Some(first), take: false });
+
+    let node = h.state.borrow().patch_layout().node(patch_canvas::NodeKey::Node(tag)).map(|node| (node.x + 8.0, node.y + 8.0)).unwrap();
+    h.click(node);
+    assert!(patch.get_menu_open(), "a click on the tag opens its list");
+    assert_eq!(patch.get_menu_current(), 1, "lit on its channel");
+    patch.invoke_picked(channels as i32 + 1);
+    assert_eq!(kind(&h), TagKind::NotesIn { channel: Some(first), take: true });
+    assert_eq!(h.steps(), ["Patch tag", "Patch tag source", "Notes taken"]);
+    let layout = h.state.borrow().patch_layout();
+    match &layout.node(patch_canvas::NodeKey::Node(tag)).unwrap().face {
+        patch_canvas::Face::Tag { depth, .. } => assert_eq!(depth, "takes"),
+        _ => unreachable!(),
+    }
+
+    // A notes-out tag that refuses a note goes red, and comes back.
+    let out = {
+        let mut st = h.state.borrow_mut();
+        let out = st
+            .session
+            .add_patch_tag(TagKind::NotesOut { channel: Some(first) }, CanvasPoint::new(400, 300))
+            .unwrap();
+        st.modulation_edited(&h.window);
+        st.session.modulation_sent = st.session.modulation_plan();
+        out
+    };
+    let refused = |count: f32| {
+        let st = h.state.borrow();
+        st.session.read_modulation_levels(|_| 0.0, |_| Default::default(), |_| (0, count));
+        st.refresh_patch_activity(&h.window);
+        let nodes = h.window.global::<PatchView>().get_nodes();
+        (0..nodes.row_count())
+            .filter_map(|index| nodes.row_data(index))
+            .find(|row| row.node_id == out.0 as i32)
+            .expect("the notes-out tag is drawn")
+            .refused
+    };
+    assert!(!refused(0.0));
+    assert!(refused(2.0), "a refusal reddens it");
+    for _ in 0..200 {
+        refused(2.0);
+    }
+    assert!(!refused(2.0), "and it fades");
+}
+
 #[test]
 fn a_double_click_on_empty_canvas_types_a_box_there() {
     let (h, _) = harness();

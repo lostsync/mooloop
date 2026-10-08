@@ -966,6 +966,23 @@ impl Session {
         self.modulation.bind_tag(id, bind)
     }
 
+    /// Binds notes tag `id` to `channel`, or empties it: which channel's
+    /// notes a notes-in tag reads, or which channel a notes-out tag plays
+    /// (song patch step 07). `false` when nothing changed or the song has
+    /// no such channel.
+    pub fn bind_notes_tag(&mut self, id: ModSourceId, channel: Option<mooloop_core::ChannelId>) -> bool {
+        if channel.is_some_and(|channel| self.channel_index(channel).is_none()) {
+            return false;
+        }
+        self.modulation.bind_notes(id, channel)
+    }
+
+    /// Sets whether notes-in tag `id` takes its channel's notes, so only the
+    /// patch's output plays them, rather than copying them.
+    pub fn set_notes_take(&mut self, id: ModSourceId, take: bool) -> bool {
+        self.modulation.set_take(id, take)
+    }
+
     /// Arms `source` for the assignment gesture, or disarms it when it is
     /// the one armed: the canvas's click on an outlet or an assignment tag.
     /// Selects it too, so the surface below shows what is being assigned.
@@ -1334,6 +1351,38 @@ mod tests {
         assert!(session.modulation.wires.is_empty());
         assert!(session.remove_patch_node(notes));
         assert!(!session.remove_patch_node(notes));
+    }
+
+    /// A notes tag binds to a channel the song has, a notes-in tag takes or
+    /// copies, and a wire between two bound ones is a note link the engine
+    /// is sent (song patch step 07).
+    #[test]
+    fn notes_tags_bind_take_and_link() {
+        let mut session = Session::default();
+        let lead = session.channel_id(0).expect("a first channel");
+        let notes_in = session
+            .add_patch_tag(TagKind::NotesIn { channel: None, take: false }, CanvasPoint::new(16, 300))
+            .expect("a notes-in tag");
+        let notes_out = session
+            .add_patch_tag(TagKind::NotesOut { channel: None }, CanvasPoint::new(400, 300))
+            .expect("a notes-out tag");
+        assert_eq!(session.connect_patch(Jack::new(notes_in, 0), Jack::new(notes_out, 0)), Ok(()));
+        assert!(session.modulation_plan().notes.is_empty(), "unbound tags link nothing");
+
+        assert!(!session.bind_notes_tag(notes_in, Some(mooloop_core::ChannelId(999))));
+        assert!(session.bind_notes_tag(notes_in, Some(lead)));
+        assert!(!session.bind_notes_tag(notes_in, Some(lead)), "already bound");
+        assert!(session.bind_notes_tag(notes_out, Some(lead)));
+        let plan = session.modulation_plan();
+        assert_eq!(plan.notes.len(), 1);
+        assert!(plan.taken.is_empty());
+
+        assert!(session.set_notes_take(notes_in, true));
+        assert!(!session.set_notes_take(notes_in, true));
+        assert!(!session.set_notes_take(notes_out, true), "only a notes-in tag takes");
+        let taken = session.modulation_plan();
+        assert_eq!(taken.taken, [0]);
+        assert!(!taken.same_shape(&plan), "a take arrives as a new set");
     }
 
     /// Typing makes the box its first word names, with what follows as its

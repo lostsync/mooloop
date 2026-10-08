@@ -366,6 +366,9 @@ pub enum WireRefusal {
     WrongSort,
     /// A box wired into itself.
     IntoItself,
+    /// A note wire that would close a loop: a note cannot arrive a tick late
+    /// without moving it (song patch step 07).
+    NoteLoop,
 }
 
 /// Where the next box goes when nobody placed it: a grid in list order, the
@@ -422,7 +425,32 @@ impl SongModulation {
         if outlet.sort != inlet.sort {
             return Err(WireRefusal::WrongSort);
         }
+        if outlet.sort == JackSort::Note && self.notes_reach(to.node, from.node) {
+            return Err(WireRefusal::NoteLoop);
+        }
         Ok(())
+    }
+
+    /// Whether notes leaving `from` can reach `to` along note wires.
+    fn notes_reach(&self, from: ModSourceId, to: ModSourceId) -> bool {
+        let mut seen = vec![from];
+        let mut next = 0;
+        while let Some(&node) = seen.get(next) {
+            if node == to {
+                return true;
+            }
+            next += 1;
+            for wire in &self.wires {
+                let note = self
+                    .ports_of(wire.from.node)
+                    .and_then(|ports| ports.outlet(wire.from.port))
+                    .is_some_and(|outlet| outlet.sort == JackSort::Note);
+                if wire.from.node == node && note && !seen.contains(&wire.to.node) {
+                    seen.push(wire.to.node);
+                }
+            }
+        }
+        false
     }
 
     /// Wire `from` into `to`. An inlet takes one wire, so one already there
@@ -504,6 +532,32 @@ impl SongModulation {
                 ..
             }) if *held != bind => {
                 *held = bind;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Bind notes tag `id` to `channel`, or empty it. Returns whether that
+    /// changed anything; an inlet tag is bound with [`Self::bind_tag`].
+    pub fn bind_notes(&mut self, id: ModSourceId, channel: Option<crate::ChannelId>) -> bool {
+        match self.tags.iter_mut().find(|tag| tag.id == id).map(|tag| &mut tag.kind) {
+            Some(TagKind::NotesIn { channel: held, .. } | TagKind::NotesOut { channel: held })
+                if *held != channel =>
+            {
+                *held = channel;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Set whether notes-in tag `id` takes its channel's notes rather than
+    /// copying them. Returns whether that changed anything.
+    pub fn set_take(&mut self, id: ModSourceId, take: bool) -> bool {
+        match self.tags.iter_mut().find(|tag| tag.id == id).map(|tag| &mut tag.kind) {
+            Some(TagKind::NotesIn { take: held, .. }) if *held != take => {
+                *held = take;
                 true
             }
             _ => false,

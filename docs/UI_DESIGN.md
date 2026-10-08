@@ -509,7 +509,9 @@ tag under each route, and the wires, in a canvas larger than the pane that
 scrolls, where a double-click types a box (step 04) and a box's arrow opens
 its face of small knobs in place (step 05) and a right-click makes a song
 inlet tag (step 06), which is how a channel's outlets, its keyboard and the
-transport reach the patch and the knobs; the selected box's name, edited in
+transport reach the patch and the knobs, or a Notes in or Notes out tag
+(step 07), whose list picks a channel and, on Notes in, whether it takes
+the channel's notes; the selected box's name, edited in
 its header, or what the selected tag reads; and that source's routes, from
 the whole song.
 A route row names its chain, device and parameter ("Kick Filter 1 · Cutoff"),

@@ -1797,6 +1797,9 @@ fn check_song_modulation(
             Err(mooloop_core::WireRefusal::WrongSort) => {
                 Some(("modulation.wire.sort", "joins a note jack to a control jack"))
             }
+            Err(mooloop_core::WireRefusal::NoteLoop) => {
+                Some(("modulation.wire.loop", "closes a loop of note wires"))
+            }
             Ok(()) if modulation.wires[..index].iter().any(|other| other.to == wire.to) => {
                 Some(("modulation.wire.inlet", "runs into an inlet another wire already feeds"))
             }
