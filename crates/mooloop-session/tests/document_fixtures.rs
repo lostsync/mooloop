@@ -172,10 +172,11 @@ fn maximal_project() -> Project {
     let _ = lane.upsert(AutomationPoint::new(point, 0, 0.25));
     let point = lane.allocate_id();
     let _ = lane.upsert(AutomationPoint::new(point, 96, 0.75));
-    // One modulator of each kind, each routed to a source parameter, half
-    // of them unipolar.
+    // One modulator of each control kind, each routed to a source
+    // parameter, half of them unipolar. The note boxes are the song patch's
+    // alone; a rack holds none.
     project.edit_channel_rack(first, |rack| {
-    for (slot, kind) in ModulatorKind::ALL.into_iter().enumerate() {
+    for (slot, kind) in ModulatorKind::ALL.into_iter().filter(|kind| !kind.is_note_box()).enumerate() {
         rack.install(slot, kind.default_params())
             .expect("the rack has a slot for one of each kind");
         let destination = ParamAddr {
