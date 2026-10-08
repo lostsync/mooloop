@@ -2437,7 +2437,7 @@ mod tests {
         assert_eq!(typing("step", 0).entered(), "step", "a whole name stands");
         assert_eq!(typing("min", 1).entered(), "min", "even when another is lit");
         assert_eq!(typing("counter 8", 0).entered(), "counter 8", "settings: as typed");
-        assert_eq!(typing("chord", 0).entered(), "chord", "nothing to complete");
+        assert_eq!(typing("arp", 0).entered(), "arp", "nothing to complete");
         assert!(typing("counter 8", 0).words().is_empty(), "the name is done");
         assert_eq!(typing("", 0).words().len(), mooloop_core::box_text::VOCABULARY.len());
     }
