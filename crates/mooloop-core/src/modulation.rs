@@ -3306,6 +3306,12 @@ pub struct SongModulation {
     /// beside the routes rather than in [`ModRoute`], which the realtime
     /// path copies (song patch step 03).
     pub route_places: Vec<crate::patch::RoutePlace>,
+    /// What each unbound tag a patch preset brought in was bound to when it
+    /// was saved (song patch step 09).
+    pub hints: Vec<crate::patch::TagHint>,
+    /// The assignments a patch preset brought in that are not bound yet:
+    /// they drive nothing (song patch step 09).
+    pub loose: Vec<crate::patch::LooseRoute>,
     /// Next identity to mint. Monotonic, so removing a module and adding
     /// another never hands the newcomer a departed module's routes.
     pub next_source_id: u32,
@@ -3325,6 +3331,10 @@ struct SavedSongModulation<M> {
     wires: Vec<crate::patch::Wire>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     routes: Vec<SavedSongRoute>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    hints: Vec<crate::patch::TagHint>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    loose: Vec<crate::patch::LooseRoute>,
 }
 
 /// A module as the file holds it. A song saved by song modulation, before
@@ -3454,6 +3464,8 @@ impl serde::Serialize for SongModulation {
             tags: self.tags.clone(),
             wires: self.wires.clone(),
             routes,
+            hints: self.hints.clone(),
+            loose: self.loose.clone(),
         }
         .serialize(serializer)
     }
@@ -3543,6 +3555,8 @@ impl<'de> serde::Deserialize<'de> for SongModulation {
             wires: saved.wires,
             routes,
             route_places,
+            hints: saved.hints,
+            loose: saved.loose,
             next_source_id: saved.next_source_id,
         };
         modulation.next_source_id = modulation.next_source_id.max(modulation.mint_floor());
@@ -3561,7 +3575,7 @@ impl SongModulation {
     /// Whether the song has no modules and no routes, which is when it saves
     /// no `modulation` table at all.
     pub fn is_empty(&self) -> bool {
-        self.modules.is_empty() && self.tags.is_empty() && self.routes.is_empty()
+        self.modules.is_empty() && self.tags.is_empty() && self.routes.is_empty() && self.loose.is_empty()
     }
 
     pub fn module(&self, id: ModSourceId) -> Option<&SongModule> {
@@ -3578,6 +3592,7 @@ impl SongModulation {
             .iter()
             .map(|module| module.id)
             .chain(self.tags.iter().map(|tag| tag.id))
+            .chain(self.loose.iter().map(|route| route.id))
             .map(|id| id.0.wrapping_add(1))
             .max()
             .unwrap_or(0)
@@ -3684,6 +3699,7 @@ impl SongModulation {
         };
         self.routes.retain(|route| !gone(route.source, route.destination));
         self.route_places.retain(|place| !gone(place.source, place.destination));
+        self.loose.retain(|route| route.source != id);
         // A box that read it reads nothing.
         self.drop_wires_of(id);
         true

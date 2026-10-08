@@ -9,7 +9,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use mooloop_core::{
     ChannelSetup, ChannelSource, DeviceKind, EffectKind, EffectRun, EffectSlotState, Kit,
-    PluginSlotState, Project, SampleReference,
+    PluginSlotState, Project, SampleReference, SongModulation,
 };
 use serde::{Deserialize, Serialize};
 
@@ -58,6 +58,9 @@ pub enum DocumentKind {
     Effect,
     /// A container and everything inside it, in rack order.
     EffectRun,
+    /// A piece of a song's patch (song patch step 09): boxes, tags, wires
+    /// and unbound assignments, in the shape of a song's `modulation` table.
+    Patch,
 }
 
 impl DocumentKind {
@@ -69,6 +72,7 @@ impl DocumentKind {
             Self::Generator => "generator",
             Self::Effect => "effect",
             Self::EffectRun => "effect_run",
+            Self::Patch => "patch",
         }
     }
 }
@@ -148,6 +152,8 @@ pub enum PresetKind {
     Generator(DeviceKind),
     Channel(DeviceKind),
     Effect(EffectKind),
+    /// A piece of the song patch (song patch step 09), for no device.
+    Patch,
 }
 
 /// Summary of a preset bundle found by [`list_presets`], cheap to compute
@@ -197,6 +203,9 @@ pub enum LoadedDocument {
         effect: Box<EffectSlotState>,
         plugin: Box<PluginSlotState>,
     },
+    /// A patch preset (song patch step 09): a fragment landed with
+    /// [`mooloop_core::SongModulation::land`].
+    Patch(Box<SongModulation>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -602,6 +611,34 @@ pub fn save_plugin_effect_preset(
             .map(|entry| (*entry).to_string())
             .collect(),
         Some(plugin.clone()),
+        |_| Vec::new(),
+    )?;
+    report.repairs = diagnosis.issues;
+    Ok(report)
+}
+
+/// Saves a piece of the song patch as a patch preset (song patch step 09):
+/// `fragment`, made by [`SongModulation::fragment`], written as a song's
+/// `modulation` table is. It names no channel, device or box of any song,
+/// and the repair pass makes sure of it on the way out.
+pub fn save_patch_preset(
+    path: &Path,
+    fragment: &SongModulation,
+    info: PresetInfo,
+) -> Result<SaveReport, Error> {
+    let mut fragment = fragment.clone();
+    let diagnosis = integrity::repair_patch(&mut fragment);
+    if !diagnosis.is_usable() {
+        return Err(diagnosis.into());
+    }
+    let mut report = save_with_assets(
+        path,
+        DocumentKind::Patch,
+        fragment,
+        AssetMode::Embedded,
+        Some(info),
+        Vec::new(),
+        None,
         |_| Vec::new(),
     )?;
     report.repairs = diagnosis.issues;
@@ -1515,6 +1552,14 @@ fn parse_manifest(manifest: &str) -> Result<(LoadedDocument, AssetMode), Error> 
                 envelope.asset_mode,
             )
         }
+        "patch" => {
+            let envelope: Envelope<SongModulation> = table.try_into()?;
+            validate_envelope(&envelope, "patch")?;
+            (
+                LoadedDocument::Patch(Box::new(envelope.document)),
+                envelope.asset_mode,
+            )
+        }
         other => return Err(Error::UnsupportedDocument(other.into())),
     };
     Ok(parsed)
@@ -1613,6 +1658,7 @@ pub fn load_bundle(path: &Path) -> Result<LoadReport, Error> {
             }
             integrity::repair_effect_run(run)
         }
+        LoadedDocument::Patch(fragment) => integrity::repair_patch(fragment),
     };
     if !diagnosis.is_usable() {
         return Err(diagnosis.into());
@@ -1688,6 +1734,10 @@ fn summarize_preset(path: &Path) -> Option<PresetSummary> {
             // offered and then refused.
             let head = envelope.document.effects.first()?.kind();
             head.is_container().then_some(PresetKind::Effect(head))?
+        }
+        "patch" => {
+            let _: Envelope<SongModulation> = toml::from_str(&manifest).ok()?;
+            PresetKind::Patch
         }
         _ => return None,
     };
@@ -4968,6 +5018,104 @@ id = "default_kick"
         assert_eq!(back.wet_dry, 0.4);
         assert_eq!(back.input_trim, 0.5);
         assert_eq!(back.output_trim, 1.75);
+    }
+
+    /// The kick pump as a patch preset (song patch step 09): the kick's
+    /// gate into an envelope, the envelope on the pad's level. It lists as a
+    /// patch, and comes back with its tag unbound and hinted and its
+    /// assignment unbound and hinted, naming nothing of the song it left.
+    #[test]
+    fn a_patch_preset_round_trips_the_kick_pump_unbound_and_hinted() {
+        use mooloop_core::{
+            CanvasPoint, ChannelId, InputSource, InletSource, ModPolarity, ModRoute, ModSourceRef,
+            ModulatorKind, ParamAddr, TagKind,
+        };
+        let temp = tempdir().unwrap();
+        let mut song = SongModulation::default();
+        let kick = ChannelId(4);
+        let envelope = song.add_module(
+            ModulatorKind::Envelope.default_params(),
+            InputSource::ChannelNotes(kick),
+            kick,
+            "Kick",
+        );
+        let gate = song.tags[0].id;
+        let level = ParamAddr::strip(mooloop_core::EffectTarget::Channel(1), 0);
+        song.routes.push(ModRoute {
+            source: ModSourceRef::Id(envelope),
+            source_slot: mooloop_core::modulation::UNRESOLVED_SLOT,
+            destination: level,
+            depth: -0.7,
+            polarity: ModPolarity::Unipolar,
+        });
+        let fragment = song.fragment(
+            &[gate, envelope],
+            |kind| (kind == TagKind::Inlet { bind: Some(InletSource::Gate(kick)) }).then(|| "Kick".to_string()),
+            |_| "Level on Pad".to_string(),
+        );
+        let dir = temp.path().join("patches");
+        let path = dir.join("Kick pump.mooloop-patch");
+        let info = PresetInfo {
+            name: "Kick pump".into(),
+            category: "Dynamics".into(),
+            tags: Vec::new(),
+        };
+        let report = save_patch_preset(&path, &fragment, info).unwrap();
+        assert!(report.repairs.is_empty(), "{:?}", report.repairs);
+        let listed = list_presets(&dir);
+        assert_eq!(listed.len(), 1);
+        assert_eq!((listed[0].name.as_str(), listed[0].kind), ("Kick pump", PresetKind::Patch));
+        let loaded = load_bundle(&path).unwrap();
+        assert!(loaded.repairs.is_empty(), "{:?}", loaded.repairs);
+        let LoadedDocument::Patch(back) = loaded.document else {
+            panic!("not a patch");
+        };
+        assert_eq!(*back, fragment);
+        assert_eq!(back.tags[0].kind, TagKind::Inlet { bind: None });
+        assert_eq!(back.hint(back.tags[0].id), Some("Kick"));
+        assert!(back.routes.is_empty());
+        assert_eq!(back.loose[0].hint, "Level on Pad");
+        assert_eq!(back.loose[0].depth, -0.7);
+        let manifest = fs::read_to_string(path.join(MANIFEST_FILE)).unwrap();
+        assert!(manifest.contains("document_type = \"patch\""), "{manifest}");
+        for address in ["bind", "destination", "scope"] {
+            assert!(!manifest.contains(address), "no {address} saved:\n{manifest}");
+        }
+
+        let mut other = SongModulation::default();
+        let landed = other.land(&back, CanvasPoint::new(300, 200));
+        assert_eq!(landed.len(), 3);
+        assert_eq!(other.modules[0].at, CanvasPoint::new(300 + 144, 200));
+    }
+
+    /// A patch file edited to name a song's channel or a device is put back
+    /// to naming nothing.
+    #[test]
+    fn a_patch_preset_naming_a_song_is_unbound_on_load() {
+        use mooloop_core::{InletSource, ModPolarity, ModRoute, ModSourceRef, TagKind};
+        let temp = tempdir().unwrap();
+        let mut fragment = SongModulation::default();
+        let tag = fragment.add_tag(
+            TagKind::Inlet {
+                bind: Some(InletSource::Gate(mooloop_core::ChannelId(3))),
+            },
+            mooloop_core::CanvasPoint::default(),
+        );
+        fragment.routes.push(ModRoute {
+            source: ModSourceRef::Id(tag),
+            source_slot: mooloop_core::modulation::UNRESOLVED_SLOT,
+            destination: mooloop_core::ParamAddr::strip(mooloop_core::EffectTarget::Channel(0), 0),
+            depth: 0.5,
+            polarity: ModPolarity::Bipolar,
+        });
+        let path = temp.path().join("bound.mooloop-patch");
+        let report = save_patch_preset(&path, &fragment, effect_info("Bound")).unwrap();
+        assert_eq!(report.repairs.len(), 2, "{:?}", report.repairs);
+        let LoadedDocument::Patch(back) = load_bundle(&path).unwrap().document else {
+            panic!("not a patch");
+        };
+        assert_eq!(back.tags[0].kind, TagKind::Inlet { bind: None });
+        assert!(back.routes.is_empty());
     }
 
     #[test]

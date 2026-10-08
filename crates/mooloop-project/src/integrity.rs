@@ -288,6 +288,123 @@ pub fn repair_effect_run(run: &mut mooloop_core::EffectRun) -> Diagnosis {
     }
 }
 
+/// Correct a patch preset in place (song patch step 09): a fragment of a
+/// song's modulation, which names nothing outside itself. Its graph is
+/// checked as a song's is; a tag bound to anything is unbound, and a route
+/// that leaves the fragment is dropped, because a preset holds no address.
+pub fn repair_patch(fragment: &mut mooloop_core::SongModulation) -> Diagnosis {
+    const WHO: &str = "This patch";
+    let mut doctor = Doctor::new(true);
+    check_patch_graph(&mut doctor, WHO, fragment);
+    for (index, tag) in fragment.tags.iter_mut().enumerate() {
+        if tag.kind != tag.kind.unbound()
+            && doctor.correct(
+                "patch.tag.bound",
+                WHO,
+                format!("tag {} is bound to something in a song it is not in", index + 1),
+                "leave it empty".into(),
+            )
+        {
+            tag.kind = tag.kind.unbound();
+        }
+    }
+    let nodes: Vec<_> = fragment
+        .modules
+        .iter()
+        .map(|module| module.id)
+        .chain(fragment.tags.iter().map(|tag| tag.id))
+        .collect();
+    let mut index = 0;
+    while index < fragment.routes.len() {
+        let route = fragment.routes[index];
+        let inside = matches!(route.source, ModSourceRef::Id(id) if nodes.contains(&id))
+            && route
+                .destination
+                .module()
+                .is_some_and(|module| fragment.module(module).is_some());
+        if !inside
+            && doctor.correct(
+                "patch.route",
+                WHO,
+                format!("route {} reaches outside the patch", index + 1),
+                "drop the route".into(),
+            )
+        {
+            fragment.routes.remove(index);
+            continue;
+        }
+        index += 1;
+    }
+    for module in &mut fragment.modules {
+        module.rack = None;
+    }
+    Diagnosis {
+        document: DocumentKind::Patch,
+        issues: doctor.issues,
+        context: vec![("boxes:", fragment.modules.len().to_string())],
+    }
+}
+
+/// What a song's modulation and a patch preset share: unique identities,
+/// wires between real jacks, and hints and unbound assignments naming a tag
+/// or box that is there.
+fn check_patch_graph(doctor: &mut Doctor, who: &str, modulation: &mut mooloop_core::SongModulation) {
+    let mut index = 0;
+    while index < modulation.wires.len() {
+        let wire = modulation.wires[index];
+        let bad = modulation.check_wire(wire.from, wire.to).is_err()
+            || modulation.wires[..index].iter().any(|other| other.to == wire.to);
+        if bad
+            && doctor.correct(
+                "modulation.wire.jack",
+                who,
+                format!(
+                    "the wire from {}:{} to {}:{} joins nothing it can",
+                    wire.from.node.0, wire.from.port, wire.to.node.0, wire.to.port
+                ),
+                "drop the wire".into(),
+            )
+        {
+            modulation.wires.remove(index);
+            continue;
+        }
+        index += 1;
+    }
+    check_loose(doctor, who, modulation);
+}
+
+/// Hints name a tag, and unbound assignments a box or tag, that is there.
+fn check_loose(doctor: &mut Doctor, who: &str, modulation: &mut mooloop_core::SongModulation) {
+    let tags: Vec<_> = modulation.tags.iter().map(|tag| tag.id).collect();
+    // A hint is text shown nowhere once its tag is gone: nothing a user made
+    // is lost, so dropping one is not reported.
+    modulation.hints.retain(|hint| tags.contains(&hint.tag));
+    let nodes: Vec<_> = modulation
+        .modules
+        .iter()
+        .map(|module| module.id)
+        .chain(tags)
+        .collect();
+    let mut index = 0;
+    while index < modulation.loose.len() {
+        let route = &mut modulation.loose[index];
+        let where_ = format!("{who}, unbound assignment {}", index + 1);
+        doctor.fit_finite("modulation.depth", &where_, "its depth", &mut route.depth, 0.0);
+        if !nodes.contains(&route.source)
+            && doctor.correct(
+                "modulation.loose.source",
+                &where_,
+                format!("it is driven by box {}, which is not there", route.source.0),
+                "drop it".into(),
+            )
+        {
+            modulation.loose.remove(index);
+            continue;
+        }
+        index += 1;
+    }
+}
+
 /// Correct a lone generator's parameters in place.
 pub fn repair_source(document: DocumentKind, source: &mut ChannelSource) -> Diagnosis {
 
@@ -1897,6 +2014,7 @@ fn check_song_modulation(
     for index in drop.into_iter().rev() {
         modulation.routes.remove(index);
     }
+    check_loose(doctor, WHO, modulation);
 }
 
 fn check_lane_addresses(

@@ -32,6 +32,7 @@ pub mod mlp8_factory;
 pub mod mlp8;
 pub mod outlet;
 pub mod patch;
+pub mod patch_preset;
 pub mod box_text;
 pub mod pattern;
 pub mod playlist;
@@ -90,8 +91,8 @@ pub use plugin::{
 };
 pub use mlm1_factory::FactoryPatch;
 pub use patch::{
-    grid_place, Bend, BendAxis, CanvasPoint, InletSource, Jack, JackSort, Port, Ports, RoutePlace,
-    SongTag, TagKind, Wire, WireRefusal,
+    grid_place, Bend, BendAxis, CanvasPoint, InletSource, Jack, JackSort, LooseRoute, Port, Ports,
+    RoutePlace, SongTag, TagHint, TagKind, Wire, WireRefusal,
 };
 pub use modulation_plan::{
     chain_index, CompiledInlet, CompiledKnob, CompiledModulation, CompiledModule, CompiledRoute, CompiledSource,
