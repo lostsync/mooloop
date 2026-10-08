@@ -409,7 +409,7 @@ fn the_completion_list_picks_a_name_and_enter_makes_it() {
     let patch = h.window.global::<PatchView>();
     h.type_text("s");
     let names: Vec<String> = patch.get_words().iter().map(|word| word.name.to_string()).collect();
-    assert_eq!(names, ["step", "select", "slew"]);
+    assert_eq!(names, ["step", "select", "slew", "scale"]);
     h.type_text("\u{f701}");
     assert_eq!(patch.get_word_active(), 1);
     h.type_text("\n");
