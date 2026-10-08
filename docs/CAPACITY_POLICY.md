@@ -246,6 +246,11 @@ engine, which is exactly the fault this document opens by naming.
   releases nothing; the notes-out tag's edge goes red for a moment.
   `note_patch::tests::a_full_link_refuses_and_counts` is the boundary test.
   Releases owed by a change of set past 256 become a Choke on the channel.
+- **A note box holds 64 notes in and 64 pitches out** (song patch step 08),
+  the link's number for the link's reason, and writes at most 512 events a
+  block (`note_patch::BOX_EVENTS`, twice a channel's list). A NoteOn that
+  would pass either, or leave too little room to release everything the box
+  then holds, is refused whole; a box has no tag to count it on.
 
 - Typed audio edges reserve nothing at all, which is the shape this policy
   asks for. A channel's subscription is one optional value; the *buffers* are

@@ -279,6 +279,35 @@ past 256 owed, a Choke. Where it differs from the step file:
 - **Control inlets read as of the previous tick** is step 08's to record in
   `MODULATION.md`: nothing reads a control inlet in the note pass yet.
 
+**08 (MOO-527).** The note boxes: `chord`, `modal`, `scale`, `transpose`,
+`chance` and `gate`, typed, spelled and faced like the control boxes. The
+pitch, chord and mode tables are `core/src/harmony.rs`. `CompiledModulation`
+gains `note_boxes` (each box reached from a notes-in tag, after the box it
+reads) and `gates` (the gate boxes' slots); a `CompiledNoteLink` now reads
+a box (`via`) or its tag, and is keyed by a hash of its path. The note pass
+runs each box over its input stream into a scratch buffer of its own, with
+a 64-entry table per box from each note heard to the pitches played for it.
+Where it differs from the step file:
+
+- **Faces are stepped knobs that read by name** (`min7`, `1st`, `d`,
+  `dorian`, `7th`), not segmented rows: the face frame has knobs only, and
+  a row of ten chord types would not fit a box.
+- **A control inlet on a note box reads as of the end of the block
+  before**, not the previous control tick: the note pass runs once a block,
+  before the patch ticks. `MODULATION.md` says so.
+- **A transpose's wire adds `round(value * 12)`**, so ±1 is an octave.
+- **A box's outlets can be more than one.** A wire names the outlet it
+  reads (`CompiledInlet::port`), and a node's signal carries two more
+  values beside its first; only the gate box uses them. A route from a gate
+  box reads its gate.
+- **A Choke into a box releases what it holds** as NoteOffs rather than
+  passing the Choke on, so a gate box after it counts down as a channel's
+  gate does.
+- **A box kept across an edit keeps its notes** when its path from the tag
+  is the same: retyping `chord maj` to `chord min` mid-note releases the
+  major chord when the note ends. A box on a changed path starts empty, and
+  the links after it release what they held.
+
 ## Adam's rulings
 
 | When | Ruling |

@@ -72,7 +72,23 @@ area, and where each behaviour stops.
   a stop, a mute, a pattern switch or a loop fold releases it; deleting the
   wire or rebinding a tag releases what went through it on the next block.
   A wire holds 64 notes at once; one more is refused and the Notes out tag
-  goes red. A note wire cannot close a loop. Note boxes come with step 08.
+  goes red. A note wire cannot close a loop.
+- **Note boxes** (song patch step 08), typed like any box: `chord min7
+  /1st` builds a chord on each note (`maj`, `min`, `dim`, `aug`, `sus2`,
+  `sus4`, `maj7`, `min7`, `7`, `dim7`; each inversion moves the lowest note
+  up an octave); `modal d dorian 7` snaps each note to the mode and builds
+  that degree's triad or, with `7`, its seventh; `scale c minor` snaps each
+  note to the nearest note of the mode, down on a tie; `transpose -12`
+  moves notes, and a control wire into its second inlet adds whole
+  semitones (±1 an octave); `chance 0.7` lets each NoteOn through with that
+  probability, a wire into its second inlet adding to it, from a generator
+  that restarts with the transport, so a bounce plays what the playback
+  before it did; `gate` turns notes into a gate, the latest NoteOn's pitch
+  and velocity. Roots are `c` to `b` with sharps or flats, modes the seven
+  church modes (`ionian`, `aeolian` also read) and `harmonic` and `melodic`
+  minor. A note pushed out of 0 to 127 is dropped with its NoteOff; two
+  notes that land on one pitch play it once and end with the last. Faces
+  show the arguments as stepped knobs that read by name.
 - **Cable activity** (Preferences > Appearance): Off, Subtle (the default) or
   Full. A control wire tints toward the accent with its level and a note
   wire thickens for a moment on each note; Subtle is 30 % of Full.

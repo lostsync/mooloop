@@ -537,7 +537,10 @@ nothing when clicked, and a fader or pan control does not take the assign
 gesture yet (open: `docs/plans/archive/song-modulation/00-status.md`).
 
 A box's face is a row of `MiniKnob`s with a label above and a readout below,
-four to a row, eight past twelve settings; a stepped setting snaps. The
+four to a row, eight past twelve settings; a stepped setting snaps. A note
+box's arguments (a chord's type and inversion, a root and a mode) are
+stepped knobs whose readout is the name the box is typed with (`min7`,
+`1st`, `d`, `dorian`), not segmented rows. The
 knobs are destinations like any other: an armed outlet's drag sets a
 route's depth, and the arc shows the live offset. Cables are drawn
 orthogonally with rounded corners; a hand-placed bend is a run the user

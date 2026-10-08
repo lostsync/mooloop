@@ -646,3 +646,26 @@ read **takes**. Play: only ML-M1 should sound. Stop, seek, switch patterns,
 mute Keys and press panic while a long note holds: ML-M1 should never be
 left droning. Delete the wire while a note holds: it should stop on the
 next block. Does the take toggle belong in the list, or on the tag itself?
+
+### 46. Note boxes: chords, a modal pad and a probable hat (MOO-527): listen, in the app
+
+**Chords.** Take Keys' notes as in 45 and type a box `chord min7 /1st`
+between the Notes in tag and a Notes out tag on a pad or ML-P8. Play single
+notes on Keys: each should come out as a minor seventh in first inversion
+(C plays E♭ G B♭ C). Open the box's face and turn Type and Inversion while
+a note holds: the held chord should end cleanly when the note does, and
+the next note should take the new chord.
+
+**A bass line to a modal pad.** Put a bass line on one channel, wire its
+Notes in (copied, so the bass still plays) through `modal d dorian 7` to a
+pad's Notes out. Every bass note, in or out of the mode, should come out as
+a four-note D dorian chord on that degree. Try `modal d dorian` (triads),
+then `scale c minor` alone to hear the snapping without the chords.
+
+**A probable hat.** Put a sixteenth-note hat pattern on a drum channel,
+take its notes through `chance 0.6` back to the same channel. Roughly six
+hits in ten should play. Add a `step` box and wire it into the chance's
+second inlet: the steps raise and lower the odds through the bar. Bounce
+the song and play it back: it should match what you heard live from the
+start. Are the faces' knobs the right control for chord type and mode, or
+do they want the prototype's segmented rows?
