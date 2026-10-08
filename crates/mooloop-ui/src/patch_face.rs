@@ -8,8 +8,11 @@
 //! knob: the op of `* 0.5` is retyped, not turned.
 
 use mooloop_core::box_text::{division_name, format_number, shape_name};
+use mooloop_core::harmony::PITCH_NAMES;
 use mooloop_core::{
-    ModulatorParams, COUNTER_PARAM_STEPS, ENV_PARAM_AMOUNT, ENV_PARAM_ATTACK_DIVISION,
+    ModulatorParams, CHANCE_PARAM_PROBABILITY, CHORD_PARAM_INVERSION, CHORD_PARAM_QUALITY,
+    MODAL_PARAM_MODE, MODAL_PARAM_ROOT, MODAL_PARAM_SEVENTH, TRANSPOSE_PARAM_SEMITONES,
+    COUNTER_PARAM_STEPS, ENV_PARAM_AMOUNT, ENV_PARAM_ATTACK_DIVISION,
     ENV_PARAM_ATTACK_S, ENV_PARAM_ATTACK_SYNC, ENV_PARAM_DECAY_DIVISION, ENV_PARAM_DECAY_S,
     ENV_PARAM_DECAY_SYNC, ENV_PARAM_RELEASE_DIVISION, ENV_PARAM_RELEASE_S, ENV_PARAM_RELEASE_SYNC,
     ENV_PARAM_SUSTAIN, LFO_PARAM_DEPTH, LFO_PARAM_FADE_IN_DIVISION, LFO_PARAM_FADE_IN_S,
@@ -75,7 +78,14 @@ pub(crate) fn face_params(params: &ModulatorParams) -> Vec<u32> {
         ModulatorParams::Counter(_) => vec![COUNTER_PARAM_STEPS],
         ModulatorParams::Select(_) => vec![SELECT_PARAM_INPUTS],
         ModulatorParams::Slew(_) => vec![SLEW_PARAM_TIME_S],
-        ModulatorParams::Unknown => Vec::new(),
+        // The note boxes' arguments, as stepped knobs that read as typed
+        // (song patch step 08).
+        ModulatorParams::Chord(_) => vec![CHORD_PARAM_QUALITY, CHORD_PARAM_INVERSION],
+        ModulatorParams::Modal(_) => vec![MODAL_PARAM_ROOT, MODAL_PARAM_MODE, MODAL_PARAM_SEVENTH],
+        ModulatorParams::Scale(_) => vec![MODAL_PARAM_ROOT, MODAL_PARAM_MODE],
+        ModulatorParams::Transpose(_) => vec![TRANSPOSE_PARAM_SEMITONES],
+        ModulatorParams::Chance(_) => vec![CHANCE_PARAM_PROBABILITY],
+        ModulatorParams::NoteGate | ModulatorParams::Unknown => Vec::new(),
     }
 }
 
@@ -102,6 +112,9 @@ pub(crate) fn label(params: &ModulatorParams, id: u32) -> String {
         (ModulatorParams::Random(_), RANDOM_PARAM_RATE_HZ | RANDOM_PARAM_RATE_DIVISION) => "Rate",
         (ModulatorParams::Random(_), RANDOM_PARAM_TRIGGER) => "Draw",
         (ModulatorParams::Random(_), RANDOM_PARAM_PROBABILITY) => "Chance",
+        (ModulatorParams::Chord(_), CHORD_PARAM_INVERSION) => "Inv",
+        (ModulatorParams::Modal(_), MODAL_PARAM_SEVENTH) => "Size",
+        (ModulatorParams::Transpose(_), TRANSPOSE_PARAM_SEMITONES) => "Semis",
         _ => return descriptor(params, id).map_or_else(String::new, |d| d.name.to_string()),
     };
     short.to_string()
@@ -151,6 +164,21 @@ pub(crate) fn readout(params: &ModulatorParams, id: u32) -> String {
             ModulatorParams::Random(_),
             RANDOM_PARAM_TEMPO_SYNC | RANDOM_PARAM_BIPOLAR | RANDOM_PARAM_QUANTIZE | RANDOM_PARAM_DRUNK,
         ) => on_off(value),
+        (ModulatorParams::Chord(chord), CHORD_PARAM_QUALITY) => chord.quality.name().into(),
+        (ModulatorParams::Chord(chord), CHORD_PARAM_INVERSION) => match chord.inversion {
+            0 => "root".into(),
+            1 => "1st".into(),
+            2 => "2nd".into(),
+            _ => "3rd".into(),
+        },
+        (ModulatorParams::Modal(modal), MODAL_PARAM_ROOT) => PITCH_NAMES[usize::from(modal.root % 12)].into(),
+        (ModulatorParams::Scale(scale), MODAL_PARAM_ROOT) => PITCH_NAMES[usize::from(scale.root % 12)].into(),
+        (ModulatorParams::Modal(modal), MODAL_PARAM_MODE) => modal.mode.name().into(),
+        (ModulatorParams::Scale(scale), MODAL_PARAM_MODE) => scale.mode.name().into(),
+        (ModulatorParams::Modal(modal), MODAL_PARAM_SEVENTH) => if modal.seventh { "7th" } else { "triad" }.into(),
+        (ModulatorParams::Chance(chance), CHANCE_PARAM_PROBABILITY) => {
+            format!("{}%", (chance.probability * 100.0).round())
+        }
         _ => {
             let unit = descriptor(params, id).map_or("", |descriptor| descriptor.unit);
             let unit = match unit {
@@ -193,5 +221,20 @@ mod tests {
         assert_eq!(face_params(&parse("clip").unwrap()), [MATH_PARAM_CLAMP_LOW, MATH_PARAM_CLAMP_HIGH]);
         assert_eq!(face_params(&parse("counter 8").unwrap()), [COUNTER_PARAM_STEPS]);
         assert!(face_params(&ModulatorParams::Unknown).is_empty());
+    }
+
+    /// A note box's knobs read as the box is typed.
+    #[test]
+    fn a_note_box_face_reads_its_chord_root_and_mode_by_name() {
+        let chord = parse("chord min7 /1st").unwrap();
+        assert_eq!(readout(&chord, CHORD_PARAM_QUALITY), "min7");
+        assert_eq!(readout(&chord, CHORD_PARAM_INVERSION), "1st");
+        let modal = parse("modal d dorian 7").unwrap();
+        assert_eq!(readout(&modal, MODAL_PARAM_ROOT), "d");
+        assert_eq!(readout(&modal, MODAL_PARAM_MODE), "dorian");
+        assert_eq!(readout(&modal, MODAL_PARAM_SEVENTH), "7th");
+        assert_eq!(readout(&parse("chance 0.7").unwrap(), CHANCE_PARAM_PROBABILITY), "70%");
+        assert_eq!(readout(&parse("transpose -12").unwrap(), TRANSPOSE_PARAM_SEMITONES), "-12st");
+        assert!(face_params(&ModulatorParams::NoteGate).is_empty());
     }
 }

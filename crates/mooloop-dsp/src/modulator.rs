@@ -196,11 +196,21 @@ impl Lfo {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct NoteGateEvents {
     pub note_ons: u8,
     pub note_offs: u8,
     pub choke: bool,
+}
+
+/// What reached a gate box (song patch step 08) in one control tick, as
+/// the note pass files it: its notes, counted as a gate tag counts a
+/// channel's, and the pitch and velocity of the tick's latest NoteOn, each
+/// `0..1`.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct NoteGateTick {
+    pub events: NoteGateEvents,
+    pub struck: Option<(f32, f32)>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -751,6 +761,13 @@ enum Source {
     /// Its input count; what it passes is read from its inlets each tick.
     Select(u8),
     Slew(Slew),
+    /// A note box (song patch step 08), which the note pass runs. Its
+    /// second inlet's value as of the last tick, which a transpose or a
+    /// chance box reads; it puts out nothing on a control outlet.
+    Notes(f32),
+    /// A gate box: the notes held, and the latest NoteOn's pitch and
+    /// velocity.
+    NoteGate { held: u16, pitch: f32, velocity: f32 },
     /// A box this build does not know. It puts out nothing.
     Silent,
 }
@@ -762,6 +779,9 @@ enum Source {
 pub struct SpecInlet {
     pub node: u16,
     pub delayed: bool,
+    /// Which of the node's outlets: past 0, a gate box's pitch and
+    /// velocity.
+    pub port: u8,
 }
 
 /// What one module of a [`ModulatorSet`] is built from: the song's module,
@@ -793,6 +813,16 @@ impl ModuleSpec {
                 time_seconds: params.time_seconds,
                 value: 0.0,
             }),
+            ModulatorParams::Chord(_)
+            | ModulatorParams::Modal(_)
+            | ModulatorParams::Scale(_)
+            | ModulatorParams::Transpose(_)
+            | ModulatorParams::Chance(_) => Source::Notes(0.0),
+            ModulatorParams::NoteGate => Source::NoteGate {
+                held: 0,
+                pitch: 0.0,
+                velocity: 0.0,
+            },
             ModulatorParams::Unknown => Source::Silent,
         }
     }
@@ -805,6 +835,9 @@ struct Module {
     /// Each inlet's value as of the tick before, which a trigger inlet
     /// compares with to see a rise through 0.5.
     last: [f32; MAX_INLETS],
+    /// A gate box's slot in each tick's [`SongInputs::note_gates`]; `None`
+    /// for every other box, and for a gate box no notes reach.
+    gate_slot: Option<u16>,
 }
 
 /// A song inlet tag: what it reads, and what it has seen.
@@ -834,6 +867,22 @@ struct Signal {
     value: f32,
     events: NoteGateEvents,
     fire: bool,
+    /// The outlets past the first: a gate box's pitch and velocity.
+    ports: [f32; 2],
+}
+
+impl Signal {
+    /// What a wire from outlet `port` reads: the whole signal from the
+    /// first, and only the value from the others.
+    fn port(self, port: u8) -> Self {
+        match port {
+            0 => self,
+            _ => Self {
+                value: self.ports.get(usize::from(port) - 1).copied().unwrap_or(0.0),
+                ..Self::default()
+            },
+        }
+    }
 }
 
 /// Where the transport is at one control tick, for the transport tags
@@ -858,6 +907,8 @@ pub struct SongInputs<'a> {
     pub transport: TransportTick,
     pub outlets: &'a [[f32; MAX_GENERATOR_OUTLETS]; MAX_CHANNELS],
     pub performance: &'a [[f32; PERFORMANCE_SOURCES]; MAX_CHANNELS],
+    /// What reached each gate box this tick, by its slot.
+    pub note_gates: &'a [NoteGateTick],
 }
 
 static NO_OUTLETS: [[f32; MAX_GENERATOR_OUTLETS]; MAX_CHANNELS] = [[0.0; MAX_GENERATOR_OUTLETS]; MAX_CHANNELS];
@@ -871,6 +922,7 @@ impl<'a> SongInputs<'a> {
             transport,
             outlets: &NO_OUTLETS,
             performance: &NO_PERFORMANCE,
+            note_gates: &[],
         }
     }
 }
@@ -988,6 +1040,7 @@ impl ModulatorSet {
                 // Unprimed: the first reading cannot be a rise, so a box
                 // made while its wire is already high does not fire.
                 last: [f32::NAN; MAX_INLETS],
+                gate_slot: None,
             })
             .collect();
         let tags: Vec<Tag> = tags
@@ -1037,6 +1090,27 @@ impl ModulatorSet {
             span.1 = index as u32 + 1;
         }
         self
+    }
+
+    /// Give each gate box at the list positions `gates` its slot in each
+    /// tick's [`SongInputs::note_gates`]: its place in `gates`
+    /// (`mooloop_core::CompiledModulation::gates`).
+    pub fn with_note_gates(mut self, gates: &[u16]) -> Self {
+        for (slot, &at) in gates.iter().enumerate() {
+            if let (Some(module), Ok(slot)) = (self.modules.get_mut(usize::from(at)), u16::try_from(slot)) {
+                module.gate_slot = Some(slot);
+            }
+        }
+        self
+    }
+
+    /// What a note box's second inlet read on the last tick: a transpose's
+    /// semitones, a chance's probability. 0 for every other box.
+    pub fn note_control(&self, at: usize) -> f32 {
+        match self.modules.get(at).map(|module| module.source) {
+            Some(Source::Notes(value)) => value,
+            _ => 0.0,
+        }
     }
 
     pub fn len(&self) -> usize {
@@ -1110,7 +1184,16 @@ impl ModulatorSet {
             }
             (ModulatorParams::Select(next), Source::Select(inputs)) => *inputs = next.inputs,
             (ModulatorParams::Slew(next), Source::Slew(slew)) => slew.time_seconds = next.time_seconds,
-            (ModulatorParams::Unknown, Source::Silent) => {}
+            (
+                ModulatorParams::Chord(_)
+                | ModulatorParams::Modal(_)
+                | ModulatorParams::Scale(_)
+                | ModulatorParams::Transpose(_)
+                | ModulatorParams::Chance(_),
+                Source::Notes(_),
+            )
+            | (ModulatorParams::NoteGate, Source::NoteGate { .. })
+            | (ModulatorParams::Unknown, Source::Silent) => {}
             _ => module.source = module.spec.build(),
         }
     }
@@ -1292,13 +1375,17 @@ impl ModulatorSet {
             for (port, inlet) in self.modules[node].spec.inlets.iter().enumerate() {
                 inlets[port] = inlet.map(|inlet| {
                     let signals = if inlet.delayed { &self.previous } else { &self.signals };
-                    signals.get(usize::from(inlet.node)).copied().unwrap_or_default()
+                    signals.get(usize::from(inlet.node)).copied().unwrap_or_default().port(inlet.port)
                 });
             }
             if let Some(params) = self.moved_knobs(node) {
                 Self::run_on(&mut self.modules[node], params, false);
             }
             let module = &mut self.modules[node];
+            let gate_slot = module.gate_slot;
+            // What a gate box puts on its gate outlet besides its value, and
+            // on its pitch and velocity outlets.
+            let mut gate_out = None;
             let mut fired = [false; MAX_INLETS];
             for port in 0..MAX_INLETS {
                 if let Some(signal) = inlets[port] {
@@ -1399,11 +1486,36 @@ impl ModulatorSet {
                     slew.value += (target - slew.value) * (frames as f32 / span).min(1.0);
                     slew.value
                 }
+                Source::Notes(control) => {
+                    *control = inlets[1].map_or(0.0, |signal| signal.value);
+                    0.0
+                }
+                Source::NoteGate { held, pitch, velocity } => {
+                    let tick = gate_slot
+                        .and_then(|slot| inputs.note_gates.get(usize::from(slot)))
+                        .copied()
+                        .unwrap_or_default();
+                    if tick.events.choke {
+                        *held = 0;
+                    } else {
+                        *held = held.saturating_sub(u16::from(tick.events.note_offs));
+                    }
+                    *held = held.saturating_add(u16::from(tick.events.note_ons));
+                    if let Some((struck_pitch, struck_velocity)) = tick.struck {
+                        *pitch = struck_pitch;
+                        *velocity = struck_velocity;
+                    }
+                    gate_out = Some((tick.events, [*pitch, *velocity]));
+                    if *held > 0 { 1.0 } else { 0.0 }
+                }
                 Source::Silent => 0.0,
             };
             self.outputs[node] = value;
+            let (events, ports) = gate_out.unwrap_or_default();
             self.signals[node] = Signal {
                 value,
+                events,
+                ports,
                 ..Signal::default()
             };
         }
@@ -1422,6 +1534,8 @@ impl ModulatorSet {
                 | Source::Counter(_)
                 | Source::Select(_)
                 | Source::Slew(_)
+                | Source::Notes(_)
+                | Source::NoteGate { .. }
                 | Source::Silent => {}
             }
         }
@@ -1474,12 +1588,14 @@ mod tests {
                     inlets[port] = spec.reads.map(|read| super::SpecInlet {
                         node: read,
                         delayed: usize::from(read) >= at,
+                        port: 0,
                     });
                 }
                 _ => {
                     inlets[port] = spec.gate.map(|seat| super::SpecInlet {
                         node: (modules + seats.iter().position(|&s| s == seat).unwrap()) as u16,
                         delayed: false,
+                        port: 0,
                     });
                 }
             }
@@ -1606,6 +1722,7 @@ mod tests {
             transport: TransportTick::default(),
             outlets: &outlets,
             performance: &performance,
+            note_gates: &[],
         };
         let mut outlet = Tag {
             source: Some(TagSource::Outlet { seat: 2, outlet: 1 }),
@@ -2349,7 +2466,7 @@ mod tests {
         fn box_of(params: ModulatorParams, wires: &[(usize, u16)]) -> Spec {
             let mut inlets = [None; MAX_INLETS];
             for &(port, node) in wires {
-                inlets[port] = Some(SpecInlet { node, delayed: false });
+                inlets[port] = Some(SpecInlet { node, delayed: false, port: 0 });
             }
             Spec { params, seed: 1, inlets }
         }

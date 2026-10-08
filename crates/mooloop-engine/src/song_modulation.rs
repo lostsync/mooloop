@@ -22,7 +22,7 @@ use mooloop_core::{
     MAX_CHANNELS,
 };
 use mooloop_core::modulation::{MAX_GENERATOR_OUTLETS, PERFORMANCE_SOURCES};
-use crate::note_patch::NotePass;
+use crate::note_patch::{BoxInputs, NotePass};
 use mooloop_dsp::{
     EventList, ModuleSpec, ModulatorSet, NoteGateEvents, SongInputs, SpecInlet, TransportTick,
     CONTROL_RATE_FRAMES, MAX_CONTROL_TICKS_PER_BLOCK,
@@ -81,13 +81,15 @@ impl SongModulator {
                     inlet.map(|inlet| SpecInlet {
                         node: inlet.node,
                         delayed: inlet.delayed,
+                        port: inlet.port,
                     })
                 }),
             }),
             plan.tags.iter().map(|tag| tag.source),
             plan.order.iter().copied(),
         )
-        .with_knobs(plan.knobs.iter().copied());
+        .with_knobs(plan.knobs.iter().copied())
+        .with_note_gates(&plan.gates);
         let table = vec![0.0; plan.modules.len() * MAX_CONTROL_TICKS_PER_BLOCK];
         let tag_table = vec![0.0; plan.tags.len() * MAX_CONTROL_TICKS_PER_BLOCK];
         let notes = NotePass::new(&plan);
@@ -147,10 +149,24 @@ impl SongModulator {
         self.notes.carry_from(&previous.notes);
     }
 
-    /// Run the note wires over the first `live` channels' complete event
-    /// lists ([`NotePass::process`]).
-    pub(crate) fn pass_notes(&mut self, events: &mut [Box<EventList>], live: usize, panicked: bool) {
-        self.notes.process(events, live, panicked);
+    /// Run the note wires and boxes over the first `live` channels'
+    /// complete event lists for a `frames`-long block
+    /// ([`NotePass::process`]).
+    pub(crate) fn pass_notes(
+        &mut self,
+        events: &mut [Box<EventList>],
+        live: usize,
+        panicked: bool,
+        playing: bool,
+        frames: usize,
+    ) {
+        let inputs = BoxInputs {
+            modules: &self.plan.modules,
+            set: &self.set,
+            playing,
+            frames,
+        };
+        self.notes.process(events, live, panicked, inputs);
     }
 
 
@@ -227,14 +243,19 @@ impl SongModulator {
                     playing: beats.is_some(),
                     ..TransportTick::default()
                 });
+                let note_gates = self.notes.gate_row(tick);
                 let inputs = match sources {
                     Some((outlets, performance)) => SongInputs {
                         gates,
                         transport: at,
                         outlets,
                         performance,
+                        note_gates,
                     },
-                    None => SongInputs::quiet(gates, at),
+                    None => SongInputs {
+                        note_gates,
+                        ..SongInputs::quiet(gates, at)
+                    },
                 };
                 self.set.tick_with(sample_rate, span, bpm, beats, &inputs);
             }

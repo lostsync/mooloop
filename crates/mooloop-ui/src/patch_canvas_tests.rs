@@ -409,7 +409,7 @@ fn the_completion_list_picks_a_name_and_enter_makes_it() {
     let patch = h.window.global::<PatchView>();
     h.type_text("s");
     let names: Vec<String> = patch.get_words().iter().map(|word| word.name.to_string()).collect();
-    assert_eq!(names, ["step", "select", "slew"]);
+    assert_eq!(names, ["step", "select", "slew", "scale"]);
     h.type_text("\u{f701}");
     assert_eq!(patch.get_word_active(), 1);
     h.type_text("\n");
@@ -427,8 +427,8 @@ fn tab_completes_and_an_unknown_name_stays_as_typed() {
     assert_eq!(h.boxes().last().map(String::as_str), Some("counter 8"));
 
     h.double_click((600.0, 200.0));
-    h.type_text("chord min7\n");
-    assert_eq!(h.boxes().last().map(String::as_str), Some("chord min7"));
+    h.type_text("arp up\n");
+    assert_eq!(h.boxes().last().map(String::as_str), Some("arp up"));
     assert!(h.window.get_status_message().contains("not a box"), "{}", h.window.get_status_message());
     let st = h.state.borrow();
     assert_eq!(st.session.modulation.modules.last().unwrap().params, ModulatorParams::Unknown);

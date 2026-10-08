@@ -16,6 +16,7 @@ pub mod effect;
 pub mod effect_factory;
 pub mod file_names;
 pub mod gain;
+pub mod harmony;
 pub mod generator;
 pub mod log;
 pub mod input;
@@ -94,7 +95,7 @@ pub use patch::{
 };
 pub use modulation_plan::{
     chain_index, CompiledInlet, CompiledKnob, CompiledModulation, CompiledModule, CompiledRoute, CompiledSource,
-    CompiledNoteLink, CompiledTag, TagSource, MAX_INLETS,
+    CompiledNoteBox, CompiledNoteLink, CompiledTag, TagSource, MAX_INLETS,
     MODULATION_CHAINS,
 };
 pub use modulation::{
@@ -120,6 +121,11 @@ pub use modulation::{
     ModCounterParams, ModSelectParams, ModSlewParams, COUNTER_DESCRIPTORS, COUNTER_MAX_STEPS,
     COUNTER_PARAM_STEPS, SELECT_DESCRIPTORS, SELECT_MAX_INPUTS, SELECT_PARAM_INPUTS,
     SLEW_DESCRIPTORS, SLEW_PARAM_TIME_S,
+    ModChanceParams, ModChordParams, ModModalParams, ModScaleParams, ModTransposeParams,
+    CHANCE_DESCRIPTORS, CHANCE_PARAM_PROBABILITY, CHORD_DESCRIPTORS, CHORD_PARAM_INVERSION,
+    CHORD_PARAM_QUALITY, MODAL_DESCRIPTORS, MODAL_PARAM_MODE, MODAL_PARAM_ROOT,
+    MODAL_PARAM_SEVENTH, SCALE_DESCRIPTORS, TRANSPOSE_DESCRIPTORS, TRANSPOSE_MAX_SEMITONES,
+    TRANSPOSE_PARAM_SEMITONES,
 };
 pub use strip::{
     strip_band_of, strip_band_param, strip_band_shelf, StripBand, StripParams, STRIP_BAND_BASE,

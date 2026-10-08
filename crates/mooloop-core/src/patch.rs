@@ -99,6 +99,11 @@ const SELECT_IN: &[Port] = &[
 ];
 const SLEW_IN: &[Port] = &[control("in")];
 const NOTES: &[Port] = &[note("notes")];
+const TRANSPOSE_IN: &[Port] = &[note("notes"), control("semitones")];
+const CHANCE_IN: &[Port] = &[note("notes"), control("probability")];
+/// A gate box's outlets: the gate, as a gate tag's (step 06), then the
+/// latest NoteOn's pitch and velocity.
+const GATE_OUT: &[Port] = &[control("gate"), control("pitch"), control("velocity")];
 
 impl ModulatorKind {
     /// This kind's jacks.
@@ -135,6 +140,22 @@ impl ModulatorKind {
             Self::Slew => Ports {
                 inlets: SLEW_IN,
                 outlets: OUT,
+            },
+            Self::Chord | Self::Modal | Self::Scale => Ports {
+                inlets: NOTES,
+                outlets: NOTES,
+            },
+            Self::Transpose => Ports {
+                inlets: TRANSPOSE_IN,
+                outlets: NOTES,
+            },
+            Self::Chance => Ports {
+                inlets: CHANCE_IN,
+                outlets: NOTES,
+            },
+            Self::NoteGate => Ports {
+                inlets: NOTES,
+                outlets: GATE_OUT,
             },
             Self::Unknown => Ports {
                 inlets: &[],
@@ -803,7 +824,8 @@ mod tests {
         for kind in ModulatorKind::ALL {
             let port = kind.ports().inlet(kind.input_port());
             assert!(port.is_some(), "{kind:?}'s input port is not one of its inlets");
-            assert_eq!(port.unwrap().sort, JackSort::Control);
+            let sort = if kind.is_note_box() { JackSort::Note } else { JackSort::Control };
+            assert_eq!(port.unwrap().sort, sort, "{kind:?}");
         }
     }
 
@@ -1026,11 +1048,11 @@ mod tests {
         use crate::modulation::ModulatorParams;
         let (mut song, ids) = song_with(&[ModulatorKind::Lfo]);
         let unknown = song.add_module(ModulatorParams::Unknown, InputSource::None, ChannelId(1), "Kick 1");
-        song.module_mut(unknown).unwrap().text = "chord min7".into();
+        song.module_mut(unknown).unwrap().text = "arp up 2".into();
         let saved = toml::to_string(&song).unwrap();
         let loaded: SongModulation = toml::from_str(&saved).unwrap();
         assert_eq!(loaded, song);
-        assert_eq!(loaded.module(unknown).unwrap().text, "chord min7");
+        assert_eq!(loaded.module(unknown).unwrap().text, "arp up 2");
         assert_eq!(loaded.module(ids[0]).unwrap().text, "", "a known box saves no text");
     }
 
@@ -1043,19 +1065,19 @@ next_source_id = 3
 [[modules]]
 id = 1
 at = { x = 10, y = 10 }
-params = { kind = "chord", quality = "min7", inversion = 1 }
+params = { kind = "arp", order = "up", octaves = 2 }
 
 [[modules]]
 id = 2
 at = { x = 10, y = 60 }
-text = "chance 0.70"
-params = { kind = "chance", p = 0.7 }
+text = "euclid 5 8"
+params = { kind = "euclid", pulses = 5, steps = 8 }
 "#;
         let loaded: SongModulation = toml::from_str(later).unwrap();
-        let chord = loaded.module(ModSourceId(1)).unwrap();
-        assert_eq!((chord.params, chord.text.as_str()), (ModulatorParams::Unknown, "chord"));
-        let chance = loaded.module(ModSourceId(2)).unwrap();
-        assert_eq!((chance.params, chance.text.as_str()), (ModulatorParams::Unknown, "chance 0.70"));
+        let arp = loaded.module(ModSourceId(1)).unwrap();
+        assert_eq!((arp.params, arp.text.as_str()), (ModulatorParams::Unknown, "arp"));
+        let euclid = loaded.module(ModSourceId(2)).unwrap();
+        assert_eq!((euclid.params, euclid.text.as_str()), (ModulatorParams::Unknown, "euclid 5 8"));
 
         let damaged = r#"
 [[modules]]

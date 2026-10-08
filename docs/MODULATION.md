@@ -174,6 +174,15 @@ while any note is held on the channel and 0 otherwise.
 - The LFO's **rate** adds its wire in octaves: ±1 moves the rate two
   octaves either way.
 - Math's **in** is its operand.
+- A gate box (song patch step 08) sends what a gate tag does from the notes
+  that reach it, on its first outlet; its **pitch** and **velocity**
+  outlets carry the latest NoteOn's, each `0..1`, and no events.
+
+**Note boxes read a control inlet once a block.** The note pass runs before
+the patch ticks, so a `transpose`'s semitones and a `chance`'s probability
+inlet are read as the patch ticked them last, at the end of the block
+before. A wire into transpose adds `round(value * 12)` semitones, so ±1 is
+an octave; into chance it adds to the probability, clamped to `0..1`.
 
 **A loop runs a tick late.** A wire that closes a loop reads its outlet as of
 the previous control tick, which keeps every patch bounded and identical
