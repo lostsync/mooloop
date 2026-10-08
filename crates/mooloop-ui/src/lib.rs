@@ -6296,6 +6296,12 @@ impl UiState {
                     ModulatorParams::Counter(_)
                     | ModulatorParams::Select(_)
                     | ModulatorParams::Slew(_)
+                    | ModulatorParams::Chord(_)
+                    | ModulatorParams::Modal(_)
+                    | ModulatorParams::Scale(_)
+                    | ModulatorParams::Transpose(_)
+                    | ModulatorParams::Chance(_)
+                    | ModulatorParams::NoteGate
                     | ModulatorParams::Unknown => {}
                 }
                 row

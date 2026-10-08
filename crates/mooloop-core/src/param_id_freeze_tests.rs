@@ -673,6 +673,12 @@ const FROZEN: &[(Owner, &[(u32, &str)])] = &[
     (Modulator(ModulatorKind::Counter), &[(0, "Length")]),
     (Modulator(ModulatorKind::Select), &[(0, "Inputs")]),
     (Modulator(ModulatorKind::Slew), &[(0, "Time")]),
+    (Modulator(ModulatorKind::Chord), &[(0, "Type"), (1, "Inversion")]),
+    (Modulator(ModulatorKind::Modal), &[(0, "Root"), (1, "Mode"), (2, "Seventh")]),
+    (Modulator(ModulatorKind::Scale), &[(0, "Root"), (1, "Mode")]),
+    (Modulator(ModulatorKind::Transpose), &[(0, "Semitones")]),
+    (Modulator(ModulatorKind::Chance), &[(0, "Chance")]),
+    (Modulator(ModulatorKind::NoteGate), &[]),
 ];
 
 fn live(owner: Owner) -> &'static [crate::effect::ParamDescriptor] {

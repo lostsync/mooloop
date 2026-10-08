@@ -6,9 +6,15 @@
 //! a knob turned on its face changes what the box says. [`parse`] is the
 //! other way, and [`VOCABULARY`] is every name it knows, in the order the
 //! completion list offers them.
+//!
+//! The note boxes (`docs/plans/song-patch/08-note-boxes.md`) read and spell
+//! their chord types, roots and modes from [`crate::harmony`], the one place
+//! those names live.
 
+use crate::harmony::{ChordQuality, Mode, MAX_CHORD_NOTES, PITCH_NAMES};
 use crate::modulation::{
-    ModCounterParams, ModLfoParams, ModLfoWaveform, ModMathOp, ModMathParams, ModSelectParams,
+    ModChanceParams, ModChordParams, ModModalParams, ModScaleParams, ModTransposeParams,
+    TRANSPOSE_MAX_SEMITONES, ModCounterParams, ModLfoParams, ModLfoWaveform, ModMathOp, ModMathParams, ModSelectParams,
     ModSlewParams, ModStepParams, ModTimeDivision, ModulatorKind, ModulatorParams,
     COUNTER_MAX_STEPS, MOD_STEP_MAX_STEPS, SELECT_MAX_INPUTS,
 };
@@ -25,8 +31,9 @@ const fn word(name: &'static str, says: &'static str) -> Word {
     Word { name, says }
 }
 
-/// The control boxes, as the completion list offers them.
-pub const VOCABULARY: [Word; 14] = [
+/// The boxes, the control boxes then the note boxes, as the completion
+/// list offers them.
+pub const VOCABULARY: [Word; 20] = [
     word("lfo", "Periodic movement. lfo tri 1/4"),
     word("env", "Attack, decay, sustain, release from a gate."),
     word("step", "A row of values, one per advance. step 4"),
@@ -41,7 +48,46 @@ pub const VOCABULARY: [Word; 14] = [
     word("min", "The lower of its input and n. min 0"),
     word("max", "The higher of its input and n. max 0"),
     word("clip", "Keeps its input between two bounds. clip -0.5 0.5"),
+    word("chord", "Builds a chord on each note. chord min7 /1st"),
+    word("modal", "Each note to its mode's chord. modal d dorian 7"),
+    word("scale", "Snaps each note into a mode. scale c minor"),
+    word("transpose", "Moves notes by semitones. transpose -12"),
+    word("chance", "Lets each note through with a probability. chance 0.7"),
+    word("gate", "Notes to a gate, pitch and velocity."),
 ];
+
+/// How an inversion is spelled after a chord's type: none for root
+/// position, then `/1st` to `/3rd`.
+const INVERSIONS: [&str; MAX_CHORD_NOTES] = ["", "/1st", "/2nd", "/3rd"];
+
+/// An inversion as typed: `/1st` or `/1`, to `/3rd` or `/3`.
+fn inversion(text: &str) -> Option<u8> {
+    let number = text.strip_prefix('/')?;
+    let number = ["st", "nd", "rd", "th"]
+        .iter()
+        .find_map(|suffix| number.strip_suffix(suffix))
+        .unwrap_or(number);
+    number.parse::<u8>().ok().filter(|&at| usize::from(at) < MAX_CHORD_NOTES)
+}
+
+/// A modal or scale box's root and mode, and a modal box's size, as typed
+/// in any order: `d`, `dorian`, `7` (or `3` for a triad).
+fn root_and_mode(args: &[&str], sized: bool) -> Option<(u8, Mode, bool)> {
+    let (mut root, mut mode, mut seventh) = (0, Mode::default(), false);
+    for arg in args {
+        let arg = arg.to_ascii_lowercase();
+        if let Some(class) = crate::harmony::pitch_class(&arg) {
+            root = class;
+        } else if let Some(named) = Mode::from_name(&arg) {
+            mode = named;
+        } else if sized && (arg == "7" || arg == "3") {
+            seventh = arg == "7";
+        } else {
+            return None;
+        }
+    }
+    Some((root, mode, seventh))
+}
 
 /// The vocabulary's words that start with `typed`'s first word, in order.
 pub fn completions(typed: &str) -> impl Iterator<Item = Word> + '_ {
@@ -173,6 +219,29 @@ pub fn spell(params: &ModulatorParams, text: &str) -> String {
         ModulatorParams::Counter(counter) => format!("counter {}", counter.steps),
         ModulatorParams::Select(select) => format!("select {}", select.inputs),
         ModulatorParams::Slew(slew) => format!("slew {}", format_number(slew.time_seconds)),
+        ModulatorParams::Chord(chord) => {
+            let inversion = INVERSIONS[usize::from(chord.inversion) % MAX_CHORD_NOTES];
+            let mut spelled = format!("chord {}", chord.quality.name());
+            if !inversion.is_empty() {
+                spelled.push(' ');
+                spelled.push_str(inversion);
+            }
+            spelled
+        }
+        ModulatorParams::Modal(modal) => format!(
+            "modal {} {}{}",
+            PITCH_NAMES[usize::from(modal.root % 12)],
+            modal.mode.name(),
+            if modal.seventh { " 7" } else { "" }
+        ),
+        ModulatorParams::Scale(scale) => format!(
+            "scale {} {}",
+            PITCH_NAMES[usize::from(scale.root % 12)],
+            scale.mode.name()
+        ),
+        ModulatorParams::Transpose(transpose) => format!("transpose {}", transpose.semitones),
+        ModulatorParams::Chance(chance) => format!("chance {}", format_number(chance.probability)),
+        ModulatorParams::NoteGate => "gate".into(),
         ModulatorParams::Unknown => text.trim().to_string(),
     }
 }
@@ -258,6 +327,46 @@ pub fn parse(text: &str) -> Option<ModulatorParams> {
                 time_seconds: clamp_by(ModulatorKind::Slew, crate::SLEW_PARAM_TIME_S, time),
             }))
         }
+        "chord" => {
+            at_most(2)?;
+            let mut chord = ModChordParams::default();
+            for arg in &args {
+                let arg = arg.to_ascii_lowercase();
+                match ChordQuality::from_name(&arg) {
+                    Some(quality) => chord.quality = quality,
+                    None => chord.inversion = inversion(&arg)?,
+                }
+            }
+            Some(ModulatorParams::Chord(chord))
+        }
+        "modal" => {
+            at_most(3)?;
+            let (root, mode, seventh) = root_and_mode(&args, true)?;
+            Some(ModulatorParams::Modal(ModModalParams { root, mode, seventh }))
+        }
+        "scale" => {
+            at_most(2)?;
+            let (root, mode, _) = root_and_mode(&args, false)?;
+            Some(ModulatorParams::Scale(ModScaleParams { root, mode }))
+        }
+        "transpose" => {
+            at_most(1)?;
+            let most = f32::from(TRANSPOSE_MAX_SEMITONES);
+            let semitones = args.first().map_or(Some(0.0), |arg| number(arg))?;
+            Some(ModulatorParams::Transpose(ModTransposeParams {
+                semitones: semitones.round().clamp(-most, most) as i8,
+            }))
+        }
+        "chance" => {
+            at_most(1)?;
+            let probability = args
+                .first()
+                .map_or(Some(ModChanceParams::default().probability), |arg| number(arg))?;
+            Some(ModulatorParams::Chance(ModChanceParams {
+                probability: clamp_by(ModulatorKind::Chance, crate::CHANCE_PARAM_PROBABILITY, probability),
+            }))
+        }
+        "gate" => at_most(0).map(|()| ModulatorParams::NoteGate),
         "clip" => {
             at_most(2)?;
             let low = args.first().map_or(Some(-1.0), |arg| number(arg))?;
@@ -323,11 +432,32 @@ mod tests {
     }
 
     #[test]
-    fn what_parse_cannot_read_is_left_to_an_unknown_box() {
-        for typed in ["", "chord min7", "lfo wobbly", "* two", "counter 4 4", "env 3"] {
+    fn note_boxes_spell_their_chords_roots_and_modes() {
+        assert_eq!(round_trip("chord"), "chord maj");
+        assert_eq!(round_trip("chord min7 /1st"), "chord min7 /1st");
+        assert_eq!(round_trip("chord /2 dim"), "chord dim /2nd");
+        assert_eq!(round_trip("chord 7 /0"), "chord 7");
+        assert_eq!(round_trip("modal d dorian 7"), "modal d dorian 7");
+        assert_eq!(round_trip("modal Bb aeolian"), "modal a# minor");
+        assert_eq!(round_trip("modal"), "modal c major");
+        assert_eq!(round_trip("scale c minor"), "scale c minor");
+        assert_eq!(round_trip("scale harmonic e"), "scale e harmonic");
+        assert_eq!(round_trip("transpose -12"), "transpose -12");
+        assert_eq!(round_trip("transpose 100"), "transpose 48", "held to four octaves");
+        assert_eq!(round_trip("chance .7"), "chance 0.7");
+        assert_eq!(round_trip("chance 2"), "chance 1");
+        assert_eq!(round_trip("gate"), "gate");
+        for typed in ["chord min9", "chord /4th", "modal h", "scale c minor 7", "gate 1"] {
             assert_eq!(parse(typed), None, "{typed:?}");
         }
-        assert_eq!(spell(&ModulatorParams::Unknown, " chord min7 "), "chord min7");
+    }
+
+    #[test]
+    fn what_parse_cannot_read_is_left_to_an_unknown_box() {
+        for typed in ["", "arp up", "lfo wobbly", "* two", "counter 4 4", "env 3"] {
+            assert_eq!(parse(typed), None, "{typed:?}");
+        }
+        assert_eq!(spell(&ModulatorParams::Unknown, " arp up "), "arp up");
     }
 
     #[test]
@@ -336,9 +466,9 @@ mod tests {
             assert!(parse(word.name).is_some(), "{}", word.name);
         }
         let offered: Vec<_> = completions("s").map(|word| word.name).collect();
-        assert_eq!(offered, ["step", "select", "slew"]);
+        assert_eq!(offered, ["step", "select", "slew", "scale"]);
         let offered: Vec<_> = completions("m").map(|word| word.name).collect();
-        assert_eq!(offered, ["min", "max"]);
+        assert_eq!(offered, ["min", "max", "modal"]);
         assert_eq!(completions("").count(), VOCABULARY.len());
     }
 

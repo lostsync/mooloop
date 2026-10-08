@@ -861,6 +861,23 @@ pub const SELECT_PARAM_INPUTS: u32 = 0;
 /// How long a slew takes to cover its distance.
 pub const SLEW_PARAM_TIME_S: u32 = 0;
 
+/// A chord box's quality ([`crate::harmony::ChordQuality`]) and inversion
+/// (song patch step 08).
+pub const CHORD_PARAM_QUALITY: u32 = 0;
+pub const CHORD_PARAM_INVERSION: u32 = 1;
+/// A modal or scale box's root, as a pitch class from C, and its mode
+/// ([`crate::harmony::Mode`]); a modal box's size, a triad or a seventh.
+pub const MODAL_PARAM_ROOT: u32 = 0;
+pub const MODAL_PARAM_MODE: u32 = 1;
+pub const MODAL_PARAM_SEVENTH: u32 = 2;
+/// How many semitones a transpose box moves its notes.
+pub const TRANSPOSE_PARAM_SEMITONES: u32 = 0;
+/// The share of NoteOns a chance box lets through.
+pub const CHANCE_PARAM_PROBABILITY: u32 = 0;
+
+/// The furthest a transpose box moves a note, either way: four octaves.
+pub const TRANSPOSE_MAX_SEMITONES: i8 = 48;
+
 /// The longest count a counter takes (song patch step 04).
 pub const COUNTER_MAX_STEPS: u8 = 64;
 /// The most inputs a select takes: `a` to `h`.
@@ -1213,6 +1230,55 @@ pub const SLEW_DESCRIPTORS: [ParamDescriptor; 1] = [ParamDescriptor {
     default: 0.2,
 }];
 
+/// A stepped choice among `count` named positions, the first by default.
+const fn choice(id: u32, name: &'static str, count: usize) -> ParamDescriptor {
+    ParamDescriptor {
+        id,
+        name,
+        unit: "",
+        min: 0.0,
+        max: (count - 1) as f32,
+        curve: ParamCurve::Stepped(count as u16),
+        default: 0.0,
+    }
+}
+
+pub const CHORD_DESCRIPTORS: [ParamDescriptor; 2] = [
+    choice(CHORD_PARAM_QUALITY, "Type", crate::harmony::ChordQuality::ALL.len()),
+    choice(CHORD_PARAM_INVERSION, "Inversion", crate::harmony::MAX_CHORD_NOTES),
+];
+
+pub const MODAL_DESCRIPTORS: [ParamDescriptor; 3] = [
+    choice(MODAL_PARAM_ROOT, "Root", 12),
+    choice(MODAL_PARAM_MODE, "Mode", crate::harmony::Mode::ALL.len()),
+    toggle(MODAL_PARAM_SEVENTH, "Seventh"),
+];
+
+pub const SCALE_DESCRIPTORS: [ParamDescriptor; 2] = [
+    choice(MODAL_PARAM_ROOT, "Root", 12),
+    choice(MODAL_PARAM_MODE, "Mode", crate::harmony::Mode::ALL.len()),
+];
+
+pub const TRANSPOSE_DESCRIPTORS: [ParamDescriptor; 1] = [ParamDescriptor {
+    id: TRANSPOSE_PARAM_SEMITONES,
+    name: "Semitones",
+    unit: "st",
+    min: -(TRANSPOSE_MAX_SEMITONES as f32),
+    max: TRANSPOSE_MAX_SEMITONES as f32,
+    curve: ParamCurve::Stepped(2 * TRANSPOSE_MAX_SEMITONES as u16 + 1),
+    default: 0.0,
+}];
+
+pub const CHANCE_DESCRIPTORS: [ParamDescriptor; 1] = [ParamDescriptor {
+    id: CHANCE_PARAM_PROBABILITY,
+    name: "Chance",
+    unit: "",
+    min: 0.0,
+    max: 1.0,
+    curve: ParamCurve::Linear,
+    default: 0.5,
+}];
+
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct ModLfoParams {
@@ -1474,6 +1540,58 @@ impl Default for ModSlewParams {
     }
 }
 
+/// Builds the chord of its type on each note, in its inversion (song patch
+/// step 08).
+#[derive(Debug, Clone, Copy, PartialEq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct ModChordParams {
+    pub quality: crate::harmony::ChordQuality,
+    /// How many times the lowest note moves up an octave; past the chord's
+    /// last position it wraps.
+    pub inversion: u8,
+}
+
+/// Snaps each note to its mode on its root, then builds that degree's
+/// diatonic chord, a triad or with `seventh` a seventh.
+#[derive(Debug, Clone, Copy, PartialEq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct ModModalParams {
+    /// A pitch class, 0 for C.
+    pub root: u8,
+    pub mode: crate::harmony::Mode,
+    pub seventh: bool,
+}
+
+/// Snaps each note to the nearest note of its mode on its root.
+#[derive(Debug, Clone, Copy, PartialEq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct ModScaleParams {
+    pub root: u8,
+    pub mode: crate::harmony::Mode,
+}
+
+/// Moves each note by its semitones, and a wire into its second inlet by
+/// whole semitones more.
+#[derive(Debug, Clone, Copy, PartialEq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct ModTransposeParams {
+    pub semitones: i8,
+}
+
+/// Lets each NoteOn through with its probability, a wire into its second
+/// inlet added to it; each NoteOff follows its NoteOn.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct ModChanceParams {
+    pub probability: f32,
+}
+
+impl Default for ModChanceParams {
+    fn default() -> Self {
+        Self { probability: 0.5 }
+    }
+}
+
 /// One modulator slot's configuration.
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case", tag = "kind")]
@@ -1486,6 +1604,17 @@ pub enum ModulatorParams {
     Counter(ModCounterParams),
     Select(ModSelectParams),
     Slew(ModSlewParams),
+    /// The note boxes (song patch step 08): notes in, notes out, run by the
+    /// engine's note pass rather than the control tick.
+    Chord(ModChordParams),
+    Modal(ModModalParams),
+    Scale(ModScaleParams),
+    Transpose(ModTransposeParams),
+    Chance(ModChanceParams),
+    /// Notes in, control out: a gate, and the latest NoteOn's pitch and
+    /// velocity.
+    #[serde(rename = "gate")]
+    NoteGate,
     /// A box whose name this build does not know: typed, or saved by a
     /// later build. It keeps its text ([`SongModule::text`]), has no jacks,
     /// and puts out nothing.
@@ -1503,6 +1632,12 @@ impl ModulatorParams {
             Self::Counter(_) => ModulatorKind::Counter,
             Self::Select(_) => ModulatorKind::Select,
             Self::Slew(_) => ModulatorKind::Slew,
+            Self::Chord(_) => ModulatorKind::Chord,
+            Self::Modal(_) => ModulatorKind::Modal,
+            Self::Scale(_) => ModulatorKind::Scale,
+            Self::Transpose(_) => ModulatorKind::Transpose,
+            Self::Chance(_) => ModulatorKind::Chance,
+            Self::NoteGate => ModulatorKind::NoteGate,
             Self::Unknown => ModulatorKind::Unknown,
         }
     }
@@ -1579,7 +1714,31 @@ impl ModulatorParams {
                 SLEW_PARAM_TIME_S => Some(p.time_seconds),
                 _ => None,
             },
-            Self::Unknown => None,
+            Self::Chord(p) => match id {
+                CHORD_PARAM_QUALITY => Some(p.quality.to_index() as f32),
+                CHORD_PARAM_INVERSION => Some(f32::from(p.inversion)),
+                _ => None,
+            },
+            Self::Modal(p) => match id {
+                MODAL_PARAM_ROOT => Some(f32::from(p.root)),
+                MODAL_PARAM_MODE => Some(p.mode.to_index() as f32),
+                MODAL_PARAM_SEVENTH => Some(f32::from(p.seventh)),
+                _ => None,
+            },
+            Self::Scale(p) => match id {
+                MODAL_PARAM_ROOT => Some(f32::from(p.root)),
+                MODAL_PARAM_MODE => Some(p.mode.to_index() as f32),
+                _ => None,
+            },
+            Self::Transpose(p) => match id {
+                TRANSPOSE_PARAM_SEMITONES => Some(f32::from(p.semitones)),
+                _ => None,
+            },
+            Self::Chance(p) => match id {
+                CHANCE_PARAM_PROBABILITY => Some(p.probability),
+                _ => None,
+            },
+            Self::NoteGate | Self::Unknown => None,
         }
     }
 
@@ -1674,7 +1833,36 @@ impl ModulatorParams {
                     p.time_seconds = value;
                 }
             }
-            Self::Unknown => {}
+            Self::Chord(p) => match id {
+                CHORD_PARAM_QUALITY => p.quality = crate::harmony::ChordQuality::from_index(index),
+                CHORD_PARAM_INVERSION => {
+                    p.inversion = index.clamp(0, crate::harmony::MAX_CHORD_NOTES as i32 - 1) as u8
+                }
+                _ => {}
+            },
+            Self::Modal(p) => match id {
+                MODAL_PARAM_ROOT => p.root = index.clamp(0, 11) as u8,
+                MODAL_PARAM_MODE => p.mode = crate::harmony::Mode::from_index(index),
+                MODAL_PARAM_SEVENTH => p.seventh = index != 0,
+                _ => {}
+            },
+            Self::Scale(p) => match id {
+                MODAL_PARAM_ROOT => p.root = index.clamp(0, 11) as u8,
+                MODAL_PARAM_MODE => p.mode = crate::harmony::Mode::from_index(index),
+                _ => {}
+            },
+            Self::Transpose(p) => {
+                if id == TRANSPOSE_PARAM_SEMITONES {
+                    let most = i32::from(TRANSPOSE_MAX_SEMITONES);
+                    p.semitones = index.clamp(-most, most) as i8;
+                }
+            }
+            Self::Chance(p) => {
+                if id == CHANCE_PARAM_PROBABILITY {
+                    p.probability = value;
+                }
+            }
+            Self::NoteGate | Self::Unknown => {}
         }
     }
 }
@@ -1690,6 +1878,13 @@ pub enum ModulatorKind {
     Counter,
     Select,
     Slew,
+    Chord,
+    Modal,
+    Scale,
+    Transpose,
+    Chance,
+    #[serde(rename = "gate")]
+    NoteGate,
     /// A box this build has no name for; never in [`Self::ALL`].
     Unknown,
 }
@@ -1698,7 +1893,7 @@ impl ModulatorKind {
     /// Every kind a box can be made as, in the order the shelf's kind
     /// tokens number them: new kinds are appended, so a token keeps naming
     /// the kind it did.
-    pub const ALL: [ModulatorKind; 8] = [
+    pub const ALL: [ModulatorKind; 14] = [
         ModulatorKind::Lfo,
         ModulatorKind::Envelope,
         ModulatorKind::Step,
@@ -1707,7 +1902,22 @@ impl ModulatorKind {
         ModulatorKind::Counter,
         ModulatorKind::Select,
         ModulatorKind::Slew,
+        ModulatorKind::Chord,
+        ModulatorKind::Modal,
+        ModulatorKind::Scale,
+        ModulatorKind::Transpose,
+        ModulatorKind::Chance,
+        ModulatorKind::NoteGate,
     ];
+
+    /// Whether the kind works on notes: the engine's note pass runs it,
+    /// not the control tick.
+    pub const fn is_note_box(self) -> bool {
+        matches!(
+            self,
+            Self::Chord | Self::Modal | Self::Scale | Self::Transpose | Self::Chance | Self::NoteGate
+        )
+    }
 
     pub fn label(self) -> &'static str {
         match self {
@@ -1719,6 +1929,12 @@ impl ModulatorKind {
             Self::Counter => "Counter",
             Self::Select => "Select",
             Self::Slew => "Slew",
+            Self::Chord => "Chord",
+            Self::Modal => "Modal",
+            Self::Scale => "Scale",
+            Self::Transpose => "Transpose",
+            Self::Chance => "Chance",
+            Self::NoteGate => "Gate",
             Self::Unknown => "Unknown",
         }
     }
@@ -1735,6 +1951,12 @@ impl ModulatorKind {
             Self::Counter => "CNT",
             Self::Select => "SEL",
             Self::Slew => "SLEW",
+            Self::Chord => "CHRD",
+            Self::Modal => "MODE",
+            Self::Scale => "SCL",
+            Self::Transpose => "TRN",
+            Self::Chance => "CHNC",
+            Self::NoteGate => "GATE",
             Self::Unknown => "?",
         }
     }
@@ -1765,6 +1987,12 @@ impl ModulatorKind {
             Self::Counter => ModulatorParams::Counter(ModCounterParams::default()),
             Self::Select => ModulatorParams::Select(ModSelectParams::default()),
             Self::Slew => ModulatorParams::Slew(ModSlewParams::default()),
+            Self::Chord => ModulatorParams::Chord(ModChordParams::default()),
+            Self::Modal => ModulatorParams::Modal(ModModalParams::default()),
+            Self::Scale => ModulatorParams::Scale(ModScaleParams::default()),
+            Self::Transpose => ModulatorParams::Transpose(ModTransposeParams::default()),
+            Self::Chance => ModulatorParams::Chance(ModChanceParams::default()),
+            Self::NoteGate => ModulatorParams::NoteGate,
             Self::Unknown => ModulatorParams::Unknown,
         }
     }
@@ -1780,7 +2008,12 @@ impl ModulatorKind {
             Self::Counter => &COUNTER_DESCRIPTORS,
             Self::Select => &SELECT_DESCRIPTORS,
             Self::Slew => &SLEW_DESCRIPTORS,
-            Self::Unknown => &[],
+            Self::Chord => &CHORD_DESCRIPTORS,
+            Self::Modal => &MODAL_DESCRIPTORS,
+            Self::Scale => &SCALE_DESCRIPTORS,
+            Self::Transpose => &TRANSPOSE_DESCRIPTORS,
+            Self::Chance => &CHANCE_DESCRIPTORS,
+            Self::NoteGate | Self::Unknown => &[],
         }
     }
 
@@ -2816,6 +3049,12 @@ impl ModRack {
             | ModulatorParams::Counter(_)
             | ModulatorParams::Select(_)
             | ModulatorParams::Slew(_)
+            | ModulatorParams::Chord(_)
+            | ModulatorParams::Modal(_)
+            | ModulatorParams::Scale(_)
+            | ModulatorParams::Transpose(_)
+            | ModulatorParams::Chance(_)
+            | ModulatorParams::NoteGate
             | ModulatorParams::Unknown => 1.0,
         }
     }
@@ -3017,6 +3256,12 @@ fn rack_input(
         ModulatorParams::Counter(_)
         | ModulatorParams::Select(_)
         | ModulatorParams::Slew(_)
+        | ModulatorParams::Chord(_)
+        | ModulatorParams::Modal(_)
+        | ModulatorParams::Scale(_)
+        | ModulatorParams::Transpose(_)
+        | ModulatorParams::Chance(_)
+        | ModulatorParams::NoteGate
         | ModulatorParams::Unknown => InputSource::None,
         // A seat with no identity: a preset's gate on its own channel's notes
         // (`Project::preset_rack`), which means the channel it lands on.
@@ -3142,8 +3387,9 @@ impl<'de> serde::Deserialize<'de> for UnknownParams {
 }
 
 /// Every `kind` a module's params are saved under, as serde spells them.
-const KNOWN_KINDS: [&str; 9] = [
-    "lfo", "envelope", "step", "random", "math", "counter", "select", "slew", "unknown",
+const KNOWN_KINDS: [&str; 15] = [
+    "lfo", "envelope", "step", "random", "math", "counter", "select", "slew", "chord", "modal", "scale",
+    "transpose", "chance", "gate", "unknown",
 ];
 
 fn is_zero(value: &u32) -> bool {
