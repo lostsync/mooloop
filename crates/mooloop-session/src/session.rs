@@ -130,6 +130,9 @@ pub struct Session {
     /// The source the assignment gesture is armed with, named as
     /// [`Self::modulation_selected`] is.
     pub modulation_armed: Cell<Option<mooloop_core::ModSourceRef>>,
+    /// The unbound assignment (song patch step 09) the armed gesture binds
+    /// when it lands on a knob, if it was armed from one's tag.
+    pub modulation_loose: Cell<Option<mooloop_core::ModSourceId>>,
     /// Every source's latest output, read off the engine on the pump tick:
     /// what the knobs on any chain draw their live offsets from.
     pub modulation_levels: std::cell::RefCell<crate::modulation::ModulationLevels>,
@@ -369,6 +372,7 @@ impl Default for Session {
             selected_device: None,
             selected_source: None,
             modulation_armed: Cell::new(None),
+            modulation_loose: Cell::new(None),
             modulation_levels: Default::default(),
             compensation_sent: crate::engine::CompensationSent::default(),
             console_sums_sent: [false; MAX_BUSES],
@@ -1256,12 +1260,18 @@ impl Session {
     }
 
     /// The depth `source` drives `destination` at; zero with no route.
+    /// An unbound assignment armed from its tag reads as its saved depth
+    /// everywhere it could land, so the drag that binds it starts there.
     pub fn modulation_depth_for(&self, source: ModSourceRef, destination: ParamAddr) -> f32 {
+        let loose = self
+            .armed_loose_route()
+            .filter(|route| source == ModSourceRef::Id(route.source))
+            .map_or(0.0, |route| route.depth);
         self.modulation
             .routes
             .iter()
             .find(|route| route.source == source && route.destination == destination)
-            .map_or(0.0, |route| route.depth)
+            .map_or(loose, |route| route.depth)
     }
 
     /// What a route onto `address` drives, named for the shelf, and its
@@ -1688,6 +1698,7 @@ impl Session {
         // never document state. A newly loaded project must start unarmed.
         self.modulation_selected.set(None);
         self.modulation_armed.set(None);
+        self.modulation_loose.set(None);
         // The engine's state is replaced wholesale by a load, and
         // `RenderState::load_project` installs its own compensation. Forget
         // what this side thinks was sent so the next reconcile re-derives
@@ -1773,6 +1784,28 @@ impl Session {
             return ArmedRoute::Unchanged;
         }
         let depth = policy.clamp_depth(depth);
+        // Armed from an unbound assignment's tag (song patch step 09): the
+        // knob it lands on binds it, with its own polarity and place, unless
+        // its box already drives that knob, which then just takes the depth.
+        if let Some(loose) = self.armed_loose_route().map(|route| route.id) {
+            let held = self
+                .modulation
+                .routes
+                .iter()
+                .any(|route| route.source == source && route.destination == destination);
+            if !held && self.modulation.bind_loose(loose, destination, depth) {
+                self.modulation_loose.set(None);
+                self.gesture_changed = true;
+                if let Some(route) = self
+                    .modulation
+                    .routes
+                    .iter()
+                    .find(|route| route.source == source && route.destination == destination)
+                {
+                    return ArmedRoute::Added(*route);
+                }
+            }
+        }
         let default_polarity = match source {
             ModSourceRef::Id(id) => match self.modulation.module(id).map(|module| module.params) {
                 // A tag takes the destination's own default, as the outlet

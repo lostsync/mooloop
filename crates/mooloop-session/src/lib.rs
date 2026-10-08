@@ -64,6 +64,7 @@ pub mod midi;
 pub mod mixer;
 pub mod modulation;
 pub mod notes;
+pub mod patch_presets;
 pub mod plugin_params;
 pub mod plugin_rack;
 pub mod project;
