@@ -70,6 +70,9 @@ pub struct CompiledInlet {
     pub node: u16,
     /// Read the outlet as of the previous control tick.
     pub delayed: bool,
+    /// Which of the node's outlets: 0 for every box but a gate box, whose
+    /// pitch and velocity are 1 and 2 (song patch step 08).
+    pub port: u8,
 }
 
 /// One module as the engine runs it.
@@ -107,20 +110,49 @@ pub enum TagSource {
     Pattern,
 }
 
-/// A note wire from a channel's notes-in tag to a channel's notes-out tag
-/// (song patch step 07), as the note pass runs it: every note the first
-/// channel plays is played on the second too, with an id of its own.
+/// A note box the note pass runs (song patch step 08): a box reached from
+/// a channel's notes-in tag along note wires. Each has one note inlet, and
+/// an inlet takes one wire, so what reaches a box is a tree from one tag.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CompiledNoteBox {
+    pub id: ModSourceId,
+    /// Its list position among the modules: its params and seed.
+    pub module: u16,
+    /// The note box it reads, by its place in
+    /// [`CompiledModulation::note_boxes`], always an earlier one; `None`
+    /// for the notes-in tag at its root.
+    pub input: Option<u16>,
+    /// The notes-in tag at its root, by its index among the tags, and the
+    /// seat that tag hears.
+    pub root_tag: u16,
+    pub root_seat: u8,
+    /// Every node from the root tag to this box, and the root's channel,
+    /// hashed: the same path across a change of set is the same box, so it
+    /// keeps the notes it is holding.
+    pub path: u64,
+}
+
+/// A note wire into a channel's notes-out tag (song patch step 07), as the
+/// note pass runs it: every note that reaches it is played on that channel,
+/// with an id of its own. From step 08 the notes can come through note
+/// boxes ([`Self::via`]) rather than straight from the notes-in tag.
 ///
 /// The channels are kept beside their seats so a note still sounding when
 /// the wire goes can be released on whichever seat its channel has moved
 /// to, and so a rebound tag is a different link.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CompiledNoteLink {
-    /// The notes-in tag, and its index among the tags.
+    /// The notes-in tag at the root, and its index among the tags.
     pub from: ModSourceId,
     pub from_tag: u16,
     pub from_channel: ChannelId,
     pub from_seat: u8,
+    /// The note box the link reads, by its place in
+    /// [`CompiledModulation::note_boxes`]; `None` straight from the tag.
+    pub via: Option<u16>,
+    /// The path the notes take to the notes-out tag, hashed as
+    /// [`CompiledNoteBox::path`] is.
+    pub path: u64,
     /// The notes-out tag, and its index among the tags.
     pub to: ModSourceId,
     pub to_tag: u16,
@@ -130,10 +162,20 @@ pub struct CompiledNoteLink {
 
 impl CompiledNoteLink {
     /// What tells this link from another across a change of set: the same
-    /// tags bound to the same channels, wherever those now sit.
-    pub fn key(&self) -> (ModSourceId, ModSourceId, ChannelId, ChannelId) {
-        (self.from, self.to, self.from_channel, self.to_channel)
+    /// path from the same channel into the same tag bound to the same
+    /// channel, wherever those now sit.
+    pub fn key(&self) -> (u64, ModSourceId, ChannelId) {
+        (self.path, self.to, self.to_channel)
     }
+}
+
+/// One step along a note path, hashed onto the path so far: splitmix64.
+fn path_step(path: u64, id: ModSourceId, channel: u32) -> u64 {
+    let mut z = path ^ (u64::from(id.0) << 32 | u64::from(channel));
+    z = z.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^ (z >> 31)
 }
 
 /// A route's source, resolved to where the engine reads it.
@@ -199,9 +241,17 @@ pub struct CompiledModulation {
     /// modulation (a stepped setting) and routes from anything but a box
     /// are left out.
     pub knobs: Vec<CompiledKnob>,
-    /// Every note wire from a notes-in tag to a notes-out tag whose
-    /// channels the song has, in the song's wire order.
+    /// Every note wire into a notes-out tag whose channel the song has,
+    /// from a notes-in tag whose channel it has, straight or through note
+    /// boxes.
     pub notes: Vec<CompiledNoteLink>,
+    /// Every note box reached from a notes-in tag, each after the box it
+    /// reads.
+    pub note_boxes: Vec<CompiledNoteBox>,
+    /// The list positions of the gate boxes among [`Self::note_boxes`], in
+    /// that order: a gate box's place here is the slot the note pass fills
+    /// for it each control tick.
+    pub gates: Vec<u16>,
     /// The seats a notes-in tag takes the notes of, ascending: their own
     /// notes reach only the patch.
     pub taken: Vec<u8>,
@@ -262,35 +312,78 @@ impl CompiledModulation {
             })
             .collect();
 
-        // Each note wire from a channel's notes to a channel. A wire
-        // through a box waits for step 08's note boxes.
+        // The note graph: from each notes-in tag along note wires, through
+        // the note boxes it reaches, into the notes-out tags. A wire the
+        // song should not hold is left out, as a control wire is below.
         let tag_seat = |id: ModSourceId| {
             let at = song.tags.iter().take(tag_count).position(|tag| tag.id == id)?;
             let channel = song.tags[at].kind.channel()?;
             Some((u16::try_from(at).ok()?, channel, seat_of(channel)?))
         };
-        let notes: Vec<CompiledNoteLink> = song
-            .wires
+        let note_wire = |wire: &&crate::patch::Wire| {
+            song.ports_of(wire.from.node)
+                .and_then(|ports| ports.outlet(wire.from.port))
+                .is_some_and(|outlet| outlet.sort == JackSort::Note)
+                && song.check_wire(wire.from, wire.to).is_ok()
+        };
+        let mut notes: Vec<CompiledNoteLink> = Vec::new();
+        let mut note_boxes: Vec<CompiledNoteBox> = Vec::new();
+        for tag in song.tags.iter().take(tag_count) {
+            if !matches!(tag.kind, TagKind::NotesIn { .. }) {
+                continue;
+            }
+            let Some((from_tag, from_channel, from_seat)) = tag_seat(tag.id) else {
+                continue;
+            };
+            let first = note_boxes.len();
+            // Each node the notes reach, as (its id, the box it is, its path),
+            // walked breadth first from the tag.
+            let mut reached: Vec<(ModSourceId, Option<u16>, u64)> =
+                vec![(tag.id, None, path_step(0, tag.id, from_channel.0))];
+            let mut next = 0;
+            while let Some(&(node, via, path)) = reached.get(next) {
+                next += 1;
+                for wire in song.wires.iter().filter(|wire| wire.from.node == node).filter(note_wire) {
+                    if let Some(module) = position_of(wire.to.node) {
+                        let kind = modules[usize::from(module)].params.kind();
+                        if !kind.is_note_box() || note_boxes[first..].iter().any(|held| held.module == module) {
+                            continue;
+                        }
+                        let Ok(at) = u16::try_from(note_boxes.len()) else { continue };
+                        let path = path_step(path, wire.to.node, 0);
+                        note_boxes.push(CompiledNoteBox {
+                            id: wire.to.node,
+                            module,
+                            input: via,
+                            root_tag: from_tag,
+                            root_seat: from_seat,
+                            path,
+                        });
+                        reached.push((wire.to.node, Some(at), path));
+                    } else if matches!(song.tag(wire.to.node).map(|tag| tag.kind), Some(TagKind::NotesOut { .. })) {
+                        let Some((to_tag, to_channel, to_seat)) = tag_seat(wire.to.node) else {
+                            continue;
+                        };
+                        notes.push(CompiledNoteLink {
+                            from: tag.id,
+                            from_tag,
+                            from_channel,
+                            from_seat,
+                            via,
+                            path,
+                            to: wire.to.node,
+                            to_tag,
+                            to_channel,
+                            to_seat,
+                        });
+                    }
+                }
+            }
+        }
+        let gates: Vec<u16> = note_boxes
             .iter()
-            .filter(|wire| {
-                matches!(song.tag(wire.from.node).map(|tag| tag.kind), Some(TagKind::NotesIn { .. }))
-                    && matches!(song.tag(wire.to.node).map(|tag| tag.kind), Some(TagKind::NotesOut { .. }))
-                    && song.check_wire(wire.from, wire.to).is_ok()
-            })
-            .filter_map(|wire| {
-                let (from_tag, from_channel, from_seat) = tag_seat(wire.from.node)?;
-                let (to_tag, to_channel, to_seat) = tag_seat(wire.to.node)?;
-                Some(CompiledNoteLink {
-                    from: wire.from.node,
-                    from_tag,
-                    from_channel,
-                    from_seat,
-                    to: wire.to.node,
-                    to_tag,
-                    to_channel,
-                    to_seat,
-                })
-            })
+            .filter(|note_box| modules[usize::from(note_box.module)].params.kind() == crate::ModulatorKind::NoteGate)
+            .map(|note_box| note_box.module)
             .collect();
         let mut taken: Vec<u8> = song
             .tags
@@ -325,6 +418,7 @@ impl CompiledModulation {
                 from: wire.from.node,
                 node: from,
                 delayed: wire.late,
+                port: wire.from.port,
             });
         }
         let order = tick_order(&mut modules, tags.len());
@@ -417,6 +511,8 @@ impl CompiledModulation {
                 order,
                 knobs,
                 notes,
+                note_boxes,
+                gates,
                 taken,
                 ..Self::default()
             };
@@ -438,6 +534,8 @@ impl CompiledModulation {
             chains,
             knobs,
             notes,
+            note_boxes,
+            gates,
             taken,
         }
     }
@@ -500,6 +598,7 @@ impl CompiledModulation {
         self.chains == other.chains
             && self.knobs == other.knobs
             && self.notes == other.notes
+            && self.note_boxes == other.note_boxes
             && self.taken == other.taken
             && self.tags == other.tags
             && self.order == other.order

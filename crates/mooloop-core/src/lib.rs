@@ -95,7 +95,7 @@ pub use patch::{
 };
 pub use modulation_plan::{
     chain_index, CompiledInlet, CompiledKnob, CompiledModulation, CompiledModule, CompiledRoute, CompiledSource,
-    CompiledNoteLink, CompiledTag, TagSource, MAX_INLETS,
+    CompiledNoteBox, CompiledNoteLink, CompiledTag, TagSource, MAX_INLETS,
     MODULATION_CHAINS,
 };
 pub use modulation::{

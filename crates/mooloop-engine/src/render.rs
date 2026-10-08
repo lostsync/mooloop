@@ -10332,7 +10332,8 @@ impl RenderState {
         // renders and before the gate table reads what each channel plays
         // (song patch step 07).
         let live = self.live_channels();
-        self.song_modulation.pass_notes(&mut self.events, live, panicked);
+        let playing = self.transport.playing;
+        self.song_modulation.pass_notes(&mut self.events, live, panicked, playing, frames);
 
         let context = ProcessContext {
             sample_rate: self.sample_rate,
