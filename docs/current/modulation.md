@@ -89,6 +89,16 @@ area, and where each behaviour stops.
   minor. A note pushed out of 0 to 127 is dropped with its NoteOff; two
   notes that land on one pitch play it once and end with the last. Faces
   show the arguments as stepped knobs that read by name.
+- **Patch presets** (song patch step 09). Right-click a box for **Save as
+  patch preset…**: the selection's boxes and tags, the wires among them and
+  their boxes' assignments are saved under `presets/patches/`. Right-click
+  empty canvas and pick **Patch: <name>** to land one there, with fresh
+  boxes. Its tags come empty with what they were bound to shown in the slot
+  (`[ Kick · gate ]`); its assignments come as empty tags under their box
+  showing what they were aimed at, driving nothing. Click one to arm its
+  box: every knob shows its saved depth, and the first knob dragged takes
+  it with its polarity. An assignment onto a box's knob inside the preset
+  comes bound.
 - **Cable activity** (Preferences > Appearance): Off, Subtle (the default) or
   Full. A control wire tints toward the accent with its level and a note
   wire thickens for a moment on each note; Subtle is 30 % of Full.

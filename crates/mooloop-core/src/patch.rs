@@ -378,6 +378,34 @@ pub struct RoutePlace {
     pub at: CanvasPoint,
 }
 
+/// What an unbound tag a patch preset brought in was bound to when the
+/// preset was saved, shown in its empty slot: `gate  [ Kick ]` (song patch
+/// step 09). Text, never an address, so a preset never reaches into the song
+/// it lands in. Binding the tag drops it.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct TagHint {
+    pub tag: ModSourceId,
+    pub text: String,
+}
+
+/// An assignment a patch preset brought in: its box, its depth and polarity,
+/// and what it was aimed at as text (`Cutoff on ML-M1`), with no address
+/// (song patch step 09). It drives nothing until it is bound, which makes it
+/// a route ([`SongModulation::bind_loose`]). Its id comes from the counter
+/// the boxes' and tags' do, so the canvas names it the way it names them.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct LooseRoute {
+    pub id: ModSourceId,
+    pub source: ModSourceId,
+    #[serde(default)]
+    pub hint: String,
+    pub depth: f32,
+    pub polarity: crate::ModPolarity,
+    /// Where its tag was put; `None` stacks it under its box.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at: Option<CanvasPoint>,
+}
+
 /// Why a wire was refused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WireRefusal {
@@ -523,6 +551,10 @@ impl SongModulation {
 
     /// Move a box or tag. Returns whether it is in the song.
     pub fn move_node(&mut self, node: ModSourceId, at: CanvasPoint) -> bool {
+        if let Some(route) = self.loose.iter_mut().find(|route| route.id == node) {
+            route.at = Some(at);
+            return true;
+        }
         if let Some(module) = self.module_mut(node) {
             module.at = at;
             return true;
@@ -553,6 +585,9 @@ impl SongModulation {
                 ..
             }) if *held != bind => {
                 *held = bind;
+                if bind.is_some() {
+                    self.hints.retain(|hint| hint.tag != id);
+                }
                 true
             }
             _ => false,
@@ -567,6 +602,9 @@ impl SongModulation {
                 if *held != channel =>
             {
                 *held = channel;
+                if channel.is_some() {
+                    self.hints.retain(|hint| hint.tag != id);
+                }
                 true
             }
             _ => false,
@@ -593,6 +631,8 @@ impl SongModulation {
             return false;
         }
         self.drop_wires_of(id);
+        self.hints.retain(|hint| hint.tag != id);
+        self.loose.retain(|route| route.source != id);
         true
     }
 

@@ -31,6 +31,9 @@ export struct PatchNodeRow {
     note: bool,
     // Bound to nothing: the `[ ]` slot shows what it expects.
     unbound: bool,
+    // What it was bound to when its patch preset was saved, shown dim in
+    // the empty slot: `[ Kick · gate ]` (song patch step 09).
+    hint: string,
     // The box or tag it draws, -1 for an assignment tag.
     node-id: int,
     // A notes-out tag that just refused a note (song patch step 07): its
@@ -216,11 +219,17 @@ component PatchTag inherits Rectangle {
         }
         if root.node.unbound : Rectangle {
             y: (parent.height - 16px) / 2;
-            width: 26px;
+            width: root.node.hint == "" ? 26px : hint-text.preferred-width + 12px;
             height: 16px;
             border-width: 1px;
             border-color: Theme.text-faint;
             border-radius: Theme.radius-sm;
+            hint-text := Text {
+                text: root.node.hint;
+                color: Theme.text-faint;
+                font-size: Theme.text-xl;
+                font-italic: true;
+            }
         }
         if !root.node.points-right && root.node.kind != "" : Text {
             text: root.node.kind;

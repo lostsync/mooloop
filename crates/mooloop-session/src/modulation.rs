@@ -29,7 +29,7 @@ use mooloop_core::{
 };
 
 /// What an inlet tag's list adds to a source read a block late.
-const LATE_NOTE: &str = " (a block late)";
+pub(crate) const LATE_NOTE: &str = " (a block late)";
 
 /// What can feed an inlet, as the canvas's inlet picker offers it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -646,7 +646,9 @@ impl Session {
                 .module(node)
                 .map(|module| module.at)
                 .or_else(|| self.modulation.tag(node).map(|tag| tag.at));
-            if was.is_some_and(|was| was != at) {
+            // An unbound assignment that was never put anywhere moves too.
+            let loose = self.modulation.loose_route(node).map(|route| route.at);
+            if was.is_some_and(|was| was != at) || loose.is_some_and(|was| was != Some(at)) {
                 moved |= self.modulation.move_node(node, at);
             }
         }
@@ -681,6 +683,9 @@ impl Session {
     /// Removes a box or a tag from the song, with its wires; a box takes its
     /// routes too, and the selection and arming that named it.
     pub fn remove_patch_node(&mut self, node: ModSourceId) -> bool {
+        if self.modulation.remove_loose(node) {
+            return true;
+        }
         if self.modulation.remove_tag(node) {
             return true;
         }
@@ -992,6 +997,7 @@ impl Session {
         self.modulation_selected.set(Some(source));
         let next = (self.modulation_armed.get() != Some(source)).then_some(source);
         self.modulation_armed.set(next);
+        self.modulation_loose.set(None);
         self.modulation_source_name(next?)
     }
 

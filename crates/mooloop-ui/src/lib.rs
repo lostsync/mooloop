@@ -8186,8 +8186,9 @@ impl AppUi {
                         })
                     }
                     // A channel preset spans the generator and the mixer, so
-                    // no one device is the thing it names.
-                    PresetSaveTarget::Channel => None,
+                    // no one device is the thing it names; a patch preset
+                    // names no device at all.
+                    PresetSaveTarget::Channel | PresetSaveTarget::Patch => None,
                 };
                 let file_stem = mooloop_project::sanitize_preset_name(&name);
 
@@ -8201,6 +8202,11 @@ impl AppUi {
                         settings::channel_presets_dir(),
                         "mooloop-channel",
                         "Channel preset saved",
+                    ),
+                    PresetSaveTarget::Patch => (
+                        settings::patch_presets_dir(),
+                        "mooloop-patch",
+                        "Patch preset saved",
                     ),
                     // The row's own kind picks the directory, so a delay
                     // preset can only ever be offered to a delay row -- and a
@@ -8270,6 +8276,12 @@ impl AppUi {
                                 info,
                                 AssetMode::Embedded,
                             ),
+                            PresetSaveTarget::Patch => match &source.patch {
+                                Some(fragment) => {
+                                    mooloop_project::save_patch_preset(&path, fragment, info)
+                                }
+                                None => return DocumentResult::Cancelled,
+                            },
                             PresetSaveTarget::Effect { .. } => match (&source.run, source.effect) {
                                 // A container saves as its run: the box and
                                 // everything in it, which is the whole point of

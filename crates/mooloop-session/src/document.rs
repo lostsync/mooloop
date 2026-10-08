@@ -463,11 +463,12 @@ pub fn resolve_document(path: &Path) -> Result<ResolvedDocument, DocumentProblem
         LoadedDocument::Generator(source) => {
             vec![source.sampler_state().map(|sampler| sampler.sample.clone())]
         }
-        // Neither an effect nor a run of them references audio; there is
-        // nothing to decode.
+        // Neither an effect, a run of them nor a patch references audio;
+        // there is nothing to decode.
         LoadedDocument::Effect(_)
         | LoadedDocument::EffectRun(_)
-        | LoadedDocument::PluginEffect { .. } => Vec::new(),
+        | LoadedDocument::PluginEffect { .. }
+        | LoadedDocument::Patch(_) => Vec::new(),
     };
     let mut samples = Vec::with_capacity(sample_references.len());
     for (channel, reference) in sample_references.into_iter().enumerate() {
@@ -508,7 +509,8 @@ pub fn resolve_document(path: &Path) -> Result<ResolvedDocument, DocumentProblem
         LoadedDocument::Generator(source) => source.sampler_state().map(|s| (0, s)).into_iter().collect(),
         LoadedDocument::Effect(_)
         | LoadedDocument::EffectRun(_)
-        | LoadedDocument::PluginEffect { .. } => Vec::new(),
+        | LoadedDocument::PluginEffect { .. }
+        | LoadedDocument::Patch(_) => Vec::new(),
     };
     let mut zone_warnings = Vec::new();
     let zone_audio = crate::sample::decode_zone_files(samplers, &samples, &mut zone_warnings);
@@ -607,6 +609,8 @@ pub struct PresetSource {
     /// (MOO-222): which plugin, its list and pins, and the state it holds
     /// now. A plugin row saves with this or not at all.
     pub plugin: Option<mooloop_core::PluginSlotState>,
+    /// The fragment a patch preset save writes, when `target` is one.
+    pub patch: Option<mooloop_core::SongModulation>,
 }
 
 impl Session {
@@ -764,12 +768,17 @@ impl Session {
             _ => None,
         };
         let plugin = effect.and_then(|effect| self.plugin_preset_state(&effect));
+        let patch = match target {
+            PresetSaveTarget::Patch => Some(self.pending_patch.take()?),
+            _ => None,
+        };
         Some(PresetSource {
             target,
             setup,
             effect,
             run,
             plugin,
+            patch,
         })
     }
 
