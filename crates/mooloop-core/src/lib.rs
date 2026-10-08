@@ -16,6 +16,7 @@ pub mod effect;
 pub mod effect_factory;
 pub mod file_names;
 pub mod gain;
+pub mod harmony;
 pub mod generator;
 pub mod log;
 pub mod input;
