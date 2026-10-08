@@ -19,6 +19,7 @@ The conventional suffixes are:
 - `name.mooloop-assets/` for that song's embedded assets, when any exist.
 - `name.mooloop-kit/` for a kit directory bundle.
 - `name.mooloop-channel/` for a channel directory bundle.
+- `name.mooloop-patch/` for a patch preset (see "Patch Documents").
 
 A song with embedded assets has this layout:
 
@@ -92,7 +93,7 @@ Every manifest starts with the same fields:
 
 ```toml
 format_version = 1
-document_type = "song" # "song", "kit", or "channel"
+document_type = "song" # "song", "kit", "channel", "patch", ...
 asset_mode = "embedded" # "embedded" or "referenced"
 
 [document]
@@ -731,6 +732,17 @@ before any of them existed still loads:
     `polarity`. A route has no slot; the runtime one is derived on load. A
     route whose source or destination no longer resolves is dropped at load
     rather than parked.
+  - `modulation.hints[]`: `{ tag = <tag id>, text }`, what an empty tag a
+    patch preset brought in was bound to when the preset was saved, shown
+    in its `[ ]` slot (`Kick 1 · gate`). Text only; binding the tag drops
+    it, and loading drops one naming no tag.
+  - `modulation.loose[]`: the assignments a patch preset brought in that
+    are not bound yet: `id` (from the same mint), `source` (the box or tag
+    that drives it), `hint` (its destination as text, `Volume on Pad
+    Channel strip`), `depth`, `polarity`, and `at` when its tag was put
+    somewhere. It drives nothing. Binding it, by the assignment gesture
+    armed from its tag, makes it a route. Loading drops one whose source
+    is not there.
   - `modulation.next_source_id` is the id mint, left out at zero.
 - **A song written by song modulation, before the patch** (0.1.7 builds
   from 2026-10-05), gave each module an `input` and no `at`:
@@ -1072,6 +1084,76 @@ data = "..."
   application. It still opens as it did, but no row loads it.
 - Every other document leaves the `plugin` key out, so each writes
   byte-identical to before.
+
+## Patch Documents
+
+A patch preset (`document_type = "patch"`, song patch step 09) is a piece of
+a song's patch: the boxes selected on the canvas, the tags among them, the
+wires with both ends among them, and every assignment their boxes and tags
+drive. `[document]` has exactly the shape of a song's `modulation` table
+(above), so one reader loads both:
+
+```toml
+format_version = 1
+document_type = "patch"
+asset_mode = "embedded"
+
+[preset]
+name = "Kick pump"
+category = "Dynamics"
+tags = []
+
+[document]
+next_source_id = 3
+
+[[document.modules]]
+id = 0
+name = "Kick Envelope 1"
+seed = 0
+at = { x = 144, y = 0 }
+params = { kind = "envelope", attack_seconds = 0.01, ... }
+
+[[document.tags]]
+id = 1
+at = { x = 0, y = 0 }
+tag = "inlet"
+
+[[document.wires]]
+from = { node = 1, port = 0 }
+to = { node = 0, port = 0 }
+
+[[document.hints]]
+tag = 1
+text = "Kick · gate"
+
+[[document.loose]]
+id = 2
+source = 0
+hint = "Volume on Pad Channel strip"
+depth = -0.7
+polarity = "unipolar"
+```
+
+**It names nothing outside itself.** Every tag is saved unbound (no `bind`,
+no `channel`), with a hint of what it was bound to. An assignment onto a
+knob of a box in the preset stays a route; every other is saved as a
+`loose` entry, its destination as text and no address. Its places are
+moved so its top-left is the canvas origin; a module saves no `rack`. Saving
+and loading both repair a document that breaks this: a bound tag is
+emptied, a route leaving the preset is dropped, and the graph is checked as
+a song's is.
+
+**Loading lands it**, at the point the canvas was right-clicked, with a
+fresh id for every box, tag and loose assignment, its wires and inner
+routes following them. Nothing in the song it lands in is changed.
+
+Patch presets live in the user preset folder under `presets/patches/`.
+
+**0.1.6 does not list a patch preset and refuses to open one**: it lists
+only the document types it knows and refuses any other before parsing it
+(`unsupported document type "patch"`). A song holding `hints` or `loose`
+entries opens in 0.1.6 without its modulation, as any song written since
+song modulation does (MOO-379, above).
 
 ## Kit And Channel Documents
 

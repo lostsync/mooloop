@@ -669,3 +669,21 @@ second inlet: the steps raise and lower the odds through the bar. Bounce
 the song and play it back: it should match what you heard live from the
 start. Are the faces' knobs the right control for chord type and mode, or
 do they want the prototype's segmented rows?
+
+### 47. Patches you can keep: the kick pump as a preset (MOO-528): listen, in the app
+
+Build the kick pump from 44 (the kick's gate into `env`, the env into
+`* -1`, `* -1` armed onto the bass's volume). Drag a marquee over the gate
+tag and both boxes, right-click one of the boxes and pick **Save as patch
+preset…**; call it *Kick pump*. Open another song with a kick and a pad.
+Right-click empty canvas: the menu should list **Patch: Kick pump** under
+the tags. Pick it: the tag and both boxes should land where you clicked,
+the tag empty with *Kick · gate* in its slot, and an empty assignment tag
+under `* -1` reading *Volume on …*. Nothing should pump yet.
+
+Click the tag and pick this song's kick gate: the hint should go. Click the
+empty assignment tag (it lights as armed), then drag the pad's volume knob:
+the assignment should bind there, starting from the depth it was saved
+with. Play: the pad should duck on every kick. Does the hint say enough to
+know what to plug in, and is clicking the empty assignment the right way
+to bind it?

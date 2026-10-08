@@ -308,6 +308,29 @@ Where it differs from the step file:
   major chord when the note ends. A box on a changed path starts empty, and
   the links after it release what they held.
 
+**09a (MOO-528, patch presets).** A canvas selection saves as a patch
+preset (`document_type = "patch"`, `presets/patches/`) and lands back where
+the canvas was right-clicked. `SongModulation::fragment` and `land`
+(`core/src/patch_preset.rs`) lift and land it; `SongModulation` gains
+`hints` (what an empty tag was bound to) and `loose` (unbound assignments).
+Where it differs from the step file:
+
+- **Hints and unbound assignments are lists of the song's own**, not
+  fields on `SongTag` and `ModRoute`: `SongTag` is `Copy`, and a route is
+  copied on the realtime path; text on either would cost both.
+- **An unbound assignment binds by arming from its tag**: a click on it
+  arms its box, the knobs read its saved depth, and the first knob dragged
+  takes it, with its polarity and its tag's place. There is no separate
+  Assign drag from the tag.
+- **An assignment onto a knob of a box in the selection stays bound**: it
+  is inside the preset and names nothing of the song.
+- **The menus**: a right-click on a box offers *Save as patch preset…* for
+  the selection (the box joins it if it was not in it); a right-click on
+  empty canvas lists the patch presets under the tags it makes. The browser
+  does not list them yet.
+
+Channel presets as fragments, the factory patches and `rack` going are 09b.
+
 ## Adam's rulings
 
 | When | Ruling |

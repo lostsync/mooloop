@@ -2730,6 +2730,59 @@ mod tests {
         assert!(layout.width >= MIN_EXTENT.0 && layout.height >= MIN_EXTENT.1);
     }
 
+    /// A landed patch preset (song patch step 09) shows its tag empty with
+    /// what it was bound to in the slot, and its assignment as an empty tag
+    /// under its box, wired to it; a click on that tag arms it, and a
+    /// right-click on a box offers to save the selection.
+    #[test]
+    fn a_landed_patch_shows_its_hints_and_its_unbound_assignment() {
+        let song = example();
+        let fragment = song.fragment(
+            &[ModSourceId(0), ModSourceId(2)],
+            |_| Some("Kick 1 \u{b7} gate".to_string()),
+            |_| "Cutoff on ML-M1 9".to_string(),
+        );
+        let mut song = SongModulation::default();
+        let mut fragment = fragment;
+        fragment.loose.push(mooloop_core::LooseRoute {
+            id: ModSourceId(9),
+            source: ModSourceId(0),
+            hint: "Cutoff on ML-M1 9".into(),
+            depth: 0.4,
+            polarity: mooloop_core::ModPolarity::Bipolar,
+            at: None,
+        });
+        let landed = song.land(&fragment, CanvasPoint::new(100, 100));
+        let (lfo, tag, loose) = (landed[0], landed[1], landed[2]);
+        let mut canvas = CanvasState::default();
+        let layout = laid(&song, &canvas);
+
+        let Face::Tag { unbound, hint, .. } = &layout.node(NodeKey::Node(tag)).unwrap().face else {
+            panic!("a tag");
+        };
+        assert!(*unbound);
+        assert_eq!(hint, "Kick 1 \u{b7} gate");
+        let node = layout.node(NodeKey::Loose(loose)).unwrap();
+        let Face::Tag { unbound, hint, depth, .. } = &node.face else {
+            panic!("an assignment tag");
+        };
+        assert!(*unbound);
+        assert_eq!((hint.as_str(), depth.as_str()), ("Cutoff on ML-M1 9", "+40%"));
+        let lfo_node = layout.node(NodeKey::Node(lfo)).unwrap();
+        assert!(node.y > lfo_node.y + lfo_node.height, "stacked under its box");
+        assert!(layout.wires.iter().any(|wire| wire.key == WireKey::Loose(loose)));
+
+        let (x, y) = (node.x + node.width / 2.0, node.y + node.height / 2.0);
+        canvas.press(&layout, x, y, false);
+        assert_eq!(canvas.release(&layout, &song, x, y), Edit::ArmLoose(loose));
+
+        let (x, y) = (lfo_node.x + 10.0, lfo_node.y + 10.0);
+        canvas.selected.clear();
+        canvas.context(&layout, &song, x, y);
+        assert_eq!(canvas.picking, Some(Picking::Selection(x, y)));
+        assert_eq!(canvas.selected, vec![NodeKey::Node(lfo)]);
+    }
+
     #[test]
     fn a_wire_path_rounds_its_corners() {
         let d = path_commands(&[(0.0, 0.0), (0.0, 50.0), (0.0, 100.0), (80.0, 100.0)]);
