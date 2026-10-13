@@ -832,8 +832,13 @@ mod paste_tests {
                 (mooloop_core::ModSourceRef::Id(lfo), volume(1)),
             ]
         );
-        // The copy hears it: its rack holds the LFO as a guest.
-        assert!(pasted.project.channel_rack(1).has_routes());
+        // The copy hears it: a route from the LFO lands on it.
+        assert!(pasted
+            .project
+            .modulation
+            .routes
+            .iter()
+            .any(|route| route.destination.scope == mooloop_core::EffectTarget::Channel(1)));
 
         // Deleted since the copy: the route has nothing to come from.
         assert!(session.remove_modulation_source(0));

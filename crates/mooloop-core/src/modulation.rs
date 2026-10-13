@@ -3135,18 +3135,14 @@ impl InputSource {
     }
 }
 
-/// Where the engine runs a module until it runs the song's set itself.
-///
-/// **A shim, and step 02 of `docs/plans/archive/song-modulation/` deletes it.** The
-/// engine still keeps one rack per channel; until it stops, each module has
-/// to sit in one of them, at one slot. A converted song keeps exactly the
-/// seat each module had, so the engine is handed the same racks it was
-/// handed before and plays the same thing -- slot order included, which a
-/// Math module and a Random module's seed both read.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct RackSeat {
-    pub channel: crate::ChannelId,
-    pub slot: u8,
+/// The channel rack and slot a module sat in, as songs saved before song
+/// patch step 09 wrote it. Read only: a Math module saved by song modulation
+/// step 01 named its operand by a slot of this rack, and loading resolves it
+/// to a wire ([`SongModulation`]'s `Deserialize`). Nothing writes it now.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+struct RackSeat {
+    channel: crate::ChannelId,
+    slot: u8,
 }
 
 /// One module in the song's modulation set: what a rack slot was, plus the
@@ -3166,8 +3162,7 @@ pub struct SongModule {
     /// A Random module took its seed from its slot index, so reordering a
     /// song's modules would change its sequence. A converted module records
     /// the slot it had and plays the sequence it played; a new one records
-    /// its id. The engine still seeds from the rack slot until step 02, which
-    /// [`RackSeat`] keeps equal for every converted module.
+    /// its id.
     #[serde(default)]
     pub seed: u32,
     /// Where the box sits on the patch canvas.
@@ -3175,11 +3170,6 @@ pub struct SongModule {
     /// Whether its face is shown in place on the canvas (step 05).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub open: bool,
-    /// See [`RackSeat`]. `None` for a module whose channel has gone: it stays
-    /// in the song (a module with no route is still one the user made), and
-    /// the engine does not run it.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub rack: Option<RackSeat>,
     pub params: ModulatorParams,
     /// What was typed into a box whose name this build does not know
     /// ([`ModulatorParams::Unknown`]), kept so the box reads as it was typed
@@ -3187,32 +3177,6 @@ pub struct SongModule {
     /// are spelled from their params (song patch step 04).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub text: String,
-}
-
-impl SongModule {
-    /// The params as a channel rack runs them: the Envelope's gate seat and
-    /// identity written from its `input` ([`SongModulation::input_of`]),
-    /// which is where the song keeps them.
-    fn rack_params(
-        &self,
-        input: InputSource,
-        seat_of: &impl Fn(crate::ChannelId) -> Option<u8>,
-    ) -> ModulatorParams {
-        let mut params = self.params;
-        if let ModulatorParams::Envelope(envelope) = &mut params {
-            match input.channel() {
-                Some(channel) => {
-                    envelope.input_channel = seat_of(channel).unwrap_or(u8::MAX);
-                    envelope.input_channel_id = channel;
-                }
-                None => {
-                    envelope.input_channel = u8::MAX;
-                    envelope.input_channel_id = crate::ChannelId::UNASSIGNED;
-                }
-            }
-        }
-        params
-    }
 }
 
 /// The params as the song stores them: the Envelope's own gate fields and the
@@ -3263,8 +3227,8 @@ fn rack_input(
         | ModulatorParams::Chance(_)
         | ModulatorParams::NoteGate
         | ModulatorParams::Unknown => InputSource::None,
-        // A seat with no identity: a preset's gate on its own channel's notes
-        // (`Project::preset_rack`), which means the channel it lands on.
+        // A seat with no identity: a preset's gate on its own channel's notes,
+        // which means the channel it lands on.
         ModulatorParams::Envelope(_)
         | ModulatorParams::Lfo(_)
         | ModulatorParams::Step(_)
@@ -3287,9 +3251,8 @@ fn rack_input(
 /// there is no count a user meets (Adam: *"all of them"*). The engine's
 /// ceiling is the engine's to set.
 ///
-/// A route's `source_slot` means nothing here -- it is a channel rack's
-/// runtime locator -- and is derived whenever a rack is built from the set
-/// ([`Self::channel_rack`]).
+/// A route's `source_slot` means nothing here: it is a channel rack's
+/// runtime locator, and a rack is only read now, from an old song or preset.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct SongModulation {
     /// The boxes, in the order the engine ticks them until step 02 of
@@ -3514,12 +3477,14 @@ impl<'de> serde::Deserialize<'de> for SongModulation {
             .collect();
         let placed = saved.modules.iter().all(|module| module.at.is_some());
         let mut inputs = Vec::new();
+        let mut seats = Vec::new();
         let modules = saved
             .modules
             .into_iter()
             .enumerate()
             .map(|(index, module)| {
                 inputs.push((module.id, module.input));
+                seats.push((module.id, module.rack));
                 SongModule {
                     id: module.id,
                     name: module.name,
@@ -3532,7 +3497,6 @@ impl<'de> serde::Deserialize<'de> for SongModulation {
                         .filter(|_| placed)
                         .unwrap_or_else(|| crate::patch::grid_place(index)),
                     open: module.open,
-                    rack: module.rack,
                     params: match module.params {
                         SavedParams::Known(params) => params,
                         SavedParams::Unknown(_) => ModulatorParams::Unknown,
@@ -3567,6 +3531,7 @@ impl<'de> serde::Deserialize<'de> for SongModulation {
                 modulation.set_input(id, input);
             }
         }
+        modulation.resolve_math_seats(&seats);
         Ok(modulation)
     }
 }
@@ -3606,34 +3571,34 @@ impl SongModulation {
     }
 
     /// Give each Math module saved by song modulation step 01, which kept its
-    /// operand as a slot of its rack, the module in that slot. Idempotent: a
-    /// module saved since keeps its operand as the wire into its `in`, with
-    /// the slot out of range.
-    pub fn resolve_math_inputs(&mut self) {
+    /// operand as a slot of its rack, the module seated in that slot
+    /// (`seats`, as the file held them). A module saved since keeps its
+    /// operand as the wire into its `in`, with the slot out of range.
+    fn resolve_math_seats(&mut self, seats: &[(ModSourceId, Option<RackSeat>)]) {
+        let seat_of = |id: ModSourceId| seats.iter().find(|(held, _)| *held == id).and_then(|(_, seat)| *seat);
         for index in 0..self.modules.len() {
             let module = &self.modules[index];
-            let (ModulatorParams::Math(math), Some(seat)) = (module.params, module.rack) else {
+            let ModulatorParams::Math(math) = module.params else {
                 continue;
             };
-            if math.input_slot == UNRESOLVED_SLOT {
-                continue;
-            }
-            let read = self.input_of(module.id).is_none().then(|| {
-                self.modules
-                    .iter()
-                    .find(|other| {
-                        other.id != module.id
-                            && other.rack
-                                == Some(RackSeat {
-                                    channel: seat.channel,
-                                    slot: math.input_slot,
-                                })
-                    })
-                    .map(|other| other.id)
-            });
-            let id = self.modules[index].id;
-            if let Some(Some(read)) = read {
-                self.set_input(id, InputSource::Module(read));
+            let id = module.id;
+            if let Some(seat) = seat_of(id).filter(|_| math.input_slot != UNRESOLVED_SLOT) {
+                let read = self.input_of(id).is_none().then(|| {
+                    seats
+                        .iter()
+                        .find(|(other, held)| {
+                            *other != id
+                                && *held
+                                    == Some(RackSeat {
+                                        channel: seat.channel,
+                                        slot: math.input_slot,
+                                    })
+                        })
+                        .map(|(other, _)| *other)
+                });
+                if let Some(Some(read)) = read {
+                    self.set_input(id, InputSource::Module(read));
+                }
             }
             let module = &mut self.modules[index];
             module.params = song_params(module.params);
@@ -3641,25 +3606,18 @@ impl SongModulation {
     }
 
     /// Add a new module of `params` listening to `input`, made on the channel
-    /// `home` (called `home_name`), and return its id.
+    /// called `home_name`, and return its id.
     ///
-    /// Named `<channel name> <kind> <n>` like a converted module, seeded by
-    /// its id, and seated on `home` in the first seat free there, which is
-    /// what a channel preset saved from `home` carries; past eight it has no
-    /// seat and is the song's alone.
+    /// Named `<channel name> <kind> <n>` like a converted module, and seeded
+    /// by its id.
     pub fn add_module(
         &mut self,
         params: ModulatorParams,
         input: InputSource,
-        home: crate::ChannelId,
         home_name: &str,
     ) -> ModSourceId {
         let id = self.mint();
-        let name = self.next_name(home, home_name, params.kind());
-        let seat = (0..MAX_MODULATORS_PER_CHANNEL as u8)
-            .map(|slot| RackSeat { channel: home, slot })
-            .find(|seat| !self.modules.iter().any(|module| module.rack == Some(*seat)))
-            .filter(|_| home.is_assigned());
+        let name = self.next_name(home_name, params.kind());
         let at = self.free_place();
         self.modules.push(SongModule {
             id,
@@ -3667,7 +3625,6 @@ impl SongModulation {
             seed: id.0,
             at,
             open: false,
-            rack: seat,
             params: song_params(params),
             text: String::new(),
         });
@@ -3705,24 +3662,23 @@ impl SongModulation {
         true
     }
 
-    /// The name the next module of `kind` on `channel` takes:
-    /// `<channel name> <kind> <n>`, counting the modules of that kind the
-    /// channel's rack already holds.
-    fn next_name(&self, channel: crate::ChannelId, channel_name: &str, kind: ModulatorKind) -> String {
+    /// The name the next module of `kind` made on a channel called
+    /// `channel_name` takes: `<channel name> <kind> <n>`, one past the highest
+    /// `n` a module already wears.
+    fn next_name(&self, channel_name: &str, kind: ModulatorKind) -> String {
+        let prefix = format!("{channel_name} {} ", kind.label());
         let held = self
             .modules
             .iter()
-            .filter(|module| {
-                module.params.kind() == kind
-                    && module.rack.is_some_and(|seat| seat.channel == channel)
-            })
-            .count();
-        format!("{channel_name} {} {}", kind.label(), held + 1)
+            .filter_map(|module| module.name.strip_prefix(&prefix)?.parse::<usize>().ok())
+            .max()
+            .unwrap_or(0);
+        format!("{prefix}{}", held + 1)
     }
 
     /// Lift one channel's rack into the song: every module under a fresh
-    /// song-wide id, named `<channel name> <kind> <n>`, seated where it sat,
-    /// and every route following its module.
+    /// song-wide id, named `<channel name> <kind> <n>` and seeded by the slot
+    /// it sat in, and every route following its module.
     ///
     /// The conversion a 0.1.6 song goes through on load, and the way a
     /// channel preset, a kit entry or an ML-M1 factory patch -- all of which
@@ -3751,7 +3707,7 @@ impl SongModulation {
         for (slot, entry) in rack.occupied() {
             let Some((_, id)) = ids[slot] else { continue };
             let kind = entry.params.kind();
-            let name = self.next_name(channel, channel_name, kind);
+            let name = self.next_name(channel_name, kind);
             let at = self.free_place();
             inputs.push((id, rack_input(&entry.params, channel, module_at)));
             self.modules.push(SongModule {
@@ -3760,10 +3716,6 @@ impl SongModulation {
                 seed: slot as u32,
                 at,
                 open: false,
-                rack: Some(RackSeat {
-                    channel,
-                    slot: slot as u8,
-                }),
                 params: song_params(entry.params),
                 text: String::new(),
             });
@@ -3800,241 +3752,8 @@ impl SongModulation {
         self.adopt_channel_routes();
     }
 
-    /// The rack the engine runs for the channel wearing `channel`, at `seat`.
-    ///
-    /// **The shim** (see [`RackSeat`]). It holds:
-    /// - every module seated on this channel, at its seat;
-    /// - every route those modules drive, wherever it lands;
-    /// - every route landing on this channel from a module seated elsewhere
-    ///   -- what a pasted channel's copied routes are -- with that module as a
-    ///   guest in the first free slot, so the route sounds;
-    /// - this channel's outlet and performance routes.
-    ///
-    /// What does not fit in the rack's fixed eight slots and sixteen routes is
-    /// left out, which nothing a user can do in this step reaches.
-    pub fn channel_rack(
-        &self,
-        channel: crate::ChannelId,
-        seat: u8,
-        seat_of: impl Fn(crate::ChannelId) -> Option<u8>,
-    ) -> ModRack {
-        let mut rack = ModRack {
-            next_source_id: self.next_source_id.max(self.mint_floor()),
-            ..ModRack::default()
-        };
-        let place = |rack: &mut ModRack, preferred: Option<u8>, module: &SongModule| {
-            let slot = preferred
-                .map(usize::from)
-                .filter(|slot| rack.slots.get(*slot).is_some_and(Option::is_none))
-                .or_else(|| rack.free_slot())?;
-            rack.slots[slot] = Some(ModSlot {
-                id: module.id,
-                params: module.rack_params(self.input_of(module.id), &seat_of),
-            });
-            Some(slot)
-        };
-        let seated = |module: &SongModule| module.rack.is_some_and(|seat| seat.channel == channel);
-        if channel.is_assigned() {
-            for module in self.modules.iter().filter(|module| seated(module)) {
-                let _ = place(&mut rack, module.rack.map(|seat| seat.slot), module);
-            }
-        }
-        for route in &self.routes {
-            // A route from a channel's inlet tag is the channel's own outlet
-            // or keyboard route in a rack, as it was before tags.
-            let route = &ModRoute {
-                source: self.channel_source(route.source),
-                ..*route
-            };
-            let carried = match route.source {
-                ModSourceRef::Id(id) => {
-                    if rack.slot_of(id).is_some() {
-                        true
-                    } else if route.destination.scope == EffectTarget::Channel(seat) {
-                        match self.module(id) {
-                            Some(module) if !seated(module) => {
-                                place(&mut rack, None, module).is_some()
-                            }
-                            _ => false,
-                        }
-                    } else {
-                        false
-                    }
-                }
-                ModSourceRef::GeneratorOutlet { channel: owner, .. }
-                | ModSourceRef::Performance { channel: owner, .. } => {
-                    owner == channel && channel.is_assigned()
-                }
-                ModSourceRef::LocalSlot(_) => false,
-            };
-            if !carried {
-                continue;
-            }
-            let Some(free) = rack.routes.iter().position(Option::is_none) else {
-                break;
-            };
-            rack.routes[free] = Some(*route);
-        }
-        // A Math module's input, as the slot its module holds in this rack;
-        // one that reads a module not here reads nothing.
-        for slot in 0..MAX_MODULATORS_PER_CHANNEL {
-            let Some(entry) = rack.slots[slot] else { continue };
-            if !matches!(entry.params, ModulatorParams::Math(_)) {
-                continue;
-            }
-            let read = self
-                .input_of(entry.id)
-                .module()
-                .and_then(|id| rack.slot_of(id))
-                .unwrap_or(UNRESOLVED_SLOT);
-            if let Some(Some(ModSlot {
-                params: ModulatorParams::Math(math),
-                ..
-            })) = rack.slots.get_mut(slot)
-            {
-                math.input_slot = read;
-            }
-        }
-        rack.resolve_routes();
-        rack
-    }
-
-    /// Write an edited channel rack back into the song: what
-    /// [`Self::channel_rack`] built as `before`, and the same rack after an
-    /// edit as `after`.
-    ///
-    /// The other half of the shim, and what lets every rack-shaped edit --
-    /// the session's verbs, the assignment gesture, a test that installs an
-    /// LFO in slot 0 -- keep working against the song's set:
-    /// - a module in `after` takes its params and, if seated here, its slot;
-    ///   one the song has not seen is added, seated here and named for the
-    ///   channel;
-    /// - a module seated here that `after` no longer holds is removed with
-    ///   every route it drove; a guest that left is only no longer a guest;
-    /// - the routes `before` held are replaced by those `after` holds, in
-    ///   place where a route kept its source and destination.
-    pub fn store_channel_rack(
-        &mut self,
-        channel: crate::ChannelId,
-        channel_name: &str,
-        before: &ModRack,
-        after: &ModRack,
-    ) {
-        let mut inputs = Vec::new();
-        for (slot, entry) in after.occupied() {
-            let input = rack_input(&entry.params, channel, |slot| after.source_id(usize::from(slot)));
-            let at = match self.module(entry.id) {
-                Some(module) => module.at,
-                None => self.free_place(),
-            };
-            match self.module_mut(entry.id) {
-                Some(module) => {
-                    // An Envelope's gate and a Math module's input are edited
-                    // in their params; the other kinds' inputs are not in a
-                    // rack at all. A Math module reading a module this rack
-                    // does not hold reads it still.
-                    let edited = match entry.params {
-                        ModulatorParams::Envelope(_) => true,
-                        ModulatorParams::Math(math) => math.input_slot != UNRESOLVED_SLOT,
-                        _ => false,
-                    };
-                    if edited {
-                        inputs.push((entry.id, input));
-                    }
-                    module.params = song_params(entry.params);
-                    if let Some(seat) = module.rack.as_mut().filter(|seat| seat.channel == channel)
-                    {
-                        seat.slot = slot as u8;
-                    }
-                }
-                None => {
-                    let name = self.next_name(channel, channel_name, entry.params.kind());
-                    self.modules.push(SongModule {
-                        id: entry.id,
-                        name,
-                        seed: entry.id.0,
-                        at,
-                        open: false,
-                        rack: Some(RackSeat {
-                            channel,
-                            slot: slot as u8,
-                        }),
-                        params: song_params(entry.params),
-                        text: String::new(),
-                    });
-                    inputs.push((entry.id, input));
-                }
-            }
-        }
-        for (id, input) in inputs {
-            if self.input_of(id) != input {
-                self.set_input(id, input);
-            }
-        }
-        for (_, entry) in before.occupied() {
-            if after.slot_of(entry.id).is_some() {
-                continue;
-            }
-            let seated_here = self
-                .module(entry.id)
-                .is_some_and(|module| module.rack.is_some_and(|seat| seat.channel == channel));
-            if seated_here {
-                self.remove_module(entry.id);
-            }
-        }
-
-        let key = |route: &ModRoute| (route.source, route.destination);
-        let was: Vec<_> = before.routes.iter().flatten().map(key).collect();
-        let now: Vec<ModRoute> = after.routes.iter().flatten().copied().collect();
-        let mut kept = Vec::with_capacity(self.routes.len() + now.len());
-        for route in self.routes.drain(..) {
-            if !was.contains(&key(&route)) {
-                kept.push(route);
-                continue;
-            }
-            if let Some(edited) = now.iter().find(|edited| key(edited) == key(&route)) {
-                kept.push(ModRoute {
-                    source_slot: UNRESOLVED_SLOT,
-                    ..*edited
-                });
-            }
-        }
-        for route in &now {
-            if !kept.iter().any(|held| key(held) == key(route)) {
-                kept.push(ModRoute {
-                    source_slot: UNRESOLVED_SLOT,
-                    ..*route
-                });
-            }
-        }
-        // A route whose module the edit removed went with it above, unless
-        // it was not in this rack: drop those too.
-        kept.retain(|route| match route.source {
-            ModSourceRef::Id(id) => self.modules.iter().any(|module| module.id == id),
-            _ => true,
-        });
-        self.routes = kept;
-        self.next_source_id = self.next_source_id.max(after.next_source_id);
-        // The modules seated here, in the order of their slots, in the places
-        // in the list they already held: the engine ticks the list in order
-        // and a Math module reads the ones before it this tick, which is the
-        // rule a rack's slots had and the shelf still shows.
-        let places: Vec<usize> = self
-            .modules
-            .iter()
-            .enumerate()
-            .filter(|(_, module)| module.rack.is_some_and(|seat| seat.channel == channel))
-            .map(|(index, _)| index)
-            .collect();
-        let mut seated: Vec<SongModule> = places.iter().map(|&index| self.modules[index].clone()).collect();
-        seated.sort_by_key(|module| module.rack.map(|seat| seat.slot));
-        for (index, module) in places.into_iter().zip(seated) {
-            self.modules[index] = module;
-        }
-    }
-
     /// Re-scope every channel-addressed route after a channel edit, dropping
-    /// the routes whose channel is gone. Inputs and seats name channels by
+    /// the routes whose channel is gone. Inputs name channels by
     /// identity and need nothing. Returns whether anything changed.
     pub fn rescope_channels(&mut self, edit: crate::structure::ChannelEdit) -> bool {
         let before = self.routes.len();

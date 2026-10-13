@@ -758,7 +758,6 @@ mod tests {
             seed: id,
             at: crate::patch::CanvasPoint::default(),
             open: false,
-            rack: None,
             params,
             text: String::new(),
         }

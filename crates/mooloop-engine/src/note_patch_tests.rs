@@ -286,10 +286,9 @@ fn a_link_to_a_channel_the_song_lacks_is_left_out() {
 fn song_through(steps: &[(u32, u32)], take: bool, boxes: &[ModulatorParams]) -> (Project, Vec<ModSourceId>) {
     let mut project = song(steps, take);
     project.modulation.wires.clear();
-    let keys = project.channels[0].id;
     let ids: Vec<ModSourceId> = boxes
         .iter()
-        .map(|params| project.modulation.add_module(*params, InputSource::None, keys, "Keys"))
+        .map(|params| project.modulation.add_module(*params, InputSource::None, "Keys"))
         .collect();
     let mut from = NOTES_IN;
     for &id in &ids {
@@ -416,7 +415,6 @@ fn a_transpose_box_moves_notes_and_drops_what_leaves_the_range() {
 fn a_wire_into_transpose_adds_semitones() {
     let transpose = ModulatorParams::Transpose(ModTransposeParams::default());
     let (mut project, ids) = song_through(&[(4, 2)], true, &[transpose]);
-    let keys = project.channels[0].id;
     let offset = project.modulation.add_module(
         ModulatorParams::Math(mooloop_core::ModMathParams {
             op: mooloop_core::ModMathOp::Add,
@@ -424,7 +422,6 @@ fn a_wire_into_transpose_adds_semitones() {
             ..Default::default()
         }),
         InputSource::None,
-        keys,
         "Keys",
     );
     project.modulation.connect(Jack::new(offset, 0), Jack::new(ids[0], 1)).unwrap();
@@ -515,7 +512,6 @@ fn a_box_edited_mid_chord_releases_what_it_played() {
 #[test]
 fn a_gate_box_puts_out_gate_pitch_and_velocity() {
     let (mut project, ids) = song_through(&[(0, 2)], false, &[ModulatorParams::NoteGate]);
-    let keys = project.channels[0].id;
     let follow = |project: &mut Project, port: u8| {
         let id = project.modulation.add_module(
             ModulatorParams::Math(mooloop_core::ModMathParams {
@@ -524,7 +520,6 @@ fn a_gate_box_puts_out_gate_pitch_and_velocity() {
                 ..Default::default()
             }),
             InputSource::None,
-            keys,
             "Keys",
         );
         project.modulation.connect(Jack::new(ids[0], port), Jack::new(id, 0)).unwrap();
@@ -561,7 +556,7 @@ fn the_note_boxes_allocate_nothing() {
     let (mut project, ids) = song_through(&[(0, 2), (1, 2), (2, 2), (3, 2)], true, &[chord, chance]);
     let gate = project
         .modulation
-        .add_module(ModulatorParams::NoteGate, InputSource::None, project.channels[0].id, "Keys");
+        .add_module(ModulatorParams::NoteGate, InputSource::None, "Keys");
     project.modulation.connect(Jack::new(ids[0], 0), Jack::new(gate, 0)).unwrap();
     let mut render = RenderState::from_project(SAMPLE_RATE, &project, &[]);
     render.play();

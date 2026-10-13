@@ -2601,7 +2601,6 @@ mod tests {
             seed: id,
             at: CanvasPoint::new(at.0, at.1),
             open: false,
-            rack: None,
             params,
             text: String::new(),
         }

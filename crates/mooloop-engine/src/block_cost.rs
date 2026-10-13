@@ -1942,7 +1942,6 @@ fn patch_control_cost() {
                     seed: id,
                     at: Default::default(),
                     open: false,
-                    rack: None,
                     params: if id == 0 || shape == "none" { lfo } else { math },
                     text: String::new(),
                 })

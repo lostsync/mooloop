@@ -295,9 +295,10 @@ pub fn seed_mlp8_bank(dir: &Path) -> Result<usize, Error> {
 fn channel_setup(patch: &FactoryPatch) -> ChannelSetup {
 
     let mut setup = ChannelSetup::mlm1_with_params(patch.name, patch.params);
-    // A patch's modulators travel with it as a preset's do, and land in the
-    // song as new modules wherever it is loaded.
-    setup.preset_modulation = (!patch.modulation.is_empty()).then_some(patch.modulation);
+    // A patch's modulators travel with it as a preset's patch does, and
+    // land in the song as new boxes wherever it is loaded.
+    setup.preset_patch = (!patch.modulation.is_empty())
+        .then(|| mooloop_core::SongModulation::from_preset_rack(patch.name, &patch.modulation));
     setup
 }
 
@@ -351,11 +352,14 @@ mod tests {
             };
             assert_eq!(state.params, patch.params, "{} changed on disk", patch.name);
             assert_eq!(
-                setup.preset_modulation.unwrap_or_default(),
-                patch.modulation,
-                "{}'s rack changed on disk",
+                setup.preset_patch,
+                (!patch.modulation.is_empty()).then(|| {
+                    mooloop_core::SongModulation::from_preset_rack(patch.name, &patch.modulation)
+                }),
+                "{}'s patch changed on disk",
                 patch.name
             );
+            assert!(setup.preset_modulation.is_none(), "{} saved a rack", patch.name);
         }
     }
 
@@ -598,9 +602,9 @@ mod tests {
         else {
             panic!("Sequence Bleep did not load as a channel");
         };
-        let rack = setup.preset_modulation.expect("the patch carries its rack");
-        assert_eq!(rack.slots.iter().flatten().count(), 2);
-        assert_eq!(rack.routes.iter().flatten().count(), 2);
+        let patch = setup.preset_patch.clone().expect("the patch carries its boxes");
+        assert_eq!(patch.modules.len(), 2);
+        assert_eq!(patch.routes.len(), 2);
 
         let mut project = mooloop_core::Project::default();
         for _ in 0..5 {
@@ -608,13 +612,11 @@ mod tests {
         }
         project.replace_channel_setup(5, *setup);
         assert_eq!(project.modulation.modules.len(), 2);
+        assert_eq!(project.modulation.routes.len(), 2);
         for route in &project.modulation.routes {
             assert_eq!(route.destination.scope, EffectTarget::Channel(5));
         }
-        // And the engine's rack for that channel runs both, with both routes.
-        let rack = project.channel_rack(5);
-        assert_eq!(rack.slots.iter().flatten().count(), 2);
-        assert_eq!(rack.routes.iter().flatten().count(), 2);
+        assert!(project.channels[5].setup.preset_patch.is_none(), "landed, not kept");
     }
 
     // --- Effect banks --------------------------------------------------------

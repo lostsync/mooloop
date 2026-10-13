@@ -295,12 +295,33 @@ pub fn repair_effect_run(run: &mut mooloop_core::EffectRun) -> Diagnosis {
 pub fn repair_patch(fragment: &mut mooloop_core::SongModulation) -> Diagnosis {
     const WHO: &str = "This patch";
     let mut doctor = Doctor::new(true);
-    check_patch_graph(&mut doctor, WHO, fragment);
+    repair_fragment(&mut doctor, WHO, fragment, None);
+    Diagnosis {
+        document: DocumentKind::Patch,
+        issues: doctor.issues,
+        context: vec![("boxes:", fragment.modules.len().to_string())],
+    }
+}
+
+/// [`repair_patch`]'s checks, for a patch preset (`this` is `None`) or the
+/// patch a channel preset carries, whose channel's chain is `this`. A
+/// channel preset's patch may keep tags bound to its own channel
+/// ([`mooloop_core::PRESET_CHANNEL`]) and routes into it, at seat 0, onto a
+/// parameter its chain has.
+fn repair_fragment(
+    doctor: &mut Doctor,
+    who: &str,
+    fragment: &mut mooloop_core::SongModulation,
+    this: Option<&ChainShape>,
+) {
+    check_patch_graph(doctor, who, fragment);
     for (index, tag) in fragment.tags.iter_mut().enumerate() {
+        let own = this.is_some() && tag.kind.channel() == Some(mooloop_core::PRESET_CHANNEL);
         if tag.kind != tag.kind.unbound()
+            && !own
             && doctor.correct(
                 "patch.tag.bound",
-                WHO,
+                who,
                 format!("tag {} is bound to something in a song it is not in", index + 1),
                 "leave it empty".into(),
             )
@@ -317,15 +338,20 @@ pub fn repair_patch(fragment: &mut mooloop_core::SongModulation) -> Diagnosis {
     let mut index = 0;
     while index < fragment.routes.len() {
         let route = fragment.routes[index];
-        let inside = matches!(route.source, ModSourceRef::Id(id) if nodes.contains(&id))
-            && route
-                .destination
-                .module()
-                .is_some_and(|module| fragment.module(module).is_some());
-        if !inside
+        let destination = route.destination;
+        let from_inside = matches!(route.source, ModSourceRef::Id(id) if nodes.contains(&id));
+        let onto_box = destination
+            .module()
+            .is_some_and(|module| fragment.module(module).is_some());
+        let into_channel = this.is_some_and(|shape| {
+            destination.scope == EffectTarget::Channel(0)
+                && destination.module().is_none()
+                && address_problem(destination, shape, None).is_none()
+        });
+        if !(from_inside && (onto_box || into_channel))
             && doctor.correct(
                 "patch.route",
-                WHO,
+                who,
                 format!("route {} reaches outside the patch", index + 1),
                 "drop the route".into(),
             )
@@ -334,14 +360,6 @@ pub fn repair_patch(fragment: &mut mooloop_core::SongModulation) -> Diagnosis {
             continue;
         }
         index += 1;
-    }
-    for module in &mut fragment.modules {
-        module.rack = None;
-    }
-    Diagnosis {
-        document: DocumentKind::Patch,
-        issues: doctor.issues,
-        context: vec![("boxes:", fragment.modules.len().to_string())],
     }
 }
 
@@ -459,10 +477,17 @@ fn walk_setups(document: DocumentKind, setups: &mut [ChannelSetup], apply: bool)
         // and cannot see the buses it will meet there: only what it names
         // inside itself is checkable here.
         let who = channel_name(index, setup);
-        let shape = ChainShape::of(setup, setup.preset_modulation.as_ref());
+        let shape = ChainShape::of(setup, rack_modulators(setup.preset_modulation.as_ref()));
         if let Some(rack) = &mut setup.preset_modulation {
             check_modulation(&mut doctor, &who, rack);
             check_route_addresses(&mut doctor, &who, &shape, rack);
+        }
+        let patch_shape = setup
+            .preset_patch
+            .as_ref()
+            .map(|patch| ChainShape::of(setup, song_modulators(patch)));
+        if let (Some(patch), Some(shape)) = (&mut setup.preset_patch, &patch_shape) {
+            repair_fragment(&mut doctor, &who, patch, Some(shape));
         }
     }
     Diagnosis {
@@ -847,7 +872,7 @@ fn check_project(doctor: &mut Doctor, project: &mut Project) {
         })
         .collect();
     let shapes: Vec<ChainShape> = (0..project.channels.len())
-        .map(|index| ChainShape::of(&project.channels[index].setup, Some(&project.channel_rack(index))))
+        .map(|index| ChainShape::of(&project.channels[index].setup, song_modulators(&project.modulation)))
         .collect();
     check_song_modulation(doctor, project, &shapes, &buses);
     for (index, channel) in project.channels.iter_mut().enumerate() {
@@ -1578,16 +1603,15 @@ struct ChainShape {
     /// The source slot's identity when the source is a plugin instrument
     /// (MOO-312); unassigned otherwise, when it matches no address.
     source_device: DeviceId,
-    /// The rack's modules as `(identity, kind)`: what a `Modulator`
-    /// address on the chain names.
+    /// The modules as `(identity, kind)`: what a `Modulator` address names.
     modulators: Vec<(mooloop_core::ModSourceId, ModulatorKind)>,
 }
 
 impl ChainShape {
-    /// The shape of `setup`'s chain, with `rack` as the modulators a
-    /// `Modulator` address on it is judged against: the channel's rack as the
-    /// engine runs it, in a song, or the rack a preset carries.
-    fn of(setup: &ChannelSetup, rack: Option<&ModRack>) -> Self {
+    /// The shape of `setup`'s chain, with `modulators` what a `Modulator`
+    /// address on it is judged against: the song's boxes, in a song, or the
+    /// rack or patch a preset carries.
+    fn of(setup: &ChannelSetup, modulators: Vec<(mooloop_core::ModSourceId, ModulatorKind)>) -> Self {
         Self {
             source: setup.source.kind(),
             source_routes: setup
@@ -1601,15 +1625,7 @@ impl ChainShape {
                 .map(|effect| (effect.id, effect.kind()))
                 .collect(),
             source_device: setup.source_device,
-            modulators: rack
-                .map(|rack| {
-                    rack.slots
-                        .iter()
-                        .flatten()
-                        .map(|slot| (slot.id, slot.params.kind()))
-                        .collect()
-                })
-                .unwrap_or_default(),
+            modulators,
         }
     }
 
@@ -1819,13 +1835,36 @@ fn check_route_addresses(doctor: &mut Doctor, who: &str, own: &ChainShape, rack:
     }
 }
 
+/// A rack's modules as [`ChainShape::of`] takes them.
+fn rack_modulators(rack: Option<&ModRack>) -> Vec<(mooloop_core::ModSourceId, ModulatorKind)> {
+    rack.map(|rack| {
+        rack.slots
+            .iter()
+            .flatten()
+            .map(|slot| (slot.id, slot.params.kind()))
+            .collect()
+    })
+    .unwrap_or_default()
+}
+
+/// A song's or a patch's boxes as [`ChainShape::of`] takes them.
+fn song_modulators(
+    modulation: &mooloop_core::SongModulation,
+) -> Vec<(mooloop_core::ModSourceId, ModulatorKind)> {
+    modulation
+        .modules
+        .iter()
+        .map(|module| (module.id, module.params.kind()))
+        .collect()
+}
+
 /// The song's modulation set (`docs/plans/archive/song-modulation/`).
 ///
 /// A route may be aimed at any channel or track in the song, so it is
 /// checked wherever it points; the rule that pointed a route on another
 /// channel back home went with the per-channel rack. What is checked:
 /// module identities are unique; a route names a module, outlet or keyboard
-/// the song has; an input or a seat names a channel the song has; a depth is
+/// the song has; an input names a channel the song has; a depth is
 /// a number.
 fn check_song_modulation(
     doctor: &mut Doctor,
@@ -1951,22 +1990,6 @@ fn check_song_modulation(
         .iter()
         .map(|module| (module.id, module.params.kind()))
         .collect();
-    for (index, module) in modulation.modules.iter_mut().enumerate() {
-        let where_ = format!("{WHO}, module {} ({})", index + 1, module.name);
-        if let Some(seat) = module.rack {
-            if !channels.contains(&seat.channel)
-                && doctor.correct(
-                    "modulation.module.rack",
-                    &where_,
-                    format!("it runs on channel {}, which this song does not have", seat.channel.0),
-                    "keep it in the song without running it".into(),
-                )
-            {
-                module.rack = None;
-            }
-        }
-    }
-
     let mut drop = Vec::new();
     for (index, route) in modulation.routes.iter_mut().enumerate() {
         let where_ = format!("{WHO}, route {}", index + 1);
@@ -3292,7 +3315,7 @@ mod tests {
         let on_sampler = ParamAddr::source(here, DeviceKind::Sampler, cutoff);
         let on_drum = ParamAddr::source(here, DeviceKind::DrumSynth, cutoff);
         project.channels[0].setup = setup;
-        project.edit_channel_rack(0, |rack| {
+        project.land_rack(0, |rack| {
             rack.install(0, ModulatorKind::Lfo.default_params()).unwrap();
             rack.add_route(ModRoute::to_slot(0, on_sampler, 0.5, ModPolarity::Bipolar))
                 .unwrap();
@@ -3710,17 +3733,13 @@ mod tests {
     /// A route from the LFO channel 0 carries to `destination`, in the song.
     fn route_from_lfo(project: &mut Project, destination: ParamAddr) {
         project.lift_channel_modulation();
-        project
-            .edit_channel_rack(0, |rack| {
-                rack.add_route(mooloop_core::ModRoute::to_slot(
-                    0,
-                    destination,
-                    0.5,
-                    mooloop_core::ModPolarity::Bipolar,
-                ))
-                .expect("the rack has room")
-            })
-            .expect("channel 0");
+        let lfo = project.modulation.modules.first().expect("the LFO landed").id;
+        project.modulation.routes.push(mooloop_core::ModRoute::from_module(
+            lfo,
+            destination,
+            0.5,
+            mooloop_core::ModPolarity::Bipolar,
+        ));
     }
 
     /// Where the song's routes land, in order.
@@ -3779,7 +3798,6 @@ mod tests {
         math.id = ModSourceId(98);
         math.name = "Math".into();
         math.params = mooloop_core::ModulatorParams::Math(Default::default());
-        math.rack = None;
         project.modulation.modules.push(math);
         project.modulation.next_source_id = 99;
         let notes = project.modulation.add_tag(

@@ -703,12 +703,12 @@ before any of them existed still loads:
     place on the canvas `at` (`{ x, y }`, whole canvas units), `open = true`
     when its face is shown in place (left out when not), and its `params`
     as a rack slot wrote them. A Math module's `input_slot` param is
-    written out of range (255): its operand is the wire into its `in`. A
-    module also writes `rack` (`{ channel, slot }`), its home seat: the
-    channel it was made on, and a slot there, which a channel preset saved
-    from that channel reads. It is left out for a module with no seat; the
-    engine does not read it. Modules run in list order, so a Math module
-    reading one listed before it reads that tick's value.
+    written out of range (255): its operand is the wire into its `in`.
+    Modules run in list order, so a Math module reading one listed before
+    it reads that tick's value. A module saved before song patch step 09
+    also wrote `rack` (`{ channel, slot }`), a home seat on the channel it
+    was made on; loading reads it only to wire a step-01 Math module's
+    operand (below), and nothing writes it now.
   - `modulation.tags[]`: the tags, boxes with no face. Each has an `id`
     from the same mint as the modules, its `at`, and `tag`, one of:
     `inlet` with `bind = { gate = <ChannelId> }` (a channel's notes as a
@@ -759,8 +759,8 @@ before any of them existed still loads:
 - **A song written by 0.1.6 or earlier** carries a `ModRack` per channel at
   `channels[].setup.modulation`. Loading lifts every rack into the song's
   set, in channel order: each module gets a fresh song-wide id and its
-  routes follow it; it is seated on the channel it came from, at its old
-  slot, and seeded from that slot, so it plays what it played; an LFO, Step or
+  routes follow it; it is seeded from its old slot, so it plays what it
+  played; an LFO, Step or
   Random listens to its old channel's notes and an Envelope to the channel
   its gate named; a route's channel scope and an outlet or keyboard route's
   channel are its old channel's. The song saves in the new shape and writes
@@ -1138,7 +1138,7 @@ polarity = "unipolar"
 no `channel`), with a hint of what it was bound to. An assignment onto a
 knob of a box in the preset stays a route; every other is saved as a
 `loose` entry, its destination as text and no address. Its places are
-moved so its top-left is the canvas origin; a module saves no `rack`. Saving
+moved so its top-left is the canvas origin. Saving
 and loading both repair a document that breaks this: a bound tag is
 emptied, a route leaving the preset is dropped, and the graph is checked as
 a song's is.
@@ -1168,18 +1168,41 @@ while retaining that channel's notes. Sampler presets include parameters and a
 sample reference; every generated source's preset is its generator parameters
 and requires no audio asset.
 
-**A channel document, and each kit entry, carries the song modulation that
-plays on its channel** as a `ModRack` under the setup's `modulation` key: the
-key 0.1.6 read, so a preset saved now opens there with its modulation. An
-Envelope gated by the channel's own notes is written with no gate identity,
-meaning the channel it lands on. Loading a channel preset drops the song's
-routes into the receiving channel and from its outlets and keyboard, then
-**adds** the preset's modules to the song as new ones, seated on that channel
-with their routes aimed at it, wherever the preset was saved from. The song's
-other modules stay. Loading a kit replaces every channel and so all the
-song's modulation, then lands each entry's the same way. This is the concrete
-case behind `COMPOSABLE_DEVICE_UNITS.md`'s rule that a saveable fragment must
-not name its neighbours by index.
+**A channel document, and each kit entry, carries the piece of the song's
+patch that plays on its channel** under the setup's `patch` key (song patch
+step 09), in the shape of a patch document's `[document]`: every box and tag
+upstream, through wires, of an assignment into the channel or of a
+`notes_out` tag playing on it, the wires among them, and every assignment
+they drive. **It is a one-channel song**: what named the channel itself
+stays bound, to channel id `4294967294` (`PRESET_CHANNEL`, one below the
+unassigned marker) for a tag and seat 0 for an assignment's scope. A tag
+bound to any other channel is saved unbound with a hint, and an assignment
+onto anything outside the channel and the fragment is saved `loose`, as a
+patch preset's are. Saving and loading repair a patch that names anything
+else: a tag bound elsewhere is emptied, and a route that neither stays
+inside the fragment nor lands on a parameter the preset's own chain has is
+dropped.
+
+Loading a channel preset drops the song's routes into the receiving channel
+and from its outlets and keyboard, then **adds** the preset's patch to the
+song as new boxes, in a row under everything on the canvas, with what named
+its channel bound to the receiving one and its assignments aimed there. A
+tag bound to a source the song already has a tag for is that tag. The
+song's other boxes stay. Loading a kit replaces every channel and so all the
+song's modulation, then lands each entry's the same way. The ML-M1 factory
+patches are written in this shape. This is the concrete case behind
+`COMPOSABLE_DEVICE_UNITS.md`'s rule that a saveable fragment must not name
+its neighbours by index.
+
+**A channel preset or kit entry saved before step 09** carries a `ModRack`
+under the setup's `modulation` key instead, an Envelope gated by the
+channel's own notes written with no gate identity. Loading lifts it as a
+0.1.6 song's rack is lifted (above), onto the receiving channel. This build
+writes `modulation` no more.
+
+**A channel preset or kit saved now, opened by 0.1.6**, opens without its
+modulation: 0.1.6 ignores the unknown `patch` key, as it does a song's
+`modulation` table, and drops it on its next save (MOO-379, above).
 
 ## Sample References
 
@@ -1245,8 +1268,9 @@ audio file.
   their current engine limits.
 - Up to 256 effect slots per channel — the same complete `u8` space, for the
   same reason.
-- No limit on a song's modulation modules or routes. A channel preset's or
-  kit entry's rack, and a 0.1.6 song's per-channel rack, hold up to
+- No limit on a song's modulation modules or routes, or on a patch's. A
+  channel preset's or kit entry's rack saved before song patch step 09, and
+  a 0.1.6 song's per-channel rack, hold up to
   `MAX_MODULATORS_PER_CHANNEL` (8) modules and `MAX_MOD_ROUTES_PER_CHANNEL`
   (16) routes. Both are constants rather than format fields: a rack
   carrying more is truncated at load, not refused.

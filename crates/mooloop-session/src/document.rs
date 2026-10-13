@@ -733,8 +733,8 @@ impl Session {
         let snapshot = self.project_snapshot(bpm, swing_percent);
         let selected = snapshot.selected_index();
         let mut setup = snapshot.channels.get(selected)?.setup.clone();
-        // The song's modulation that plays on the channel goes with it.
-        setup.preset_modulation = snapshot.preset_rack(selected);
+        // The song's patch that plays on the channel goes with it.
+        setup.preset_patch = self.channel_preset_patch(selected);
         let effect = match target {
             PresetSaveTarget::Effect {
                 target: chain,
