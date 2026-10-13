@@ -30,7 +30,7 @@ use crate::voice_filter::{env_octaves, VoiceCutoff};
 use crate::smooth::Smoothed;
 use crate::glide::Glide;
 use crate::heldnotes::{HeldNote, HeldNotes};
-use crate::synth_voice::{note_to_freq, MIN_GLIDE_S};
+use crate::synth_voice::{note_to_freq, MIN_GLIDE_S, PARAM_SMOOTH_S};
 use mooloop_core::mlm1::{EnvTrigger, GlideMode};
 use mooloop_core::sampler::LoopQuantize;
 use mooloop_core::{
@@ -595,17 +595,107 @@ struct VoiceContext {
     bpm: f64,
     /// `2^(bits-1)` for `shape_frame`'s bit-reduction quantizer, a function
     /// of `params.bit_reduction` alone -- resolved once per `render_range`
-    /// rather than once per voice per hold-window refresh, alongside
-    /// `drive_compensation` below.
+    /// rather than once per voice per hold-window refresh.
     bit_scale: f32,
-    /// [`crate::shaper::voice_drive_compensation`] of `params.drive`, resolved
-    /// once per `render_range` rather than once per sample per channel:
-    /// `apply_drive`'s own `tanh` of the *signal* still runs per sample in
-    /// `shape_frame`, this only removes the `tanh` that does not vary with
-    /// it (`reports/fable-2026-09-22.md` finding 2, Plan C step 3).
-    drive_compensation: f32,
     /// The keyboard's bend as a rate ratio, `1.0` at rest (MOO-128).
     bend: f64,
+}
+
+/// The lagged values of the three shaping controls a lane or route can sweep:
+/// Cutoff, Resonance and Drive.
+///
+/// A lane or route reaches the sampler once per control tick, so applied raw
+/// each would step every tick: a zipper riding the filter's peak. Shared the
+/// way the output trim is: every voice walks its own copy of these through a
+/// segment, and `render_span` catches the originals up once.
+#[derive(Clone, Copy)]
+struct ShapeLags {
+    cutoff: Smoothed,
+    resonance: Smoothed,
+    drive: Smoothed,
+}
+
+impl ShapeLags {
+    fn new(params: SamplerParams, sample_rate: u32) -> Self {
+        let lag = |value| Smoothed::new(value, PARAM_SMOOTH_S, sample_rate);
+        Self {
+            cutoff: lag(clamp01(params.filter_cutoff)),
+            resonance: lag(clamp01(params.filter_resonance)),
+            drive: lag(clamp01(params.drive)),
+        }
+    }
+
+    fn set_target(&mut self, params: SamplerParams) {
+        self.cutoff.set_target(clamp01(params.filter_cutoff));
+        self.resonance.set_target(clamp01(params.filter_resonance));
+        self.drive.set_target(clamp01(params.drive));
+    }
+
+    fn reset_to(&mut self, params: SamplerParams) {
+        self.cutoff.reset_to(clamp01(params.filter_cutoff));
+        self.resonance.reset_to(clamp01(params.filter_resonance));
+        self.drive.reset_to(clamp01(params.drive));
+    }
+
+    fn is_settled(&self) -> bool {
+        self.cutoff.is_settled() && self.resonance.is_settled() && self.drive.is_settled()
+    }
+
+    fn advance_by(&mut self, frames: usize) {
+        self.cutoff.advance_by(frames);
+        self.resonance.advance_by(frames);
+        self.drive.advance_by(frames);
+    }
+
+    /// One sample further on, resolved for `shape_frame`.
+    fn advance(&mut self, filter_env_amount: f32) -> Shaping {
+        Shaping::resolve(
+            self.cutoff.advance(),
+            self.resonance.advance(),
+            self.drive.advance(),
+            filter_env_amount,
+        )
+    }
+
+    /// Where the lags are heading, resolved for `shape_frame`: what every
+    /// sample of a segment uses once they have settled.
+    fn settled(&self, filter_env_amount: f32) -> Shaping {
+        Shaping::resolve(
+            self.cutoff.target(),
+            self.resonance.target(),
+            self.drive.target(),
+            filter_env_amount,
+        )
+    }
+}
+
+/// The shaping controls for one sample, with what is derived from them alone
+/// already computed, so `shape_frame` pays the `powf` and the `tanh` once per
+/// segment while the controls hold still.
+#[derive(Clone, Copy)]
+struct Shaping {
+    /// The filter's cutoff before the envelope moves it, or `None` when the
+    /// filter is fully open with no envelope and no resonance and is skipped.
+    filter_base_hz: Option<f32>,
+    resonance: f32,
+    drive: f32,
+    /// [`voice_drive_compensation`] of `drive`. `apply_drive`'s own `tanh` of
+    /// the *signal* still runs per sample; this is the one that does not vary
+    /// with it.
+    drive_compensation: f32,
+}
+
+impl Shaping {
+    fn resolve(cutoff: f32, resonance: f32, drive: f32, filter_env_amount: f32) -> Self {
+        let env_amount = filter_env_amount.clamp(-1.0, 1.0);
+        let open = cutoff >= 0.999 && env_amount.abs() <= f32::EPSILON && resonance <= f32::EPSILON;
+        Self {
+            filter_base_hz: (!open).then(|| cutoff_hz_from_normalized(cutoff)),
+            resonance,
+            drive,
+            drive_compensation: voice_drive_compensation(drive),
+        }
+    }
 }
 
 /// A sample handle a sampler let go of on the audio thread, on its way to be
@@ -731,6 +821,9 @@ pub struct Sampler {
     /// are cheap, share a start value, and step identically, so the voices
     /// stay in agreement without the frame loop having to own them all.
     output_gain: Smoothed,
+    /// Cutoff, Resonance and Drive, lagged so a lane or route sweeping them
+    /// does not step every control tick.
+    shape: ShapeLags,
     /// The keyboard's bend as a rate ratio, `1.0` at rest (MOO-128). A
     /// multiplier on each voice's head rather than a retrigger, so a bend
     /// moves a sounding note.
@@ -801,6 +894,7 @@ impl Sampler {
                 OUTPUT_GAIN_SMOOTHING_S,
                 sample_rate,
             ),
+            shape: ShapeLags::new(params, sample_rate),
         }
     }
 
@@ -824,6 +918,7 @@ impl Sampler {
         let trim = clamp_output_gain(params.output_gain);
         if self.voices.iter().any(|voice| voice.active) {
             self.output_gain.set_target(trim);
+            self.shape.set_target(params);
         } else {
             // Nothing is sounding, so there is nothing for a ramp to protect
             // -- and a ramp here would be paid for by the *next* note's
@@ -831,6 +926,7 @@ impl Sampler {
             // patch onto a silent device, then play it. Lagging into the
             // first hit swallowed 5 dB of a kick's transient.
             self.output_gain.reset_to(trim);
+            self.shape.reset_to(params);
         }
         let fade = VOICE_FADE_S * self.sample_rate as f32;
         for (index, voice) in self.voices.iter_mut().enumerate() {
@@ -1104,6 +1200,7 @@ impl Sampler {
         // ramping there from the last one's.
         self.output_gain
             .reset_to(clamp_output_gain(self.params.output_gain));
+        self.shape.reset_to(self.params);
     }
 
     /// Take one handle this sampler let go of, so the host can drop it off
@@ -1553,31 +1650,13 @@ impl Sampler {
         }
     }
 
-    /// The voice filter's cutoff before the per-sample envelope multiplier:
-    /// `cutoff_hz_from_normalized`'s `powf` of the knob value alone, constant for
-    /// the whole segment a range covers (events are what change it, and the
-    /// block is already split at every event -- see this function's other
-    /// callers). `None` when the filter is fully bypassed, matching
-    /// `shape_frame`'s own early-return check, so a patch with the filter
-    /// off never pays the `powf` at all.
-    fn filter_base_hz(params: SamplerParams) -> Option<f32> {
-        let cutoff = clamp01(params.filter_cutoff);
-        let env_amount = params.filter_env_amount.clamp(-1.0, 1.0);
-        let resonance = clamp01(params.filter_resonance);
-        if cutoff >= 0.999 && env_amount.abs() <= f32::EPSILON && resonance <= f32::EPSILON {
-            return None;
-        }
-        Some(cutoff_hz_from_normalized(cutoff))
-    }
-
     fn shape_frame(
         params: SamplerParams,
         sample_rate: u32,
         voice: &mut Voice,
         frame: [f32; 2],
-        filter_base_hz: Option<f32>,
+        shaping: Shaping,
         bit_scale: f32,
-        drive_compensation: f32,
     ) -> [f32; 2] {
         let rate_reduction = clamp01(params.rate_reduction);
         // Off is the usual case and needs no `round`, which is a library
@@ -1603,7 +1682,12 @@ impl Sampler {
         voice.hold_remaining -= 1;
         let mut frame = voice.held_frame;
 
-        let drive = clamp01(params.drive);
+        let Shaping {
+            filter_base_hz,
+            resonance,
+            drive,
+            drive_compensation,
+        } = shaping;
         if drive > f32::EPSILON {
             let shaped = apply_drive_compensated(frame[0], drive, drive_compensation);
             let shaped_r = apply_drive_compensated(frame[1], drive, drive_compensation);
@@ -1614,10 +1698,9 @@ impl Sampler {
             return frame;
         };
         let env_amount = params.filter_env_amount.clamp(-1.0, 1.0);
-        let resonance = clamp01(params.filter_resonance);
         // The envelope multiplier still moves every sample -- that sweep is
         // the point of a filter envelope -- so the coefficient set is still
-        // derived fresh each call; only `base_hz` above is hoisted out.
+        // derived fresh each call; only `base_hz` is resolved outside it.
         // Topology-preserving state-variable low-pass. Unlike a biquad this
         // remains well behaved while cutoff and envelope move every sample.
         let cutoff_hz =
@@ -1852,7 +1935,8 @@ impl Sampler {
         cx: VoiceContext,
         voice: &mut Voice,
         stretch: Option<&mut StretchReader>,
-        output_gain: &mut Smoothed,
+        // The trim and the shaping lags, this voice's copies of them.
+        (output_gain, shape): (&mut Smoothed, &mut ShapeLags),
         bus: &mut StereoBus,
         // One range rather than two loose indices: they are always the
         // segment the block was split into, never independent.
@@ -1866,7 +1950,6 @@ impl Sampler {
             sample_rate,
             bpm,
             bit_scale,
-            drive_compensation,
             bend,
         } = cx;
         let (start, end) = (range.start, range.end);
@@ -1936,9 +2019,10 @@ impl Sampler {
             stretcher.set_ratio(ratio);
         }
 
-        // Hoisted out of the per-sample loop below: constant for the whole
-        // segment, like everything else resolved above it.
-        let filter_base_hz = Self::filter_base_hz(params);
+        // Hoisted out of the per-sample loop below while the lagged controls
+        // hold still, which is every segment no lane or route is sweeping.
+        let shape_moving = !shape.is_settled();
+        let settled_shaping = shape.settled(params.filter_env_amount);
 
         for i in start..end {
             let Some(sample) = voice.sample.as_ref() else {
@@ -1992,15 +2076,12 @@ impl Sampler {
                 Some(reader) => reader.read(&sample.frames, region, rate),
                 None => table.read(&sample.frames, pos, rate, region),
             };
-            let frame = Self::shape_frame(
-                params,
-                sample_rate,
-                voice,
-                raw,
-                filter_base_hz,
-                bit_scale,
-                drive_compensation,
-            );
+            let shaping = if shape_moving {
+                shape.advance(params.filter_env_amount)
+            } else {
+                settled_shaping
+            };
+            let frame = Self::shape_frame(params, sample_rate, voice, raw, shaping, bit_scale);
             bus.l[i] += amp * frame[0];
             bus.r[i] += amp * frame[1];
 
@@ -2113,19 +2194,19 @@ impl Sampler {
         let bit_reduction = clamp01(params.bit_reduction);
         let bits = (16.0 - bit_reduction * 12.0).round().clamp(4.0, 16.0);
         let bit_scale = 2.0_f32.powf(bits - 1.0);
-        let drive = clamp01(params.drive);
         let cx = VoiceContext {
             params,
             knob: self.knob,
             sample_rate: self.sample_rate,
             bpm: self.bpm,
             bit_scale,
-            drive_compensation: voice_drive_compensation(drive),
             bend: self.bend,
         };
         self.output_gain
             .set_target(clamp_output_gain(params.output_gain));
+        self.shape.set_target(params);
         let entry = self.output_gain;
+        let shape_entry = self.shape;
         // Every slot, not only the Voices count: the ones above it carry
         // voices fading out after a steal or a lowered count. An idle slot
         // returns at once.
@@ -2133,15 +2214,25 @@ impl Sampler {
         let slices = self.last_audio.as_deref().and_then(|audio| audio.slices.as_deref());
         for voice in &mut self.voices {
             let mut gain = entry;
+            let mut shape = shape_entry;
             // Advanced in lockstep with the voices, so voice `n` always gets
             // reader `n` whether or not it is sounding.
             let reader = readers.as_mut().and_then(Iterator::next);
-            Self::render_voice_range(cx, voice, reader, &mut gain, bus, start..end, slices);
+            Self::render_voice_range(
+                cx,
+                voice,
+                reader,
+                (&mut gain, &mut shape),
+                bus,
+                start..end,
+                slices,
+            );
         }
         // A voice that ends mid-segment stops walking its copy, and a silent
         // sampler renders no voices at all, so the trim advances here rather
         // than inheriting whichever voice happened to run last.
         self.output_gain.advance_by(end.saturating_sub(start));
+        self.shape.advance_by(end.saturating_sub(start));
     }
 
     #[cfg(test)]
@@ -2160,20 +2251,11 @@ impl Sampler {
 
     #[cfg(test)]
     fn shape_first_voice(&mut self, frame: [f32; 2]) -> [f32; 2] {
-        let filter_base_hz = Self::filter_base_hz(self.params);
+        let shaping = self.shape.settled(self.params.filter_env_amount);
         let bit_reduction = clamp01(self.params.bit_reduction);
         let bits = (16.0 - bit_reduction * 12.0).round().clamp(4.0, 16.0);
         let bit_scale = 2.0_f32.powf(bits - 1.0);
-        let drive = clamp01(self.params.drive);
-        Self::shape_frame(
-            self.params,
-            self.sample_rate,
-            &mut self.voices[0],
-            frame,
-            filter_base_hz,
-            bit_scale,
-            voice_drive_compensation(drive),
-        )
+        Self::shape_frame(self.params, self.sample_rate, &mut self.voices[0], frame, shaping, bit_scale)
     }
 }
 
@@ -2188,7 +2270,9 @@ impl AudioNode for Sampler {
         // a trim still travelling is a reason to keep rendering: freezing it
         // halfway would leave it there, and the next note would start at a
         // level nobody dialled.
-        self.output_gain.is_settled() && !self.voices.iter().any(|voice| voice.active)
+        self.output_gain.is_settled()
+            && self.shape.is_settled()
+            && !self.voices.iter().any(|voice| voice.active)
     }
 
     fn tail_frames(&self) -> u32 {
@@ -5276,5 +5360,117 @@ mod tests {
         strike(&mut legacy, 36, 64, &[]);
         assert_eq!(legacy.params().play_mode, PlayMode::Slice);
         assert_eq!(legacy.active_voice_count(), 1, "the first slice plays");
+    }
+    /// How much larger the largest change of slope is across a jump of
+    /// `param_id` from `from` to `to` than on either settled side, on a
+    /// sustained 120 Hz sine through the filter.
+    ///
+    /// Shaped like ML-M1's `jump_step_ratio`, with the settled sides as the
+    /// reference because opening a filter or driving it genuinely changes the
+    /// sound, so a ratio near 1 means the jump was smoothed. Slope rather than
+    /// step: a jump in Drive on a sine's crest barely raises the largest step,
+    /// which a hard-clipped wave already has, but kinks the wave sharply.
+    fn sampler_jump_step_ratio(params: SamplerParams, param_id: u32, from: f32, to: f32) -> f32 {
+        let sr = 48_000;
+        let frames = sr as usize / 2;
+        // On the sine's crest, where a level change steps hardest: at a zero
+        // crossing a jump in Drive changes nothing at all.
+        let jump_at = frames / 2 + 100;
+        // Comfortably longer than `PARAM_SMOOTH_S`, so the window holds the
+        // whole smoothed transition.
+        let settle = (sr as f32 * 0.05) as usize;
+        let len = sr as usize;
+        // 400 frames a cycle, a whole number of cycles, so the loop is seamless.
+        let frames_data = (0..len)
+            .map(|index| {
+                let value = 0.5 * (std::f32::consts::TAU * index as f32 / 400.0).sin();
+                [value, value]
+            })
+            .collect();
+        let sample = Arc::new(SampleData {
+            frames: frames_data,
+            sample_rate: sr,
+            root_note: 60,
+        });
+        let params = SamplerParams {
+            loop_mode: LoopMode::Forward,
+            ..params
+        };
+        let mut sampler = Sampler::new(slot(ChannelAudioSnapshot::sample(sample)), params, sr);
+        let mut bus = StereoBus::with_capacity(frames);
+        let mut events = EventList::empty();
+        events.push(TimedEvent {
+            offset: 0,
+            event: Event::NoteOn {
+                id: 1,
+                note: 60,
+                velocity: 127,
+            },
+        });
+        events.push(TimedEvent {
+            offset: 0,
+            event: Event::ParamValue {
+                id: param_id,
+                value: from,
+            },
+        });
+        events.push(TimedEvent {
+            offset: jump_at as u32,
+            event: Event::ParamValue {
+                id: param_id,
+                value: to,
+            },
+        });
+        sampler.process(&ctx(frames, sr), &mut bus, &events, None);
+
+        // The largest change of slope: a smooth signal's slope moves a little
+        // each sample, and a value that jumps moves it by the whole jump.
+        let kink = |window: &[f32]| {
+            window
+                .windows(3)
+                .map(|w| (w[2] - 2.0 * w[1] + w[0]).abs())
+                .fold(0.0_f32, f32::max)
+        };
+        let before = kink(&bus.l[jump_at - settle..jump_at]);
+        let across = kink(&bus.l[jump_at - 1..jump_at + settle]);
+        let after = kink(&bus.l[jump_at + settle..frames]);
+        let peak = bus.l[jump_at - settle..frames].iter().fold(0.0_f32, |m, x| m.max(x.abs()));
+        assert!(peak > 0.05, "the note is silent, so the jump measured nothing");
+        across / before.max(after)
+    }
+
+    /// A lane or route sweeping Cutoff, Resonance or Drive reaches the sampler
+    /// once a control tick. Applied raw, each value stepped the filter in one
+    /// sample; lagged like the synths', a jump across the whole range is no
+    /// steeper than the settled sound on either side of it.
+    #[test]
+    fn jumping_cutoff_resonance_or_drive_mid_note_does_not_click() {
+        use mooloop_core::generator::{
+            SAMPLER_PARAM_DRIVE, SAMPLER_PARAM_FILTER_CUTOFF, SAMPLER_PARAM_FILTER_RESONANCE,
+        };
+        // The cutoffs stay above the sine (0.5 is about 630 Hz), so the
+        // resonant peak never sweeps across it: a swell as the peak passes
+        // the tone is the filter doing its job, not a click.
+        let resonant = SamplerParams {
+            filter_cutoff: 0.5,
+            filter_resonance: 0.8,
+            ..SamplerParams::default()
+        };
+        let filtered = SamplerParams {
+            filter_cutoff: 0.5,
+            ..SamplerParams::default()
+        };
+        for (label, params, id, from, to) in [
+            ("cutoff up", resonant, SAMPLER_PARAM_FILTER_CUTOFF, 0.5, 0.9),
+            ("resonance", filtered, SAMPLER_PARAM_FILTER_RESONANCE, 0.0, 1.0),
+            ("drive up", SamplerParams::default(), SAMPLER_PARAM_DRIVE, 0.0, 1.0),
+            ("drive down", SamplerParams::default(), SAMPLER_PARAM_DRIVE, 1.0, 0.0),
+        ] {
+            let ratio = sampler_jump_step_ratio(params, id, from, to);
+            assert!(
+                ratio < 2.0,
+                "{label}: {from} -> {to} stepped {ratio:.2}x the settled slew"
+            );
+        }
     }
 }

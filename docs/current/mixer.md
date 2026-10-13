@@ -55,7 +55,8 @@ area, and where each behaviour stops.
   fader, whose control-rate staircase the lag rounds off. A mute is a fade:
   the channel or track goes on rendering, its output and its sends aimed at
   silence, and stops contributing only once both have arrived, about a
-  hundred milliseconds later. Polarity crossfades through zero. So does a
+  hundred milliseconds later, and once a compensation delay it owes has
+  played out what it held from before the mute. Polarity crossfades through zero. So does a
   send: switching one off fades it out and lets its delay drain before it is
   held, and moving it between pre- and post-fader fades out, switches tap and
   fades back in, all within about ten milliseconds. A document arriving
@@ -153,7 +154,10 @@ area, and where each behaviour stops.
   strip renders bit-identically to one with no strip at all. That is
   what entitles it to exist on every track rather than being a device
   somebody places; the price of having one everywhere is three booleans a
-  block, against a track bank that is capped at seventeen today.
+  block, against a track bank that is capped at seventeen today. Switching a
+  section in or out crosses between the dry signal and the section's over
+  35 ms rather than in one sample, and so does a change of voicing while the
+  input stage is in; the master section's IN does the same.
 
   The EQ's four bands read **left to right, top to bottom**: high shelf, high
   mid, low mid, low shelf. Each is gain / frequency / Q, and each switches
@@ -261,7 +265,9 @@ area, and where each behaviour stops.
   needs a latency story this engine does not have.
 - A muted bus still processes, so effect tails on it decay rather than freeze,
   but contributes no audio and meters as silent. A muted channel does the same
-  once it has faded: its generator is left uncalled, but its effect
+  once it has faded: its generator is left uncalled once its voices have
+  finished (a note still releasing runs out under the mute rather than
+  freezing and coming back on unmute), but its effect
   chain is fed silence until it reports at rest, so a delay or reverb tail
   decays under the mute instead of replaying on unmute. A muted channel whose
   chain is at rest costs nothing.

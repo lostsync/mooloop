@@ -11,7 +11,9 @@ area, and where each behaviour stops.
   resonance, drive, bit reduction, and rate reduction. The filter runs its own
   ADSR, reached through a CURVE/ENV switch on the Tone page's filter panel; a
   patch that never sets one, which includes every project saved before it
-  existed, follows the amplitude envelope. An Output trim in the page bar sets
+  existed, follows the amplitude envelope. Cutoff, resonance and drive are
+  smoothed over 5 ms, as the synths' are, so a lane or route sweeping them
+  does not zipper. An Output trim in the page bar sets
   the patch's level ahead of the channel's inserts; a sampler created today
   starts at -9 dB so a normalized file peaks where the synths' default patches
   do, while projects saved before the trim existed load at unity. Voice

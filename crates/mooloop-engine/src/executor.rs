@@ -18,7 +18,7 @@ use rtrb::Consumer;
 
 use crate::load::LoadMeters;
 use crate::render::{RenderState, RetiredPreviews};
-use crate::{PreparedProject, RealtimeCommand, StructuralCommand, StructuralReclaim};
+use crate::{PreparedProject, RealtimeCommand, StructuralReclaim};
 
 /// Per-block MIDI input ceiling. Bounded so the callback never allocates.
 const MAX_MIDI_PER_BLOCK: usize = 256;
@@ -332,53 +332,12 @@ impl Executor {
                         self.pending_command = Some(RealtimeCommand::Structural(command));
                         break;
                     }
-                    // A removal waits for its device to fade out of the path
-                    // (MOO-108), and so does an install into an occupied
-                    // slot (MOO-172); each holds what is behind it in order.
-                    if let StructuralCommand::RemoveEffect { target, slot }
-                    | StructuralCommand::InstallEffect { target, slot, .. } = &command
-                    {
-                        if !self.render.effect_slot_vacated(*target, *slot, frames) {
-                            self.pending_command = Some(RealtimeCommand::Structural(command));
-                            break;
-                        }
-                    }
-                    // A hosted plugin's processor leaving or rejoining its
-                    // slot (the rack's swap with the placeholder, which CLAP's
-                    // one processor per instance forces on every restart)
-                    // waits for the slot to fade out the same way, and the
-                    // slot fades back in with what arrives (MOO-213).
-                    if let StructuralCommand::ReplaceEffect {
-                        target,
-                        slot,
-                        expected_kind: mooloop_core::EffectKind::Plugin,
-                        expected_resource_key,
-                        ..
-                    } = &command
-                    {
-                        if !self.render.plugin_slot_ready_for_swap(
-                            *target,
-                            *slot,
-                            *expected_resource_key,
-                            frames,
-                        ) {
-                            self.pending_command = Some(RealtimeCommand::Structural(command));
-                            break;
-                        }
-                    }
-                    // A hosted instrument's processor leaving or being
-                    // replaced (a restart, a sample-rate change) waits for
-                    // the channel's source to fade out the same way, and the
-                    // source fades back in with what arrives (MOO-230).
-                    if let StructuralCommand::HostSourceProcessor { channel, slot, .. } = &command
-                    {
-                        if !self
-                            .render
-                            .source_ready_for_processor_swap(*channel, *slot, frames)
-                        {
-                            self.pending_command = Some(RealtimeCommand::Structural(command));
-                            break;
-                        }
+                    // A command that takes a sounding node out of the path
+                    // waits for it to fade out, and holds what is behind it
+                    // in order (`RenderState::structural_ready`).
+                    if !self.render.structural_ready(&command, frames) {
+                        self.pending_command = Some(RealtimeCommand::Structural(command));
+                        break;
                     }
                     if let Some(displaced) = self.render.apply_structural(command) {
                         self.reclaim(displaced);

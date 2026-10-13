@@ -9,7 +9,10 @@ area, and where each behaviour stops.
   polarity, then its channel strip's drive/EQ/comp, in one row), its own
   devices as inserts, and its fader last.
 
-- The source device is a picker rather than a chip per instrument.
+- The source device is a picker rather than a chip per instrument. Changing
+  it while the channel sounds fades the old instrument out over 35 ms before
+  the new one takes its place, which then fades in; its notes end with the
+  fade.
 - **Changing a channel's device leaves what was aimed at the old one inert,
   and keeps it.** A lane, a modulation route or a MIDI binding on the
   sampler's Cutoff does not start moving whatever the new device calls the

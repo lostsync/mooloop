@@ -415,6 +415,194 @@ fn muting_the_master_is_continuous() {
     );
 }
 
+/// Frames of compensation the latency cases owe, 200 ms: longer than the
+/// mute's fade takes to settle at exactly zero (a 5 ms one-pole, about
+/// 100 ms), so a ring emptied the moment the stage settles still holds audio
+/// from before the mute, at full level. A plugin with a long lookahead owes
+/// this much.
+const COMPENSATION: u32 = 9_600;
+
+/// `project`, playing, with `producer` owing [`COMPENSATION`] frames of
+/// delay, as it would beside a longer path into the same bus.
+fn playing_compensated(project: &Project, producer: EffectTarget) -> RenderState {
+    let mut render = playing(project);
+    let refused = render.apply_structural(StructuralCommand::SetCompensation {
+        target: producer,
+        delay: mooloop_dsp::IntegerDelay::new(COMPENSATION).map(Box::new),
+    });
+    assert!(refused.is_none(), "the ring was not installed");
+    render
+}
+
+/// A mute is faded at the output stage, and a compensation ring is fed
+/// after it, so the fade is still coming out of the ring after the stage
+/// has arrived at zero. Muting has to wait for the ring too, or the last
+/// `COMPENSATION` frames before the fade are cut off at full level.
+#[test]
+fn muting_a_compensated_channel_or_track_is_continuous() {
+    for (what, project, producer, mute) in [
+        (
+            "muting a compensated channel",
+            sine_project(),
+            EffectTarget::Channel(0),
+            EngineCommand::SetChannelMuted {
+                channel: 0,
+                muted: true,
+            },
+        ),
+        (
+            "muting a compensated track",
+            tracked_sine_project(),
+            EffectTarget::Bus(TRACK),
+            EngineCommand::SetBusMuted {
+                bus: TRACK,
+                muted: true,
+            },
+        ),
+    ] {
+        let mut render = playing_compensated(&project, producer);
+        let transition =
+            step_across(&mut render, LEAD, |render| render.apply_command(mute), TAIL);
+        assert_continuous(what, transition);
+    }
+}
+
+// --- Realtime Engine: a change of instrument -----------------------------------
+
+/// **Changing a sounding channel's instrument fades the old one out** rather
+/// than swapping it in one sample. The change is held, block by block, the
+/// way the executor holds it, until the strip says the outgoing source has
+/// faded; the incoming one starts silent here, so what is measured is the
+/// fade-out alone.
+#[test]
+fn changing_a_sounding_channels_instrument_is_continuous() {
+    use crate::render_test_support::BLOCK;
+
+    let mut render = playing(&sine_project());
+    let (lead_l, lead_r) = render_frames(&mut render, LEAD);
+    let mut command = Some(StructuralCommand::InstallSource {
+        channel: 0,
+        node: Box::new(mooloop_dsp::PolySynth::new(
+            mooloop_core::PolySynthParams::default(),
+            SAMPLE_RATE,
+        )),
+        device: mooloop_core::DeviceId::UNASSIGNED,
+    });
+    let (mut tail_l, mut tail_r) = (Vec::new(), Vec::new());
+    let mut held_blocks = 0;
+    while tail_l.len() < TAIL {
+        let block = BLOCK.min(TAIL - tail_l.len());
+        if let Some(pending) = command.take() {
+            if render.structural_ready(&pending, block) {
+                let displaced = render.apply_structural(pending);
+                assert!(displaced.is_some(), "the old source has to come back");
+            } else {
+                held_blocks += 1;
+                command = Some(pending);
+            }
+        }
+        let (l, r) = render_frames(&mut render, block);
+        tail_l.extend(l);
+        tail_r.extend(r);
+    }
+    assert!(command.is_none(), "the change never landed");
+    assert!(held_blocks > 0, "a sounding source was replaced without a fade");
+    assert_continuous(
+        "changing a sounding channel's instrument",
+        Transition::measure((&lead_l, &lead_r), (&tail_l, &tail_r)),
+    );
+}
+
+/// `bus`'s strip, set up by `setup` before the note starts, then `change`
+/// landing mid-note: what every strip switch case below measures.
+fn across_strip_change(
+    project: &Project,
+    bus: u8,
+    setup: &[(u32, f32)],
+    change: (u32, f32),
+) -> Transition {
+    let mut render = RenderState::from_project(SAMPLE_RATE, project, &[]);
+    for &(param, value) in setup {
+        render.apply_command(EngineCommand::SetStripParam { bus, param, value });
+    }
+    render.play();
+    let (param, value) = change;
+    step_across(
+        &mut render,
+        LEAD,
+        |render| render.apply_command(EngineCommand::SetStripParam { bus, param, value }),
+        TAIL,
+    )
+}
+
+/// **A track strip's IN switches and its voicing cross rather than switch**
+/// (MOO-104's family, for the strip's own sections). Each section's sound
+/// crosses with the dry signal when it is switched, and a change of voicing
+/// under a sounding PRE crosses from the old input stage to the new one.
+#[test]
+fn a_track_strips_switches_and_voicing_are_continuous() {
+    use mooloop_core::strip::{
+        strip_band_param, STRIP_BAND_GAIN, STRIP_COMP_IN, STRIP_COMP_MAKEUP_DB,
+        STRIP_COMP_RATIO, STRIP_COMP_THRESHOLD_DB, STRIP_DRIVE_DB, STRIP_EQ_BANDS, STRIP_EQ_IN,
+        STRIP_PRE_IN, STRIP_VOICING,
+    };
+    // Every band boosted, so the EQ's switch moves the level by a lot
+    // wherever the voicing puts the sine.
+    let boosted: Vec<(u32, f32)> = (0..STRIP_EQ_BANDS)
+        .map(|band| (strip_band_param(band, STRIP_BAND_GAIN), 12.0))
+        .collect();
+    let compressing = [
+        (STRIP_COMP_IN, 1.0),
+        (STRIP_COMP_THRESHOLD_DB, -40.0),
+        (STRIP_COMP_RATIO, 20.0),
+        (STRIP_COMP_MAKEUP_DB, 6.0),
+    ];
+    // Iron, driven hard: the colouring voicing.
+    let iron = 3.0;
+    // What a case sets up before the note, and the change it measures.
+    type Case = (&'static str, Vec<(u32, f32)>, (u32, f32));
+    let cases: [Case; 4] = [
+        ("switching a compressing COMP out", compressing.to_vec(), (STRIP_COMP_IN, 0.0)),
+        ("switching a boosting EQ in", boosted, (STRIP_EQ_IN, 1.0)),
+        (
+            "switching a driven PRE in",
+            vec![(STRIP_VOICING, iron), (STRIP_DRIVE_DB, 18.0)],
+            (STRIP_PRE_IN, 1.0),
+        ),
+        (
+            "changing the voicing under a driven PRE",
+            vec![(STRIP_PRE_IN, 1.0), (STRIP_DRIVE_DB, 18.0)],
+            (STRIP_VOICING, iron),
+        ),
+    ];
+    for (what, setup, change) in cases {
+        assert_continuous(
+            what,
+            across_strip_change(&tracked_sine_project(), TRACK, &setup, change),
+        );
+    }
+}
+
+/// The master section's IN is the same kind of switch: out of a compressing
+/// section with makeup moves the whole song by the difference.
+#[test]
+fn switching_a_compressing_master_section_out_is_continuous() {
+    use mooloop_core::strip::{MASTER_COMP_IN, MASTER_COMP_MAKEUP_DB, MASTER_COMP_THRESHOLD_DB};
+    assert_continuous(
+        "switching a compressing master section out",
+        across_strip_change(
+            &sine_project(),
+            mooloop_core::MASTER_BUS,
+            &[
+                (MASTER_COMP_IN, 1.0),
+                (MASTER_COMP_THRESHOLD_DB, -40.0),
+                (MASTER_COMP_MAKEUP_DB, 6.0),
+            ],
+            (MASTER_COMP_IN, 0.0),
+        ),
+    );
+}
+
 // --- Instruments: MOO-110 ----------------------------------------------------
 
 /// A sine sample at 221 Hz rather than the 220 the synth plays, so that

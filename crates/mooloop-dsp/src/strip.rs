@@ -68,6 +68,83 @@ const PARAM_SMOOTH_S: f32 = 0.005;
 /// threshold every voicing is still close to the ratio its knob says.
 const BEND_RANGE_DB: f32 = 24.0;
 
+/// How long a section's IN switch, and a change of voicing under a sounding
+/// input stage, take to cross from one sound to the other: the ~35 ms an
+/// effect's bypass takes, as a straight line, so it arrives exactly. Shorter
+/// is audible as a step on a driven PRE, whose sound is far from the dry
+/// signal.
+const SECTION_FADE_S: f32 = 0.035;
+
+/// A section's IN switch as a level that crosses between the dry signal and
+/// the section's own, rather than a branch that changes the sound in one
+/// sample. The switch itself stays in the parameters; this is how far the
+/// sound has got towards it, so every call is told where it is going.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct SectionGate {
+    level: f32,
+    step: f32,
+}
+
+impl SectionGate {
+    pub(crate) fn new(on: bool, sample_rate: u32) -> Self {
+        Self {
+            level: if on { 1.0 } else { 0.0 },
+            step: Self::step_at(sample_rate),
+        }
+    }
+
+    fn step_at(sample_rate: u32) -> f32 {
+        1.0 / (SECTION_FADE_S * sample_rate.max(1) as f32)
+    }
+
+    pub(crate) fn set_sample_rate(&mut self, sample_rate: u32) {
+        self.step = Self::step_at(sample_rate);
+    }
+
+    /// Be at `on` already: a document arriving, with nothing to cross from.
+    pub(crate) fn snap(&mut self, on: bool) {
+        self.level = if on { 1.0 } else { 0.0 };
+    }
+
+    /// Whether the section has to run: it is in, or still fading out.
+    pub(crate) fn runs(&self, on: bool) -> bool {
+        on || self.level > 0.0
+    }
+
+    /// Whether nothing of the section is heard, so its state may be cleared
+    /// for it to start afresh.
+    pub(crate) fn is_closed(&self) -> bool {
+        self.level <= 0.0
+    }
+
+    /// Whether the level has arrived at `on`.
+    pub(crate) fn is_settled(&self, on: bool) -> bool {
+        self.level == if on { 1.0 } else { 0.0 }
+    }
+
+    /// One sample further towards `on`; the weight of the section's own
+    /// signal against the dry one for that sample.
+    #[inline]
+    pub(crate) fn advance(&mut self, on: bool) -> f32 {
+        self.level = if on {
+            (self.level + self.step).min(1.0)
+        } else {
+            (self.level - self.step).max(0.0)
+        };
+        self.level
+    }
+}
+
+/// `dry` crossed to `wet` by `weight`, exactly `wet` at a weight of one.
+#[inline]
+pub(crate) fn cross(dry: f32, wet: f32, weight: f32) -> f32 {
+    if weight >= 1.0 {
+        wet
+    } else {
+        dry + (wet - dry) * weight
+    }
+}
+
 /// The programme-dependent stage's two time constants, as multiples of the
 /// knob's *release*.
 ///
@@ -501,21 +578,30 @@ impl StripEq {
         }
     }
 
-    fn process(&mut self, bus: &mut StereoBus, frames: usize) {
+    /// Run the bank over the block, crossed with the dry signal by `gate`
+    /// on its way to `on`.
+    fn process(&mut self, bus: &mut StereoBus, frames: usize, gate: &mut SectionGate, on: bool) {
         if self.active_len == 0 {
+            // Every stage is the identity, so the crossing has nothing to
+            // cross; it still has to arrive.
+            for _ in 0..frames {
+                gate.advance(on);
+            }
             return;
         }
         let active = &self.active[..self.active_len];
         for frame in 0..frames {
-            let mut l = bus.l[frame];
-            let mut r = bus.r[frame];
+            let (dry_l, dry_r) = (bus.l[frame], bus.r[frame]);
+            let mut l = dry_l;
+            let mut r = dry_r;
             for stage in active {
                 let index = *stage as usize;
                 l = self.left[index].process(l);
                 r = self.right[index].process(r);
             }
-            bus.l[frame] = l;
-            bus.r[frame] = r;
+            let weight = gate.advance(on);
+            bus.l[frame] = cross(dry_l, l, weight);
+            bus.r[frame] = cross(dry_r, r, weight);
         }
     }
 }
@@ -527,8 +613,18 @@ pub struct Strip {
     voicing: StripVoicing,
     drive_l: Preamp,
     drive_r: Preamp,
+    /// The input stage of the voicing being left, while a change of voicing
+    /// crosses from it to `drive_l`/`drive_r` under a sounding PRE.
+    leaving_l: Preamp,
+    leaving_r: Preamp,
+    /// How far that crossing has got: 1 when there is none.
+    voicing_cross: f32,
     drive: Smoothed,
     eq: StripEq,
+    /// How far each section's sound is towards its IN switch.
+    pre_gate: SectionGate,
+    eq_gate: SectionGate,
+    comp_gate: SectionGate,
     /// The knob's detector.
     detector: EnvelopeFollower,
     /// The programme-dependent one: slower to charge and slower to let go,
@@ -561,8 +657,14 @@ impl Strip {
             voicing,
             drive_l: Preamp::new(voicing.preamp, sample_rate),
             drive_r: Preamp::new(voicing.preamp, sample_rate),
+            leaving_l: Preamp::new(voicing.preamp, sample_rate),
+            leaving_r: Preamp::new(voicing.preamp, sample_rate),
+            voicing_cross: 1.0,
             drive: smoothed(db_to_linear(params.drive_db)),
             eq: StripEq::new(),
+            pre_gate: SectionGate::new(params.pre_in, sample_rate),
+            eq_gate: SectionGate::new(params.eq_in, sample_rate),
+            comp_gate: SectionGate::new(params.comp_in, sample_rate),
             detector: EnvelopeFollower::new(),
             programme: EnvelopeFollower::new(),
             threshold: smoothed(params.threshold_db),
@@ -592,6 +694,10 @@ impl Strip {
         self.set_detector_times();
         self.snap_drive();
         self.snap_comp();
+        self.voicing_cross = 1.0;
+        self.pre_gate.snap(params.pre_in);
+        self.eq_gate.snap(params.eq_in);
+        self.comp_gate.snap(params.comp_in);
         self.bus_comp.set_params(params.master);
     }
 
@@ -619,14 +725,17 @@ impl Strip {
 
     /// Move one parameter, and report whether it was one this strip has.
     ///
-    /// The `in` switches clear their own section's state on the way in, and
-    /// put its smoothed values at its knobs. That is deliberate rather than
-    /// tidy: a filter bank and a detector last fed audio before the section
-    /// was switched out would otherwise put that audio into the first block
-    /// after it comes back, and a smoother that has not advanced since then
-    /// would spend that block gliding up from a setting the user has already
-    /// changed. Either way "out means out" would have an artefact attached
-    /// to it.
+    /// The `in` switches cross between the dry signal and the section's own
+    /// over [`SECTION_FADE_S`], rather than switching in one sample. A
+    /// section coming in from fully out starts with its state cleared and
+    /// its smoothed values at its knobs: a filter bank and a detector last
+    /// fed audio before the section went out would otherwise put that audio
+    /// into the crossing, and a smoother that has not advanced since would
+    /// glide up from a setting the user has already changed. One switched
+    /// back in before its fade-out finished carries on from where it is.
+    ///
+    /// A change of voicing under a sounding PRE crosses from the old input
+    /// stage to the new one the same way.
     pub fn apply_param(&mut self, id: u32, value: f32) -> bool {
         if !self.params.set(id, value) {
             return false;
@@ -648,7 +757,19 @@ impl Strip {
         match id {
             STRIP_VOICING => {
                 self.voicing = strip_voicing(self.params.voicing);
-                self.rebuild_drive();
+                if self.pre_gate.is_closed() {
+                    self.rebuild_drive();
+                } else {
+                    self.leaving_l = std::mem::replace(
+                        &mut self.drive_l,
+                        Preamp::new(self.voicing.preamp, self.sample_rate),
+                    );
+                    self.leaving_r = std::mem::replace(
+                        &mut self.drive_r,
+                        Preamp::new(self.voicing.preamp, self.sample_rate),
+                    );
+                    self.voicing_cross = 0.0;
+                }
                 // The Q law and the ratio bend are the voicing's other two
                 // halves, so the bank is redesigned and the detector
                 // retimed with it.
@@ -657,18 +778,19 @@ impl Strip {
                 self.set_detector_times();
             }
             STRIP_PRE_IN => {
-                if self.params.pre_in {
+                if self.params.pre_in && self.pre_gate.is_closed() {
                     self.rebuild_drive();
                     self.snap_drive();
+                    self.voicing_cross = 1.0;
                 }
             }
             STRIP_EQ_IN => {
-                if self.params.eq_in {
+                if self.params.eq_in && self.eq_gate.is_closed() {
                     self.eq.reset();
                 }
             }
             STRIP_COMP_IN => {
-                if self.params.comp_in {
+                if self.params.comp_in && self.comp_gate.is_closed() {
                     self.detector.reset();
                     self.programme.reset();
                     self.snap_comp();
@@ -716,6 +838,10 @@ impl Strip {
         self.sample_rate = sample_rate;
         self.bus_comp.set_sample_rate(sample_rate);
         self.rebuild_drive();
+        self.voicing_cross = 1.0;
+        for gate in [&mut self.pre_gate, &mut self.eq_gate, &mut self.comp_gate] {
+            gate.set_sample_rate(sample_rate);
+        }
         self.eq.update(&self.params, &self.voicing, sample_rate);
         self.set_detector_times();
         for smoothed in [
@@ -763,10 +889,11 @@ impl Strip {
         })
     }
 
-    /// Whether every section that is in has settled.
+    /// Whether every section that is running has settled.
     ///
-    /// A section that is *out* contributes nothing to the answer, because it
-    /// is not running and its state is cleared on the way back in. What has
+    /// A section that is *out*, and has finished fading out, contributes
+    /// nothing to the answer, because it is not running and its state is
+    /// cleared on the way back in. One still crossing is not at rest. What has
     /// to settle is the same thing `CompressorEffect::is_at_rest` waits for:
     /// a detector frozen mid-release wakes up holding reduction the music
     /// stopped asking for, and a filter frozen with a sample in it wakes up
@@ -775,16 +902,24 @@ impl Strip {
         if !self.bus_comp.is_at_rest() {
             return false;
         }
-        if self.params.pre_in && !(self.drive_l.is_at_rest() && self.drive_r.is_at_rest()) {
+        let (pre, eq, comp) = (self.params.pre_in, self.params.eq_in, self.params.comp_in);
+        if !(self.pre_gate.is_settled(pre)
+            && self.eq_gate.is_settled(eq)
+            && self.comp_gate.is_settled(comp)
+            && self.voicing_cross >= 1.0)
+        {
             return false;
         }
-        if self.params.eq_in && !self.eq.is_at_rest() {
+        if pre && !(self.drive_l.is_at_rest() && self.drive_r.is_at_rest()) {
             return false;
         }
-        if self.params.pre_in && !self.drive.is_settled() {
+        if eq && !self.eq.is_at_rest() {
             return false;
         }
-        if self.params.comp_in
+        if pre && !self.drive.is_settled() {
+            return false;
+        }
+        if comp
             && !(self.detector.is_at_rest()
                 && self.programme.is_at_rest()
                 && self.threshold.is_settled()
@@ -805,13 +940,13 @@ impl Strip {
     /// already in cache.
     pub fn process_block(&mut self, bus: &mut StereoBus, frames: usize) {
         let frames = frames.min(bus.capacity());
-        if self.params.pre_in {
+        if self.pre_gate.runs(self.params.pre_in) {
             self.process_drive(bus, frames);
         }
-        if self.params.eq_in {
-            self.eq.process(bus, frames);
+        if self.eq_gate.runs(self.params.eq_in) {
+            self.eq.process(bus, frames, &mut self.eq_gate, self.params.eq_in);
         }
-        if self.params.comp_in {
+        if self.comp_gate.runs(self.params.comp_in) {
             self.process_comp(bus, frames);
         } else {
             self.detector_peak = 0.0;
@@ -820,16 +955,28 @@ impl Strip {
     }
 
     fn process_drive(&mut self, bus: &mut StereoBus, frames: usize) {
+        let on = self.params.pre_in;
+        let step = SectionGate::step_at(self.sample_rate);
         for frame in 0..frames {
             let drive = self.drive.advance();
-            bus.l[frame] = self.drive_l.process(bus.l[frame], drive);
-            bus.r[frame] = self.drive_r.process(bus.r[frame], drive);
+            let (dry_l, dry_r) = (bus.l[frame], bus.r[frame]);
+            let mut l = self.drive_l.process(dry_l, drive);
+            let mut r = self.drive_r.process(dry_r, drive);
+            if self.voicing_cross < 1.0 {
+                self.voicing_cross = (self.voicing_cross + step).min(1.0);
+                l = cross(self.leaving_l.process(dry_l, drive), l, self.voicing_cross);
+                r = cross(self.leaving_r.process(dry_r, drive), r, self.voicing_cross);
+            }
+            let weight = self.pre_gate.advance(on);
+            bus.l[frame] = cross(dry_l, l, weight);
+            bus.r[frame] = cross(dry_r, r, weight);
         }
     }
 
     fn process_comp(&mut self, bus: &mut StereoBus, frames: usize) {
         self.detector_peak = 0.0;
         self.reduction_db = 0.0;
+        let on = self.params.comp_in;
         let knee_db = self.params.knee_db;
         let bend = self.voicing.ratio_bend;
         let programme = self.voicing.programme;
@@ -865,8 +1012,9 @@ impl Strip {
             self.detector_peak = self.detector_peak.max(envelope);
             self.reduction_db = self.reduction_db.min(reduction_db);
             let gain = db_to_linear_unfloored(reduction_db) * makeup;
-            bus.l[frame] = dry_l * (1.0 - mix) + wet_l * gain * mix;
-            bus.r[frame] = dry_r * (1.0 - mix) + wet_r * gain * mix;
+            let weight = self.comp_gate.advance(on);
+            bus.l[frame] = cross(dry_l, dry_l * (1.0 - mix) + wet_l * gain * mix, weight);
+            bus.r[frame] = cross(dry_r, dry_r * (1.0 - mix) + wet_r * gain * mix, weight);
         }
     }
 }
@@ -1439,13 +1587,18 @@ mod tests {
         let mut turned = sine(frames, 200.0, 0.2);
         switched.process_block(&mut turned, frames);
         let born = run(settings, sine(frames, 200.0, 0.2));
+        let dry = sine(frames, 200.0, 0.2);
+        // Switched in, the section crosses from the dry signal to what a strip
+        // born with these settings plays, a sample's worth further each frame.
+        let step = SectionGate::step_at(SAMPLE_RATE);
         for index in 0..frames {
+            let weight = ((index + 1) as f32 * step).min(1.0);
+            let expected = cross(dry.l[index], born.l[index], weight);
             assert!(
-                (turned.l[index] - born.l[index]).abs() < 1e-6,
-                "frame {index}: switched in gives {}, where a strip born with \
-                 the same settings gives {}",
+                (turned.l[index] - expected).abs() < 1e-5,
+                "frame {index}: switched in gives {}, where crossing into a \
+                 strip born with the same settings gives {expected}",
                 turned.l[index],
-                born.l[index]
             );
         }
     }
@@ -1480,6 +1633,12 @@ mod tests {
         strip.apply_param(STRIP_COMP_IN, 0.0);
         let mut loud = sine(frames, 200.0, 0.5);
         strip.process_block(&mut loud, frames);
+        assert!(!strip.is_at_rest(), "a section still crossing out is not at rest");
+        // Past the crossing, which runs only while the section does.
+        for _ in 0..10 {
+            let mut loud = sine(frames, 200.0, 0.5);
+            strip.process_block(&mut loud, frames);
+        }
         assert!(strip.is_at_rest(), "a section that is out cannot hold rest");
     }
 
@@ -1607,11 +1766,15 @@ mod tests {
     /// every track, so its *size* is worth knowing rather than assuming.
     /// Named as a measurement, not a limit: if it grows, the number to argue
     /// with is here.
+    ///
+    /// Past a kilobyte since the voicing crosses rather than switches: the
+    /// strip keeps the input stage of the voicing it is leaving, two more
+    /// `Preamp`s, so the change can fade between them.
     #[test]
     fn a_strip_is_a_few_hundred_bytes() {
         let size = std::mem::size_of::<Strip>();
         assert!(
-            size < 1_024,
+            size < 1_280,
             "a strip is {size} bytes, against the 128 KB a track already costs"
         );
     }

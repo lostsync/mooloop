@@ -1992,6 +1992,11 @@ const BYPASS_FADE_FLOOR: f32 = 1.0e-3;
 /// nothing; waiting forever would hold every edit queued behind it.
 const REMOVAL_MAX_WAIT_S: f32 = 0.1;
 
+/// How long a channel's source takes to fade out before a change of
+/// instrument replaces it, and the new one to fade in: the ~35 ms a removed
+/// effect's slot takes, as a straight line that arrives at silence exactly.
+const SOURCE_SWAP_FADE_S: f32 = 0.035;
+
 /// A slot's host controls as the audio hears them (MOO-108).
 ///
 /// Wet/dry, the two trims, a container's Mix, and whether the device is in
@@ -4627,6 +4632,11 @@ struct BusStrip {
     /// measured against it, and so is the compensation ring: once silence has
     /// been fed for the ring's whole length every slot in it is a zero.
     silent_frames: u32,
+    /// Consecutive frames of silence fed into the compensation ring, counted
+    /// after the fader where the ring is fed. Not `silent_frames`: a muted
+    /// track goes on being fed by its channels, and what its mute has to
+    /// wait for is the ring emptying of what the fader let through.
+    ring_silent_frames: u32,
     /// Whether the strip has already done the once-only work of going to
     /// sleep, so that emptying the buffer is not repeated every idle block.
     sleeping: bool,
@@ -4656,6 +4666,7 @@ impl BusStrip {
             // anyway rather than reasoning about a buffer it did not fill.
             dirty: true,
             silent_frames: 0,
+            ring_silent_frames: 0,
             sleeping: false,
         }
     }
@@ -5179,6 +5190,17 @@ pub struct ChannelStrip {
     /// is not that: a chain with a tail keeps feeding the ring audio long
     /// after the source has gone quiet. Only kept while a ring exists.
     ring_silent_frames: u32,
+    /// The level the generator's output is at, 0..=1: 1 but around a change
+    /// of instrument, which fades the outgoing source out and the incoming
+    /// one in ([`Self::ready_for_source_install`]).
+    source_fade: f32,
+    /// Frames a pending change of instrument has waited for the outgoing
+    /// source to fade out, while one does.
+    source_leaving: Option<u32>,
+    /// Consecutive frames of silence the generator has made since its mute
+    /// finished fading, while it is still run so its releasing voices end
+    /// rather than freeze. Zero whenever the channel is not faded out.
+    muted_silent_frames: u32,
     /// Whether the strip was left uncalled last block. Only used to do the
     /// once-off tidying that falling asleep needs -- emptying the bus and the
     /// compensation ring -- rather than repeating it every idle block.
@@ -5322,6 +5344,9 @@ impl ChannelStrip {
             compensation: None,
             source_silent_frames: 0,
             ring_silent_frames: 0,
+            muted_silent_frames: 0,
+            source_fade: 1.0,
+            source_leaving: None,
             sleeping: false,
             take: None,
             sequenced: SequencedVoices::new(),
@@ -5373,7 +5398,57 @@ impl ChannelStrip {
         self.source_base = arrival_base(&*source);
         self.source_device = device;
         self.source_pending.clear();
+        // An arrival that is sounding already (Aux In) fades in from where
+        // the outgoing source's fade left the level. One at rest, which is
+        // every instrument, starts at full level: its first note would
+        // otherwise be what fades in, swallowing its attack.
+        self.source_leaving = None;
+        if source.is_at_rest() {
+            self.source_fade = 1.0;
+        }
         std::mem::replace(&mut self.source, source)
+    }
+
+    /// Whether the source can be replaced now without a step: it is at rest,
+    /// or it has faded out, which the first ask starts. The arrival then
+    /// fades in. `frames` is the block about to render, counted as the one
+    /// since the last ask; a strip that is not rendering (asleep, or muted
+    /// and faded) cannot move its fade and is silent besides, so the change
+    /// goes after [`REMOVAL_MAX_WAIT_S`] regardless.
+    fn ready_for_source_install(&mut self, frames: usize, sample_rate: u32) -> bool {
+        if self.source_leaving.is_none() && self.source_node().is_at_rest() {
+            return true;
+        }
+        let waited = self
+            .source_leaving
+            .map_or(0, |waited| waited.saturating_add(frames as u32));
+        self.source_leaving = Some(waited);
+        if self.source_fade <= 0.0 {
+            return true;
+        }
+        if waited >= (REMOVAL_MAX_WAIT_S * sample_rate as f32) as u32 {
+            self.source_fade = 0.0;
+            return true;
+        }
+        false
+    }
+
+    /// Move the change-of-instrument fade along one block and apply it to
+    /// the generator's output: down while a change waits, up otherwise. At
+    /// full level with nothing leaving it touches nothing, so a channel that
+    /// never changes instrument under sound renders exactly as without it.
+    fn apply_source_fade(&mut self, frames: usize, sample_rate: u32) {
+        let leaving = self.source_leaving.is_some();
+        if !leaving && self.source_fade >= 1.0 {
+            return;
+        }
+        let step = 1.0 / (SOURCE_SWAP_FADE_S * sample_rate.max(1) as f32);
+        let step = if leaving { -step } else { step };
+        for frame in 0..frames.min(self.bus.capacity()) {
+            self.source_fade = (self.source_fade + step).clamp(0.0, 1.0);
+            self.bus.l[frame] *= self.source_fade;
+            self.bus.r[frame] *= self.source_fade;
+        }
     }
 
     /// Put the mixer half of the strip back to a fresh channel's: no
@@ -5567,11 +5642,16 @@ impl ChannelStrip {
         source.is_at_rest()
             && self.source_silent_frames > source.tail_frames()
             && self.effects.is_at_rest()
-            // The ring has to have been fed silence for at least its own
-            // length: until then it still holds audio it has not emitted,
-            // and `sleep` empties it (MOO-401). `BusStrip::is_resting` has
-            // the same clause.
-            && self.ring_silent_frames as usize >= ring_frames(&self.compensation)
+            // Until the ring is quiet it still holds audio it has not
+            // emitted, and `sleep` empties it (MOO-401). `BusStrip::is_resting`
+            // has the same clause.
+            && self.ring_is_quiet()
+    }
+
+    /// Whether the compensation ring holds only silence: it has been fed
+    /// silence for at least its own length. Trivially so with no ring.
+    fn ring_is_quiet(&self) -> bool {
+        self.ring_silent_frames as usize >= ring_frames(&self.compensation)
     }
 
     /// Spend a block asleep: move whatever runs on the clock, and the first
@@ -5675,6 +5755,7 @@ impl ChannelStrip {
             node.apply_curves(curves, CONTROL_RATE_FRAMES, events)
         };
         node.process_source(context, bus, &*events, source, ports);
+        self.apply_source_fade(context.frames, context.sample_rate);
         self.publish_outlets();
         refused
     }
@@ -8192,6 +8273,45 @@ impl RenderState {
         !self.reclaim.is_empty()
     }
 
+    /// Whether `command` can be applied now without a step in the output.
+    ///
+    /// The rule: **a command that takes a sounding node out of the path waits
+    /// until that node has faded out.** The executor asks before each block
+    /// while it holds one, with the length of the block about to render; the
+    /// first ask starts the fade, and what arrives fades back in. A command
+    /// that takes nothing sounding out of the path is ready at once.
+    pub(crate) fn structural_ready(&mut self, command: &StructuralCommand, frames: usize) -> bool {
+        match command {
+            StructuralCommand::RemoveEffect { target, slot }
+            | StructuralCommand::InstallEffect { target, slot, .. } => {
+                self.effect_slot_vacated(*target, *slot, frames)
+            }
+            // A hosted plugin's processor leaving or rejoining its slot (the
+            // rack's swap with the placeholder, which CLAP's one processor
+            // per instance forces on every restart).
+            StructuralCommand::ReplaceEffect {
+                target,
+                slot,
+                expected_kind: mooloop_core::EffectKind::Plugin,
+                expected_resource_key,
+                ..
+            } => self.plugin_slot_ready_for_swap(*target, *slot, *expected_resource_key, frames),
+            // A hosted instrument's processor leaving or being replaced (a
+            // restart, a sample-rate change).
+            StructuralCommand::HostSourceProcessor { channel, slot, .. } => {
+                self.source_ready_for_processor_swap(*channel, *slot, frames)
+            }
+            // A change of instrument.
+            StructuralCommand::InstallSource { channel, .. } => {
+                let sample_rate = self.sample_rate;
+                self.strips
+                    .get_mut(usize::from(*channel))
+                    .is_none_or(|strip| strip.ready_for_source_install(frames, sample_rate))
+            }
+            _ => true,
+        }
+    }
+
     /// Whether the effect in `slot` has faded out of the path and can be
     /// removed, or replaced by an install, without a step (MOO-108,
     /// MOO-172). A slot with nothing in it is vacated already.
@@ -10514,8 +10634,12 @@ impl RenderState {
             // contributing. Before that it stopped in the block the button
             // was pressed, which on anything sustained is a click.
             let producer = EffectTarget::Channel(index as u8);
+            // The compensation ring is fed after the fader, so it is still
+            // emitting the last of the audio from before the mute after the
+            // stage has arrived at zero; emptying it then would cut that off.
             let faded = muted
                 && self.strips[index].output.is_silent()
+                && self.strips[index].ring_is_quiet()
                 && self.sends.is_silent(producer);
             // A muted producer that nobody reads still skips, which is what
             // keeps mute a way of not spending the work. One that somebody
@@ -10533,6 +10657,21 @@ impl RenderState {
                 .iter()
                 .any(|event| matches!(event.event, Event::NoteOff { .. } | Event::Choke))
                 && !self.strips[index].source_node().is_at_rest();
+            // And a voice already releasing when the fade finished has to be
+            // run to its end, or it freezes the same way and is heard again
+            // on unmute. So the generator keeps being called, silently, until
+            // it is at rest or has made nothing for longer than its own tail:
+            // the second covers a source that never says it rests (Aux In, a
+            // plugin that never asks to sleep), which would otherwise never
+            // stop being called under a mute.
+            if !faded || owes_a_release {
+                self.strips[index].muted_silent_frames = 0;
+            }
+            let voices_ended = {
+                let source = self.strips[index].source_node();
+                source.is_at_rest()
+                    || self.strips[index].muted_silent_frames > source.tail_frames()
+            };
             // Built ahead of the skip below, which a chain still ringing out
             // needs it for.
             let modulation = ModulationBlock::of(
@@ -10541,20 +10680,20 @@ impl RenderState {
                 producer,
                 ticks,
             );
-            if faded && !self.audio.produces(index) && !owes_a_release {
-                // A muted channel renders nothing, so its compensation ring
-                // would still be holding the audio from before the mute and
-                // would emit it on unmute. Emptying it is fifteen writes, and
-                // it is the honest state: a silent producer's pipeline is
-                // silent too.
+            if faded && !self.audio.produces(index) && !owes_a_release && voices_ended {
+                // `faded` waited for the compensation ring to play out, so it
+                // holds only silence; emptying it is fifteen writes and makes
+                // that exact, which is the honest state: a silent producer's
+                // pipeline is silent too.
                 if let Some(delay) = self.strips[index].compensation.as_mut() {
                     delay.reset();
                 }
                 // Nothing measured this block, so nothing may be concluded
                 // from it: unmuting always renders at least one block before
-                // the channel is allowed to decide it is idle.
+                // the channel is allowed to decide it is idle. The ring is
+                // known, though: it was just emptied.
                 self.strips[index].source_silent_frames = 0;
-                self.strips[index].ring_silent_frames = 0;
+                self.strips[index].ring_silent_frames = u32::MAX;
                 // The generator is not called, but its chain still is while
                 // anything in it rings, exactly as a muted bus does: a delay
                 // or reverb tail decays under the mute instead of freezing
@@ -10874,6 +11013,13 @@ impl RenderState {
                 self.strips[index].bus.add_from(&self.input, frames);
             }
             if faded {
+                let peak = self.strips[index].bus.peak(frames);
+                let strip = &mut self.strips[index];
+                strip.muted_silent_frames = if peak.0.max(peak.1) <= SILENCE_PEAK {
+                    strip.muted_silent_frames.saturating_add(frames as u32)
+                } else {
+                    0
+                };
                 // Its tap is filled and its bus is not read: a muted producer
                 // publishes, and reaches nothing else -- once it has faded out.
                 //
@@ -10892,7 +11038,7 @@ impl RenderState {
                 // authors a channel send, correct the day something does.
                 self.sends.reset(EffectTarget::Channel(index as u8));
                 self.strips[index].source_silent_frames = 0;
-                self.strips[index].ring_silent_frames = 0;
+                self.strips[index].ring_silent_frames = u32::MAX;
                 // Its chain rings out on silence, for the reason the skip
                 // above gives (MOO-418). What the generator made went to the
                 // tap and is not the chain's input any more.
@@ -11170,7 +11316,14 @@ impl RenderState {
             // only a `faded` one takes the branches below that stop it
             // contributing, and those are exactly the branches every muted
             // track took at once before.
-            let faded = muted && strip.output.is_silent() && self.sends.is_silent(producer);
+            // And until its compensation ring has emptied of what the fader
+            // let through: the ring runs after the fader, so a track that
+            // stopped summing when the stage arrived at zero would drop the
+            // last `delay` frames of the fade.
+            let faded = muted
+                && strip.output.is_silent()
+                && strip.ring_silent_frames as usize >= ring_frames(&strip.compensation)
+                && self.sends.is_silent(producer);
             if !faded {
                 self.sends
                     .capture(producer, SendTap::PreFader, &strip.bus, frames);
@@ -11196,6 +11349,12 @@ impl RenderState {
             // signal is honest, and a muted bus still advances its ring rather
             // than holding stale audio to emit when it is unmuted.
             if let Some(delay) = strip.compensation.as_mut() {
+                let (left, right) = strip.bus.peak(frames);
+                strip.ring_silent_frames = if left.max(right) <= SILENCE_PEAK {
+                    strip.ring_silent_frames.saturating_add(frames as u32)
+                } else {
+                    0
+                };
                 delay.process(&mut strip.bus.l[..frames], &mut strip.bus.r[..frames]);
             }
             // A muted bus still processes, so a delay or reverb tail on it
@@ -19421,6 +19580,61 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
         );
     }
 
+    /// **A voice releasing when its channel's mute finishes fading runs out
+    /// under the mute.** The faded channel used to stop being called with the
+    /// release half done, so the voice sat frozen and was heard again on
+    /// unmute, long after its release should have ended.
+    #[test]
+    fn a_release_cut_short_by_a_mute_is_silent_on_unmute() {
+        use crate::render_test_support::{peak_of, SAMPLE_RATE};
+
+        const BLOCK: usize = 512;
+        let mut project = held_note_project();
+        // A beat long, over by half a second, with the next lap two seconds
+        // in; and a release of a second, so it is still ringing when the
+        // mute lands a little after the note ends.
+        project.channels[0].notes[0][0] = NoteEvent::new(1, 0, 96, 60, 127);
+        match &mut project.channels[0].setup.source {
+            mooloop_core::ChannelSource::MlP8(state) => state.params.release = 1.0,
+            _ => panic!("held_note_project is an ML-P8"),
+        }
+        let mut render = RenderState::from_project(SAMPLE_RATE, &project, &[]);
+        render.play();
+        let blocks = |seconds: f32| (seconds * SAMPLE_RATE as f32) as usize / BLOCK;
+
+        for _ in 0..blocks(0.55) {
+            render.process_block(BLOCK);
+        }
+        let mut releasing = 0.0f32;
+        for _ in 0..blocks(0.05) {
+            render.process_block(BLOCK);
+            releasing = releasing.max(peak_of(&render.master().l[..BLOCK]));
+        }
+        assert!(releasing > 0.01, "the release was not sounding, got {releasing}");
+
+        render.apply_command(EngineCommand::SetChannelMuted {
+            channel: 0,
+            muted: true,
+        });
+        for _ in 0..blocks(1.0) {
+            render.process_block(BLOCK);
+        }
+        render.apply_command(EngineCommand::SetChannelMuted {
+            channel: 0,
+            muted: false,
+        });
+        // Listen from the unmute until just before the next lap.
+        let mut after = 0.0f32;
+        for _ in 0..blocks(0.3) {
+            render.process_block(BLOCK);
+            after = after.max(peak_of(&render.master().l[..BLOCK]));
+        }
+        assert!(
+            after < 1.0e-3,
+            "a release the mute caught sounded again on unmute: {after} against {releasing}"
+        );
+    }
+
     /// **A chord the player holds across a Song-mode loop fold keeps
     /// sounding** (MOO-99). The fold used to choke every voice on every
     /// channel, so each lap cut the keys still down. It ends the sequencer's
@@ -20111,7 +20325,12 @@ mod footprint {
         //
         // MOO-401 added eight: `ring_silent_frames`, four bytes and
         // alignment padding.
-        assert_eq!(size_of::<ChannelStrip>(), 23_136);
+        //
+        // Sixteen for a change of instrument fading the source out and the
+        // next one in (`source_fade`, `source_leaving`), and a release
+        // running out under a mute (`muted_silent_frames`), which took the
+        // padding MOO-401 left.
+        assert_eq!(size_of::<ChannelStrip>(), 23_152);
 
         // Reserved whatever the project holds: the two small modulation
         // vectors, plus three vectors of pointers to per-channel storage.
@@ -20214,10 +20433,13 @@ mod footprint {
         //
         // And by 8 for MOO-401: the strip's `ring_silent_frames`.
         //
+        // And by 16 with the strip for the source's change-of-instrument
+        // fade and a release running out under a mute.
+        //
         // Song modulation step 02 took 8,192 off: a channel's table of its
         // rack's outputs at every control tick. The song's set keeps one
         // table, sized to its modules.
-        assert_eq!(per_live, 135_552);
+        assert_eq!(per_live, 135_568);
 
         // 42.8 MiB reserved at startup became 1.1 MiB for a sixteen-channel
         // project, with both ceilings untouched. A sixth generator kind moved
@@ -20327,7 +20549,11 @@ mod footprint {
         // Song modulation step 02: 483 KiB of reserved racks and pointers
         // and 128 KiB of per-channel tables across sixteen gone, 10 KiB of
         // channel sources come.
-        assert_eq!((fixed + per_live * 16) / 1024, 2_132);
+        //
+        // The source-swap fade and the muted-release count (#477, #462): 16
+        // bytes a live channel, which carried the total over one more KiB
+        // boundary.
+        assert_eq!((fixed + per_live * 16) / 1024, 2_133);
     }
 
 }

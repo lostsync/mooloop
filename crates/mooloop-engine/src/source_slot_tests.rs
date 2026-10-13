@@ -347,7 +347,8 @@ fn source_change(channel: u8, kind: DeviceKind) -> RealtimeCommand {
 /// A source change neither allocates nor frees on the audio thread, while
 /// the old device is sounding, and the device it displaces comes back
 /// through the reclaim ring -- to every kind from the one before it, so each
-/// kind is both installed and displaced once.
+/// kind is both installed and displaced once. A change under a sounding
+/// device waits a few blocks for it to fade out; none of them allocates.
 #[test]
 fn a_source_change_allocates_nothing_and_hands_the_old_device_back() {
     let (project, _) = project_with(patch(DeviceKind::Sampler));
@@ -361,7 +362,13 @@ fn a_source_change_allocates_nothing_and_hands_the_old_device_back() {
     for kind in KINDS.iter().copied().cycle().skip(1).take(KINDS.len()) {
         assert!(cmd_tx.push(source_change(0, kind)).is_ok());
         let (allocations, frees) = (crate::COUNTING.allocations(), crate::COUNTING.frees());
-        block(&mut executor);
+        // At most the longest a change waits, 100 ms, in blocks.
+        for _ in 0..(SAMPLE_RATE as usize / 10 / BLOCK + 2) {
+            block(&mut executor);
+            if executor.render().channel_source(0).kind() == kind {
+                break;
+            }
+        }
         let allocated = crate::COUNTING.allocations() - allocations;
         let freed = crate::COUNTING.frees() - frees;
         assert_eq!(
