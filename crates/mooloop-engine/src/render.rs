@@ -12072,8 +12072,8 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
             "a sampler route or lane drove the drum synth: {:?}",
             on_drum.iter().map(|(id, _)| id).collect::<Vec<_>>()
         );
-        // Kept, not dropped: the rack and the lane are exactly as they were.
-        assert!(project.channel_rack(0).has_routes());
+        // Kept, not dropped: the route and the lane are exactly as they were.
+        assert!(!project.modulation.routes.is_empty());
         assert_eq!(project.channels[0].automation[0].len(), 1);
 
         // And back: both work again.
@@ -14505,7 +14505,6 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
                 seed: 0,
                 at: Default::default(),
                 open: false,
-                rack: None,
                 params: mooloop_core::ModulatorParams::Lfo(mooloop_core::ModLfoParams::default()),
                 text: String::new(),
             }],
@@ -15277,7 +15276,7 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
             .is_some());
         // The song mints the module its own identity as it lands.
         let project = synth_project(channel);
-        let source = project.channel_rack(0).source_id(0).expect("the LFO landed");
+        let source = project.modulation.modules.first().expect("the LFO landed").id;
         (project, source)
     }
 
@@ -16330,7 +16329,6 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
                 seed: id,
                 at: Default::default(),
                 open: false,
-                rack: None,
                 params: mooloop_core::ModulatorParams::Lfo(mooloop_core::ModLfoParams {
                     rate_hz: rate,
                     phase,

@@ -1456,6 +1456,7 @@ fn same_strip_but_effects(
         // Always `None` in a song: what a preset carries is lifted into the
         // song's set on the way in, which is carried apart from the strips.
         preset_modulation: _,
+        preset_patch: _,
         next_device_id: _,
         // The plugin instrument's identity (MOO-312): compared, so a strip
         // is never carried across a change of the device its lanes and

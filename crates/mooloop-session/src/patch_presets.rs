@@ -33,6 +33,22 @@ impl Session {
         true
     }
 
+    /// The patch a channel preset or kit entry saved from the channel at
+    /// `index` carries ([`SongModulation::channel_fragment`]), its unbound
+    /// tags and assignments hinted as a patch preset's are. `None` when
+    /// nothing in the song plays on the channel.
+    pub fn channel_preset_patch(&self, index: usize) -> Option<SongModulation> {
+        let id = self.channels.get(index)?.id;
+        let seat = u8::try_from(index).ok()?;
+        let fragment = self.modulation.channel_fragment(
+            id,
+            seat,
+            |kind| self.tag_hint(kind),
+            |destination| self.destination_hint(destination),
+        );
+        (!fragment.is_empty()).then_some(fragment)
+    }
+
     /// Land patch preset `fragment` with its top-left at `at`, and select
     /// what landed. Returns the new ids, boxes first.
     pub fn land_patch(&mut self, fragment: &SongModulation, at: CanvasPoint) -> Vec<ModSourceId> {
@@ -158,5 +174,33 @@ mod tests {
         assert_eq!(session.modulation_armed.get(), None);
         assert!(session.remove_patch_node(landed[2]));
         assert!(session.modulation.loose.is_empty());
+    }
+
+    /// A channel preset carries the boxes that play on its channel: the
+    /// envelope gated by the channel's own notes stays bound to "this
+    /// channel", and its assignment into the channel stays a route.
+    #[test]
+    fn a_channel_preset_carries_its_channels_patch() {
+        let mut session = Session::default();
+        assert!(session.add_modulation_source(ModulatorKind::Envelope));
+        let envelope = session.modulation.modules[0].id;
+        let seat = session.selected;
+        let volume = ParamAddr::strip(EffectTarget::Channel(seat as u8), STRIP_PARAM_VOLUME);
+        session.modulation.routes.push(ModRoute::from_module(
+            envelope,
+            volume,
+            -0.6,
+            ModPolarity::Unipolar,
+        ));
+        let patch = session.channel_preset_patch(seat).expect("the channel has a patch");
+        assert_eq!(patch.modules.len(), 1);
+        assert_eq!(patch.tags.len(), 1);
+        assert_eq!(patch.tags[0].kind.channel(), Some(mooloop_core::PRESET_CHANNEL));
+        assert_eq!(patch.routes.len(), 1);
+        assert_eq!(patch.routes[0].destination.scope, EffectTarget::Channel(0));
+        assert!(patch.loose.is_empty() && patch.hints.is_empty());
+
+        session.modulation.routes.clear();
+        assert!(session.channel_preset_patch(seat).is_none(), "nothing plays on it");
     }
 }

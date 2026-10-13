@@ -343,7 +343,6 @@ mod tests {
             seed: id,
             at: Default::default(),
             open: false,
-            rack: None,
             params,
             text: String::new(),
         }

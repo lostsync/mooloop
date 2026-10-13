@@ -38,7 +38,7 @@ fn song() -> Project {
         let mut lane = AutomationLane::new(ParamAddr::source(here, kind, lane_id));
         assert!(lane.upsert(AutomationPoint::new(1, 0, 0.25)));
         channel.automation[0].push(lane);
-        project.edit_channel_rack(index, |rack| {
+        project.land_rack(index, |rack| {
             rack.install(0, ModulatorKind::Lfo.default_params()).unwrap();
             rack.add_route(ModRoute::to_slot(
                 0,

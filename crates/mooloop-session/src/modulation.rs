@@ -407,7 +407,7 @@ impl Session {
         };
         let id = self
             .modulation
-            .add_module(kind.default_params(), input, home, &name);
+            .add_module(kind.default_params(), input, &name);
         self.modulation_selected.set(Some(ModSourceRef::Id(id)));
         self.modulation_armed.set(None);
         true
@@ -525,14 +525,14 @@ impl Session {
             return None;
         }
         let params = mooloop_core::box_text::parse(text).unwrap_or(ModulatorParams::Unknown);
-        let (home, name) = self
+        let name = self
             .channels
             .get(self.selected)
-            .map(|channel| (channel.id, channel.name.clone()))
+            .map(|channel| channel.name.clone())
             .unwrap_or_default();
         let id = self
             .modulation
-            .add_module(params, InputSource::None, home, &name);
+            .add_module(params, InputSource::None, &name);
         let module = self.modulation.module_mut(id)?;
         module.at = at;
         if params == ModulatorParams::Unknown {
@@ -571,14 +571,14 @@ impl Session {
             self.modulation.drop_dead_wires();
             return Some(id);
         }
-        let (home, name) = self
+        let name = self
             .channels
             .get(self.selected)
-            .map(|channel| (channel.id, channel.name.clone()))
+            .map(|channel| channel.name.clone())
             .unwrap_or_default();
         let new = self
             .modulation
-            .add_module(params, InputSource::None, home, &name);
+            .add_module(params, InputSource::None, &name);
         // In the old box's place: on the canvas, and in the list, which is
         // the order the boxes are listed and tie-broken in.
         let index = self.modulation.modules.iter().position(|module| module.id == id)?;

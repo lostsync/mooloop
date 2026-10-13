@@ -239,6 +239,16 @@ impl InletSource {
         }
     }
 
+    /// The same source on `channel`, if it reads a channel.
+    pub const fn on_channel(self, channel: crate::ChannelId) -> Self {
+        match self {
+            Self::Gate(_) => Self::Gate(channel),
+            Self::Outlet { outlet, .. } => Self::Outlet { channel, outlet },
+            Self::Performance { source, .. } => Self::Performance { channel, source },
+            other => other,
+        }
+    }
+
     /// Whether it reaches the patch a block late: a generator's outlet is
     /// published as the channel renders, after the patch has ticked.
     pub const fn late(self) -> bool {
@@ -294,6 +304,26 @@ impl TagKind {
             Self::Inlet { bind: Some(source) } => source.channel(),
             Self::Inlet { bind: None } => None,
             Self::NotesIn { channel, .. } | Self::NotesOut { channel } => channel,
+        }
+    }
+
+    /// The same tag naming `channel`, if it names a channel.
+    pub const fn on_channel(self, channel: crate::ChannelId) -> Self {
+        match self {
+            Self::Inlet { bind: Some(source) } => Self::Inlet {
+                bind: Some(source.on_channel(channel)),
+            },
+            Self::NotesIn {
+                channel: Some(_),
+                take,
+            } => Self::NotesIn {
+                channel: Some(channel),
+                take,
+            },
+            Self::NotesOut { channel: Some(_) } => Self::NotesOut {
+                channel: Some(channel),
+            },
+            other => other,
         }
     }
 
@@ -853,7 +883,7 @@ mod tests {
         let ids = kinds
             .iter()
             .map(|kind| {
-                song.add_module(kind.default_params(), InputSource::None, ChannelId(1), "Kick 1")
+                song.add_module(kind.default_params(), InputSource::None, "Kick 1")
             })
             .collect();
         (song, ids)
@@ -1087,7 +1117,7 @@ mod tests {
     fn an_unknown_box_keeps_its_text_through_a_save() {
         use crate::modulation::ModulatorParams;
         let (mut song, ids) = song_with(&[ModulatorKind::Lfo]);
-        let unknown = song.add_module(ModulatorParams::Unknown, InputSource::None, ChannelId(1), "Kick 1");
+        let unknown = song.add_module(ModulatorParams::Unknown, InputSource::None, "Kick 1");
         song.module_mut(unknown).unwrap().text = "arp up 2".into();
         let saved = toml::to_string(&song).unwrap();
         let loaded: SongModulation = toml::from_str(&saved).unwrap();

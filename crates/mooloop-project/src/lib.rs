@@ -4832,7 +4832,7 @@ id = "default_kick"
         let here = mooloop_core::EffectTarget::Channel(0);
         let reported = mooloop_core::ParamAddr::plugin_param(here, device, 4_000_000_000);
         let unknown = mooloop_core::ParamAddr::plugin_param(here, device, 123_456);
-        project.edit_channel_rack(0, |rack| {
+        project.land_rack(0, |rack| {
             rack.install(0, mooloop_core::ModulatorParams::Lfo(Default::default()));
             for destination in [reported, unknown] {
                 rack.add_route(mooloop_core::ModRoute::to_slot(
@@ -5036,7 +5036,6 @@ id = "default_kick"
         let envelope = song.add_module(
             ModulatorKind::Envelope.default_params(),
             InputSource::ChannelNotes(kick),
-            kick,
             "Kick",
         );
         let gate = song.tags[0].id;

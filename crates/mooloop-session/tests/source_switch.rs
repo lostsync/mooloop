@@ -121,11 +121,9 @@ fn replacing_a_plugin_instrument_forgets_its_lanes_and_routes() {
         let on_instrument = ParamAddr::plugin_param(here, instrument, 7);
         let on_generator =
             ParamAddr::source(here, DeviceKind::Sampler, mooloop_core::SAMPLER_PARAM_DRIVE);
-        let home = session.channels[0].id;
         let lfo = session.modulation.add_module(
             ModulatorParams::Lfo(ModLfoParams::default()),
             mooloop_core::InputSource::None,
-            home,
             "Channel 1",
         );
         for destination in [on_instrument, on_generator] {

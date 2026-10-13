@@ -10,11 +10,25 @@
 //! lifted as a [`LooseRoute`], its destination written as text. So a fragment
 //! never names a channel, a device or a box of the song it came from, and
 //! landing one never reaches into the song it lands in.
+//!
+//! A channel preset carries the fragment its channel's assignments come from
+//! ([`SongModulation::channel_fragment`]). It is a fragment of a one-channel
+//! song: what was bound to the channel itself stays bound, to
+//! [`PRESET_CHANNEL`] at seat 0, and [`SongModulation::land_on_channel`]
+//! binds that to the channel it lands on.
 
 use crate::mod_metadata::ModSourceId;
 use crate::modulation::{ModRoute, SongModulation, UNRESOLVED_SLOT};
 use crate::patch::{CanvasPoint, LooseRoute, RoutePlace, TagHint, TagKind};
-use crate::{ModSourceRef, ParamAddr};
+use crate::{ChannelId, EffectTarget, ModSourceRef, ParamAddr};
+
+/// "This channel" in a channel preset's fragment: the channel wears this id
+/// at seat 0, as the only channel of a one-channel song. One below
+/// [`ChannelId::UNASSIGNED`], which no song mints, so a preset that still
+/// names another channel by id (one saved before step 09) cannot mistake it
+/// for its own.
+pub const PRESET_CHANNEL: ChannelId = ChannelId(u32::MAX - 1);
+const PRESET_SEAT: EffectTarget = EffectTarget::Channel(0);
 
 impl SongModulation {
     /// The hint shown in tag `tag`'s empty slot, if a preset gave it one.
@@ -46,7 +60,72 @@ impl SongModulation {
         tag_hint: impl Fn(TagKind) -> Option<String>,
         route_hint: impl Fn(ParamAddr) -> String,
     ) -> SongModulation {
+        self.lift(nodes, None, tag_hint, route_hint)
+    }
+
+    /// The fragment a channel preset saved from the channel wearing `channel`
+    /// at `seat` carries: every box and tag upstream, through wires, of an
+    /// assignment into the channel or of a tag playing notes on it.
+    ///
+    /// As [`Self::fragment`], except that what names the channel itself
+    /// stays bound: a tag bound to it is bound to [`PRESET_CHANNEL`], and an
+    /// assignment into it is aimed at seat 0. Empty when nothing in the song
+    /// plays on the channel.
+    pub fn channel_fragment(
+        &self,
+        channel: ChannelId,
+        seat: u8,
+        tag_hint: impl Fn(TagKind) -> Option<String>,
+        route_hint: impl Fn(ParamAddr) -> String,
+    ) -> SongModulation {
+        let scope = EffectTarget::Channel(seat);
+        let mut nodes: Vec<ModSourceId> = Vec::new();
+        let add = |nodes: &mut Vec<ModSourceId>, id: ModSourceId| {
+            if !nodes.contains(&id) {
+                nodes.push(id);
+            }
+        };
+        for route in self.routes.iter().filter(|route| route.destination.scope == scope) {
+            if let ModSourceRef::Id(source) = route.source {
+                add(&mut nodes, source);
+            }
+        }
+        for tag in &self.tags {
+            if matches!(tag.kind, TagKind::NotesOut { channel: Some(on) } if on == channel) {
+                add(&mut nodes, tag.id);
+            }
+        }
+        // Upstream, through the wires.
+        let mut walked = 0;
+        while walked < nodes.len() {
+            let node = nodes[walked];
+            for wire in self.wires.iter().filter(|wire| wire.to.node == node) {
+                add(&mut nodes, wire.from.node);
+            }
+            walked += 1;
+        }
+        // In the song's order, so the fragment ticks and lists as it did.
+        let order: Vec<ModSourceId> = self
+            .modules
+            .iter()
+            .map(|module| module.id)
+            .chain(self.tags.iter().map(|tag| tag.id))
+            .filter(|id| nodes.contains(id))
+            .collect();
+        self.lift(&order, Some((channel, scope)), tag_hint, route_hint)
+    }
+
+    /// [`Self::fragment`], keeping what names `this` channel bound when
+    /// there is one.
+    fn lift(
+        &self,
+        nodes: &[ModSourceId],
+        this: Option<(ChannelId, EffectTarget)>,
+        tag_hint: impl Fn(TagKind) -> Option<String>,
+        route_hint: impl Fn(ParamAddr) -> String,
+    ) -> SongModulation {
         let held = |id: ModSourceId| nodes.contains(&id);
+        let own = |tag: TagKind| this.is_some_and(|(channel, _)| tag.channel() == Some(channel));
         let mut fragment = SongModulation {
             next_source_id: self.next_source_id,
             ..SongModulation::default()
@@ -55,12 +134,16 @@ impl SongModulation {
             .modules
             .iter()
             .filter(|module| held(module.id))
-            .map(|module| crate::SongModule {
-                rack: None,
-                ..module.clone()
-            })
+            .cloned()
             .collect();
         for tag in self.tags.iter().filter(|tag| held(tag.id)) {
+            if own(tag.kind) {
+                fragment.tags.push(crate::SongTag {
+                    kind: tag.kind.on_channel(PRESET_CHANNEL),
+                    ..*tag
+                });
+                continue;
+            }
             let hint = tag_hint(tag.kind)
                 .or_else(|| self.hint(tag.id).map(str::to_string))
                 .filter(|text| !text.is_empty());
@@ -86,15 +169,22 @@ impl SongModulation {
                 continue;
             }
             let at = self.route_at(route.source, route.destination);
-            if route.destination.module().is_some_and(held) {
+            let inside = route.destination.module().is_some_and(held);
+            let into_this = this.is_some_and(|(_, scope)| route.destination.scope == scope);
+            if inside || into_this {
+                let destination = ParamAddr {
+                    scope: if into_this { PRESET_SEAT } else { route.destination.scope },
+                    ..route.destination
+                };
                 fragment.routes.push(ModRoute {
                     source_slot: UNRESOLVED_SLOT,
+                    destination,
                     ..*route
                 });
                 if let Some(at) = at {
                     fragment.route_places.push(RoutePlace {
                         source: route.source,
-                        destination: route.destination,
+                        destination,
                         at,
                     });
                 }
@@ -146,7 +236,6 @@ impl SongModulation {
             self.modules.push(crate::SongModule {
                 id,
                 at: shift(module.at),
-                rack: None,
                 ..module.clone()
             });
         }
@@ -228,6 +317,131 @@ impl SongModulation {
             landed.push(id);
         }
         landed
+    }
+
+    /// Land channel preset fragment `fragment` (see
+    /// [`Self::channel_fragment`]) for the channel wearing `channel` at
+    /// `seat`, with its top-left at `at`: what was bound to the preset's
+    /// channel is bound to this one, and its assignments are aimed here. A
+    /// tag that comes in bound to a source the song already has a tag for
+    /// is that tag, as there is one tag per source. Returns what
+    /// [`Self::land`] does, less the tags that merged.
+    pub fn land_on_channel(
+        &mut self,
+        fragment: &SongModulation,
+        at: CanvasPoint,
+        channel: ChannelId,
+        seat: u8,
+    ) -> Vec<ModSourceId> {
+        let mut fragment = fragment.clone();
+        let here = EffectTarget::Channel(seat);
+        for tag in &mut fragment.tags {
+            if tag.kind.channel() == Some(PRESET_CHANNEL) {
+                tag.kind = tag.kind.on_channel(channel);
+            }
+        }
+        for route in &mut fragment.routes {
+            if route.destination.scope == PRESET_SEAT {
+                route.destination.scope = here;
+            }
+            if route.source.channel() == Some(PRESET_CHANNEL) {
+                route.source = route.source.on_channel(channel);
+            }
+        }
+        for place in &mut fragment.route_places {
+            if place.destination.scope == PRESET_SEAT {
+                place.destination.scope = here;
+            }
+            if place.source.channel() == Some(PRESET_CHANNEL) {
+                place.source = place.source.on_channel(channel);
+            }
+        }
+        let held: Vec<(crate::patch::TagKind, ModSourceId)> = self
+            .tags
+            .iter()
+            .filter(|tag| tag.kind.channel().is_some())
+            .map(|tag| (tag.kind, tag.id))
+            .collect();
+        let mut landed = self.land(&fragment, at);
+        landed.retain(|id| {
+            let Some(kind) = self.tag(*id).map(|tag| tag.kind) else {
+                return true;
+            };
+            match held.iter().find(|(was, _)| *was == kind) {
+                Some(&(_, into)) => {
+                    self.merge_tag(*id, into);
+                    false
+                }
+                None => true,
+            }
+        });
+        // A route from a channel's outlet or keyboard reads its inlet tag.
+        self.adopt_channel_routes();
+        landed
+    }
+
+    /// Fold tag `from` into tag `into`: what read `from` reads `into`, and
+    /// `from` goes. A wire into what `into` already feeds is the same wire.
+    fn merge_tag(&mut self, from: ModSourceId, into: ModSourceId) {
+        let (old, new) = (ModSourceRef::Id(from), ModSourceRef::Id(into));
+        for wire in &mut self.wires {
+            if wire.from.node == from {
+                wire.from.node = into;
+            }
+        }
+        let mut seen = Vec::new();
+        self.wires.retain(|wire| {
+            let fresh = !seen.contains(&wire.to);
+            seen.push(wire.to);
+            fresh
+        });
+        let routes = std::mem::take(&mut self.routes);
+        for mut route in routes {
+            if route.source == old {
+                route.source = new;
+                if self
+                    .routes
+                    .iter()
+                    .any(|held| held.source == new && held.destination == route.destination)
+                {
+                    continue;
+                }
+            }
+            self.routes.push(route);
+        }
+        for place in &mut self.route_places {
+            if place.source == old {
+                place.source = new;
+            }
+        }
+        self.hints.retain(|hint| hint.tag != from);
+        self.tags.retain(|tag| tag.id != from);
+    }
+
+    /// The fragment a channel preset saved before song patch step 09 carries
+    /// as `rack`: the rack lifted into a one-channel song, as a 0.1.6 song is
+    /// converted, its channel [`PRESET_CHANNEL`] called `name`.
+    pub fn from_preset_rack(name: &str, rack: &crate::ModRack) -> SongModulation {
+        let mut fragment = SongModulation::default();
+        fragment.lift_rack(PRESET_CHANNEL, 0, name, rack);
+        fragment
+    }
+
+    /// Where a fragment lands that should go under everything on the canvas:
+    /// the tag column, a grid row below the lowest box or tag.
+    pub fn below(&self) -> CanvasPoint {
+        let lowest = self
+            .modules
+            .iter()
+            .map(|module| module.at.y)
+            .chain(self.tags.iter().map(|tag| tag.at.y))
+            .chain(self.loose.iter().filter_map(|route| route.at).map(|at| at.y))
+            .chain(self.route_places.iter().map(|place| place.at.y))
+            .max();
+        CanvasPoint::new(
+            crate::patch::TAG_COLUMN_X,
+            lowest.map_or(crate::patch::GRID_ORIGIN.y, |y| y + crate::patch::GRID_STEP.y),
+        )
     }
 
     /// Bind unbound assignment `id` to `destination` at `depth`: it becomes
@@ -325,7 +539,6 @@ mod tests {
         let envelope = song.add_module(
             ModulatorKind::Envelope.default_params(),
             InputSource::ChannelNotes(kick),
-            kick,
             "Kick",
         );
         let gate = song.input_of_tag(envelope);
@@ -376,7 +589,6 @@ mod tests {
         assert_eq!(fragment.loose.len(), 1);
         assert_eq!(fragment.loose[0].hint, "Level on Pad");
         assert_eq!(fragment.loose[0].depth, -0.6);
-        assert!(fragment.modules[0].rack.is_none());
         // Its top-left is the origin.
         assert_eq!(fragment.tags[0].at, CanvasPoint::new(0, 0));
         assert_eq!(fragment.modules[0].at, CanvasPoint::new(120, 0));
@@ -434,7 +646,6 @@ mod tests {
         let lfo = song.add_module(
             ModulatorKind::Lfo.default_params(),
             InputSource::None,
-            ChannelId::UNASSIGNED,
             "",
         );
         // The LFO moves the envelope's first knob.

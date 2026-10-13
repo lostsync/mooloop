@@ -329,7 +329,28 @@ Where it differs from the step file:
   empty canvas lists the patch presets under the tags it makes. The browser
   does not list them yet.
 
-Channel presets as fragments, the factory patches and `rack` going are 09b.
+**09b (MOO-528, channel presets).** A channel preset and each kit entry
+save the fragment their channel's assignments come from under the setup's
+`patch` key (`SongModulation::channel_fragment`), and loading lands it in a
+row under the canvas (`land_on_channel`). The ML-M1 factory patches are
+written as fragments. A preset saved before 09 still carries a rack under
+`modulation` and is lifted as a 0.1.6 song's rack is. The module's home seat
+(`rack`) is gone, and with it `channel_rack`, `store_channel_rack`,
+`edit_channel_rack` and `preset_rack`; a step-01 Math operand still resolves
+from the seat as the file wrote it. Where it differs from the step file:
+
+- **"This channel" is a one-channel song**: the fragment binds what named
+  the channel to `PRESET_CHANNEL` (one below the unassigned id, so an old
+  preset naming another channel by id cannot be mistaken for it) and aims
+  its assignments at seat 0.
+- **A tag playing notes on the channel** (`notes_out`) is carried with
+  what feeds it, as an assignment into the channel is: the note boxes that
+  play a channel are its patch too.
+- **A landed tag bound to a source the song already has a tag for merges
+  into it**, keeping one tag per source.
+- **An old preset's rack is not converted on load** but where it lands,
+  by `lift_rack`, the path a 0.1.6 song takes; the factory patches are
+  converted when they are built (`SongModulation::from_preset_rack`).
 
 ## Adam's rulings
 

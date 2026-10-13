@@ -33,6 +33,7 @@ pub mod mlp8;
 pub mod outlet;
 pub mod patch;
 pub mod patch_preset;
+pub use patch_preset::PRESET_CHANNEL;
 pub mod box_text;
 pub mod pattern;
 pub mod playlist;
@@ -102,7 +103,7 @@ pub use modulation_plan::{
 pub use modulation::{
     step_value_index, strip_descriptor, ModEnvelopeParams, ModLfoParams, ModLfoWaveform,
     ModMathOp, ModMathParams, ModPolarity, ModRack, ModRandomParams, ModRandomTrigger, ModRoute,
-    InputSource, RackSeat, SongModulation, SongModule,
+    InputSource, SongModulation, SongModule,
     ModStepParams, ModStepTrigger, ModTimeDivision, ModulatorKind, ModulatorParams, ParamAddr,
     ParamKey, ParamOwner, MODULATOR_SCOPE,
     ENVELOPE_DESCRIPTORS, ENV_PARAM_AMOUNT, ENV_PARAM_ATTACK_DIVISION, ENV_PARAM_ATTACK_S,

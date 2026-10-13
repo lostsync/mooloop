@@ -7958,19 +7958,20 @@ impl AppUi {
                 let Some(window) = weak.upgrade() else {
                     return;
                 };
-                let snapshot = st
-                    .borrow()
+                let state = st.borrow();
+                let snapshot = state
                     .session.project_snapshot(window.get_bpm(), window.get_swing_percent());
-                // Each channel with the song's modulation that plays on it.
+                // Each channel with the song's patch that plays on it.
                 let kit = Kit {
                     channels: (0..snapshot.channels.len())
                         .map(|index| {
                             let mut setup = snapshot.channels[index].setup.clone();
-                            setup.preset_modulation = snapshot.preset_rack(index);
+                            setup.preset_patch = state.session.channel_preset_patch(index);
                             setup
                         })
                         .collect(),
                 };
+                drop(state);
                 let mode = asset_mode_from_window(&window);
                 if !begin_document_operation(&window, "Saving kit...") {
                     return;
@@ -8003,12 +8004,13 @@ impl AppUi {
                 let Some(window) = weak.upgrade() else {
                     return;
                 };
-                let snapshot = st
-                    .borrow()
+                let state = st.borrow();
+                let snapshot = state
                     .session.project_snapshot(window.get_bpm(), window.get_swing_percent());
                 let selected = snapshot.selected_index();
                 let mut channel = snapshot.channels[selected].setup.clone();
-                channel.preset_modulation = snapshot.preset_rack(selected);
+                channel.preset_patch = state.session.channel_preset_patch(selected);
+                drop(state);
                 let mode = asset_mode_from_window(&window);
                 if !begin_document_operation(&window, "Saving channel...") {
                     return;

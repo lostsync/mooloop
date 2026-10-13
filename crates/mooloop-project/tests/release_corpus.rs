@@ -173,21 +173,19 @@ fn a_release_songs_channel_modulation_converts_and_round_trips() {
     assert!(converted.channels.iter().all(|channel| channel.setup.preset_modulation.is_none()));
     let own = converted.channels[0].id;
     let gate = converted.channels[2].id;
-    let inputs: Vec<(Option<u8>, InputSource)> = converted
+    // Each module seeded by the slot it sat in, so a Random plays on.
+    let inputs: Vec<(u32, InputSource)> = converted
         .modulation
         .modules
         .iter()
-        .map(|module| {
-            assert_eq!(module.rack.map(|seat| seat.channel), Some(own));
-            (module.rack.map(|seat| seat.slot), converted.modulation.input_of(module.id))
-        })
+        .map(|module| (module.seed, converted.modulation.input_of(module.id)))
         .collect();
     assert_eq!(
         inputs,
         [
-            (Some(0), InputSource::ChannelNotes(own)),
-            (Some(1), InputSource::ChannelNotes(gate)),
-            (Some(3), InputSource::ChannelNotes(own)),
+            (0, InputSource::ChannelNotes(own)),
+            (1, InputSource::ChannelNotes(gate)),
+            (3, InputSource::ChannelNotes(own)),
         ]
     );
     // As a patch: one gate tag per channel, shared, a wire per input, and
@@ -216,22 +214,25 @@ fn a_release_songs_channel_modulation_converts_and_round_trips() {
         .routes
         .iter()
         .any(|route| route.source == ModSourceRef::Id(trigger)));
-    // The engine runs the rack it ran before.
-    let held = converted.channel_rack(0);
-    for slot in 0..mooloop_core::modulation::MAX_MODULATORS_PER_CHANNEL {
-        assert_eq!(held.params(slot), rack.params(slot), "slot {slot}");
+    // The song holds what the rack held: each module of its slot's kind,
+    // and every route, aimed where it was.
+    for module in &converted.modulation.modules {
+        let slot = module.seed as usize;
+        assert_eq!(rack.params(slot).map(|params| params.kind()), Some(module.params.kind()), "slot {slot}");
     }
-    let routes = |rack: &ModRack| {
-        let mut routes: Vec<_> = rack
-            .routes
-            .iter()
-            .flatten()
-            .map(|route| (route.source_slot, route.destination, route.depth.to_bits(), route.polarity))
-            .collect();
-        routes.sort_by_key(|route| (route.0, route.1.param));
-        routes
-    };
-    assert_eq!(routes(&held), routes(&rack));
+    let held: Vec<_> = converted
+        .modulation
+        .routes
+        .iter()
+        .map(|route| (route.destination, route.depth.to_bits(), route.polarity))
+        .collect();
+    let was: Vec<_> = rack
+        .routes
+        .iter()
+        .flatten()
+        .map(|route| (route.destination, route.depth.to_bits(), route.polarity))
+        .collect();
+    assert_eq!(held, was);
 
     // Saved, it is the song's table; loaded again, the same set.
     let again = temp.path().join("again.mooloop");

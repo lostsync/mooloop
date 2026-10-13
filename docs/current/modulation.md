@@ -108,8 +108,7 @@ area, and where each behaviour stops.
   box's, and a route from it reads exactly what a route from the outlet
   read. A song saved before this opens with each such route reading a tag
   made for its source, one per source, in the tag column; copying a channel
-  and saving a channel preset still carry the outlet itself, so a paste
-  finds or makes its own tag. Any bound tag can be routed: a Bar ramp onto
+  still carries the outlet itself, so a paste finds or makes its own tag. Any bound tag can be routed: a Bar ramp onto
   a cutoff needs no box.
 - Under the canvas, the selected box's name, edited in its header, or what
   the selected tag reads; and the selected source's routes from the whole song, each naming its
@@ -121,8 +120,7 @@ area, and where each behaviour stops.
   a channel change, a reorder and a new box.
 - **A box's inlets are fed by wires**, or by clicking an inlet and picking
   what feeds it: none, then every channel's notes as a `gate` tag, or
-  another box. A new box is named for the channel it was made on and keeps
-  that channel as its home seat, which a channel preset reads.
+  another box. A new box is named for the channel it was made on.
 - Routes carry durable `ModSourceId`s, so reordering the grid moves a module
   without changing what any route means. **A reorder, and any other edit,
   keeps each module's running state**: an LFO keeps its phase, its smoothing
@@ -138,8 +136,16 @@ area, and where each behaviour stops.
 - **Copying a channel copies its routes.** A pasted or cloned channel gets
   the routes that point into the original, aimed at the copy, from the same
   modules, so one LFO drives both; routes from its own outlets and keyboard
-  follow the copy. A channel preset carries the modules its routes use and
-  adds them to the song as new ones; a kit replaces the song's modulation.
+  follow the copy.
+- **A channel preset carries its channel's patch** (song patch step 09):
+  every box and tag that feeds an assignment into the channel or plays
+  notes on it, through their wires. Loading one adds them to the canvas as
+  new boxes in a row under what is there, with the channel's own tags
+  bound to the receiving channel (sharing a tag the song already has) and
+  its assignments aimed there. A tag that read another channel comes empty
+  with a hint, and an assignment onto anything else comes unbound, as a
+  patch preset's do. A kit entry carries the same, and a kit replaces the
+  song's modulation. A preset saved before this lands its rack as before.
 - **Not built yet:** a fader or pan control does not arm a route (a route
   onto a strip plays, but cannot be made by dragging); clicking a face's
   route dot does not select its module or reveal the pane; and a route onto

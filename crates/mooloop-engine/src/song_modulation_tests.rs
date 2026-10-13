@@ -88,7 +88,6 @@ fn song(steps: &[u32], bars: u16, lfo: ModLfoParams, destinations: &[Drives]) ->
         seed: 0,
         at: Default::default(),
         open: false,
-        rack: None,
         params: ModulatorParams::Lfo(lfo),
         text: String::new(),
     });
@@ -256,7 +255,6 @@ fn a_set_grown_past_what_it_held_installs_without_allocating() {
             seed: id,
             at: Default::default(),
             open: false,
-            rack: None,
             params: ModulatorParams::Lfo(ModLfoParams {
                 rate_hz: 0.5 + id as f32 * 0.1,
                 ..ModLfoParams::default()
@@ -314,7 +312,6 @@ fn a_box_routed_onto_another_box_knob_moves_it() {
         seed: id,
         at: Default::default(),
         open: true,
-        rack: None,
         params: ModulatorParams::Math(ModMathParams {
             op: ModMathOp::Add,
             operand,

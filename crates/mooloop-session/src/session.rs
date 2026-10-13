@@ -674,6 +674,7 @@ impl Session {
                         source,
                         effects: channel.effects.clone(),
                         preset_modulation: None,
+                        preset_patch: None,
                         next_device_id: channel.next_device_id,
                         source_device: channel.source_device,
                     },
