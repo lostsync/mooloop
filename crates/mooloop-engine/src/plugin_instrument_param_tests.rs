@@ -426,7 +426,10 @@ fn a_replaced_plugin_instruments_lanes_do_not_drive_the_new_one() {
     let replaced = run(&laned, new);
     let misaddressed = run(&laned, old);
 
-    let cut = swap_at * block * 2;
+    // The install waits for the old instrument to fade out, 100 ms at the
+    // longest, so the new one is in from a block past that.
+    let landed = swap_at * block + SAMPLE_RATE as usize / 10 + block;
+    let cut = landed * 2;
     assert!(
         worst_difference(&replaced[..cut], &without[..cut]) > 1.0e-3,
         "the lane drove the old instrument"

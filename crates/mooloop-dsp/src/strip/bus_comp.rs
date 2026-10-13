@@ -57,6 +57,8 @@ use crate::dynamics::{compressor_gain_db, time_coeff};
 use crate::node::DynamicsFrame;
 use crate::smooth::Smoothed;
 
+use super::{cross, SectionGate};
+
 /// Threshold, makeup and mix all move the gain directly, so a step in any of
 /// them is a click. The strip's constant, for the strip's reason.
 const PARAM_SMOOTH_S: f32 = 0.005;
@@ -439,6 +441,8 @@ pub struct BusComp {
     /// detector reading since the block began.
     block_reduction_db: f32,
     block_detector: f32,
+    /// How far the sound is towards the IN switch.
+    gate: SectionGate,
 }
 
 impl BusComp {
@@ -460,6 +464,7 @@ impl BusComp {
             mix: smoothed(params.mix),
             block_reduction_db: 0.0,
             block_detector: 0.0,
+            gate: SectionGate::new(params.comp_in, sample_rate),
         };
         comp.retime();
         comp
@@ -475,6 +480,7 @@ impl BusComp {
         self.params = params;
         self.retime();
         self.snap();
+        self.gate.snap(params.comp_in);
     }
 
     fn snap(&mut self) {
@@ -500,9 +506,10 @@ impl BusComp {
 
     /// Move one parameter, and report whether it was one of this section's.
     ///
-    /// Switching the section in starts it empty and at its knobs, for the
-    /// strip's reason: followers last fed audio minutes ago would put that
-    /// into the first block back. Switching voicing keeps the followers --
+    /// Switching the section in or out crosses between the dry signal and
+    /// the section's own, as the strip's sections do. Coming in from fully
+    /// out starts it empty and at its knobs, for the strip's reason:
+    /// followers last fed audio minutes ago would put that into the crossing. Switching voicing keeps the followers --
     /// a reduction in dB means the same thing under every law -- so a voicing
     /// change mid-mix moves the character rather than the level.
     pub fn apply_param(&mut self, id: u32, value: f32) -> bool {
@@ -511,7 +518,7 @@ impl BusComp {
         }
         match id {
             MASTER_COMP_IN => {
-                if self.params.comp_in {
+                if self.params.comp_in && self.gate.is_closed() {
                     self.reset();
                     self.snap();
                 }
@@ -533,6 +540,7 @@ impl BusComp {
         }
         self.sample_rate = sample_rate;
         self.retime();
+        self.gate.set_sample_rate(sample_rate);
         for smoothed in [&mut self.threshold, &mut self.makeup, &mut self.mix] {
             smoothed.set_time(PARAM_SMOOTH_S, sample_rate);
         }
@@ -566,10 +574,13 @@ impl BusComp {
     }
 
     /// Whether a block skipped would leave it where a block of silence
-    /// would: out, or settled with nothing held.
+    /// would: out and faded out, or settled with nothing held.
     pub fn is_at_rest(&self) -> bool {
-        !self.params.comp_in
-            || (self.fast == 0.0
+        if !self.gate.runs(self.params.comp_in) {
+            return true;
+        }
+        self.gate.is_settled(self.params.comp_in)
+            && (self.fast == 0.0
                 && self.slow == 0.0
                 && self.mean_square == 0.0
                 && self.threshold.is_settled()
@@ -594,16 +605,20 @@ impl BusComp {
     /// Run the section over `start..end` of the bus, in place, carrying the
     /// block's extremes on from any range before it. [`Self::process_block`]
     /// is one of these after [`Self::begin_block`]; the Bus Comp insert
-    /// (MOO-216) runs several, cut at its parameter events. Out is out.
+    /// (MOO-216) runs several, cut at its parameter events. Out, once its
+    /// fade has finished, is out: nothing is read or written.
     pub fn process_range(&mut self, bus: &mut StereoBus, start: usize, end: usize) {
-        if !self.params.comp_in {
+        let on = self.params.comp_in;
+        if !self.gate.runs(on) {
             return;
         }
         let end = end.min(bus.capacity());
         for frame in start..end {
-            let (l, r) = self.process_frame(bus.l[frame], bus.r[frame]);
-            bus.l[frame] = l;
-            bus.r[frame] = r;
+            let (dry_l, dry_r) = (bus.l[frame], bus.r[frame]);
+            let (l, r) = self.process_frame(dry_l, dry_r);
+            let weight = self.gate.advance(on);
+            bus.l[frame] = cross(dry_l, l, weight);
+            bus.r[frame] = cross(dry_r, r, weight);
         }
     }
 
@@ -1137,6 +1152,10 @@ mod tests {
         }
         assert!(comp.reduction_db() > 5.0);
         comp.apply_param(MASTER_COMP_IN, 0.0);
+        // Long enough for the switch's crossing to finish: a section switched
+        // back in half-way out carries on from where it is.
+        let mut quiet = StereoBus::with_capacity(4_096);
+        comp.process_block(&mut quiet, 4_096);
         comp.apply_param(MASTER_COMP_IN, 1.0);
         assert_eq!(comp.reduction_db(), 0.0, "switched in holding old reduction");
 
