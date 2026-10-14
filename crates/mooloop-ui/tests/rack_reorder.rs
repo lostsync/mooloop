@@ -2,11 +2,11 @@
 //! events.
 //!
 //! What this exists to catch: the reorder used to work the landing out from
-//! the pointer's *travel*, divided by `unit-width + 20px` -- a nominal
-//! one-unit pitch. Every device wider than one rack unit made that wrong, and
+//! the pointer's *travel*, divided by a nominal 240px pitch -- the narrowest
+//! face plus its join. Every device wider than that made it wrong, and
 //! wrong in a way no test could see, because the callback fired with a
 //! plausible number every time. Dragging a device from the far side of a
-//! four-unit EQ landed it three rows short of where it was dropped.
+//! wide EQ landed it three rows short of where it was dropped.
 //!
 //! The landing is now the row the pointer is actually over, reported by that
 //! row from its own bounds. So the case below is the whole point: the drag
@@ -27,7 +27,7 @@ slint::slint! {
     import { ContainerEnclosure, DeviceFrame, DeviceRackMetrics, EffectDeviceShell, RackDrag }
         from "../ui/device-rack.slint";
 
-    struct HarnessRow { units: int, depth: int, children: int, container: bool }
+    struct HarnessRow { face-width: length, depth: int, children: int, container: bool }
 
     // The rack row as `main.slint` lays it out: a cell per device holding the
     // box slices, the host frame and the face's shell, with the cell owning
@@ -38,8 +38,6 @@ slint::slint! {
         height: 320px;
         // The rack's own numbers, so the coordinates below are derived from
         // the layout rather than from a copy of it that can drift.
-        out property <length> unit-width: DeviceRackMetrics.unit-width;
-        out property <length> half-gap: DeviceRackMetrics.half-gap;
         out property <length> rail-width: DeviceRackMetrics.rail-width;
         out property <length> join-width: DeviceRackMetrics.join-width;
         out property <length> rack-padding: DeviceRackMetrics.rack-padding;
@@ -59,9 +57,7 @@ slint::slint! {
 
             for row[index] in root.rows : cell := Rectangle {
                 property <length> frame-width:
-                    DeviceRackMetrics.unit-width * row.units
-                    + DeviceRackMetrics.half-gap * (row.units - 1)
-                    + DeviceRackMetrics.rail-width * 2;
+                    row.face-width + DeviceRackMetrics.rail-width * 2;
                 property <int> next-depth: index + 1 < root.rows.length
                     ? root.rows[index + 1].depth : 0;
                 property <bool> dragging: RackDrag.source == index;
@@ -114,13 +110,11 @@ slint::slint! {
     }
 }
 
-/// Rack-unit geometry, read off the harness rather than restated here: this
+/// Rack geometry, read off the harness rather than restated here: this
 /// file is about which row a drop lands on, and it should not also be a
 /// second copy of the rack's measurements that can quietly disagree with the
 /// first one. It did disagree once, when `rack-padding` moved.
 struct Geometry {
-    unit: f32,
-    half_gap: f32,
     rail: f32,
     join: f32,
     header_y: f32,
@@ -129,8 +123,6 @@ struct Geometry {
 impl Geometry {
     fn of(ui: &ReorderHarness) -> Self {
         Self {
-            unit: ui.get_unit_width(),
-            half_gap: ui.get_half_gap(),
             rail: ui.get_rail_width(),
             join: ui.get_join_width(),
             header_y: ui.get_rack_padding() + ui.get_header_height() / 2.0,
@@ -138,31 +130,35 @@ impl Geometry {
     }
 
     /// A row's full pitch: face, both rails and the join.
-    fn cell(&self, units: f32) -> f32 {
-        self.unit * units + self.half_gap * (units - 1.0) + self.rail * 2.0 + self.join
+    fn cell(&self, face_width: f32) -> f32 {
+        face_width + self.rail * 2.0 + self.join
     }
 }
 
-fn row(units: i32) -> HarnessRow {
+/// A narrow face, and a face three times as wide plus the gaps between.
+const NARROW: f32 = 220.0;
+const WIDE: f32 = 668.0;
+
+fn row(face_width: f32) -> HarnessRow {
     HarnessRow {
-        units,
+        face_width,
         depth: 0,
         children: 0,
         container: false,
     }
 }
 
-/// One 1U device, one 3U device, then two more 1U devices: the layout that
+/// One narrow device, one wide one, then two more narrow ones: the layout that
 /// makes travel-based and bounds-based landings disagree.
 fn harness() -> ReorderHarness {
     i_slint_backend_testing::init_no_event_loop();
     let ui = ReorderHarness::new().unwrap();
     ui.window().set_size(LogicalSize::new(1700.0, 320.0));
     ui.set_rows(ModelRc::from(Rc::new(VecModel::from(vec![
-        row(1),
-        row(3),
-        row(1),
-        row(1),
+        row(NARROW),
+        row(WIDE),
+        row(NARROW),
+        row(NARROW),
     ]))));
     ui
 }
@@ -206,10 +202,10 @@ fn a_drop_lands_on_the_row_it_was_made_on() {
     ui.on_reordered(move |from, to| seen.borrow_mut().push((from, to)));
     ui.on_selected(move |index| chosen.borrow_mut().push(index));
 
-    // Row 2 sits past the 3U row. Grab its header and drop it on row 1.
-    let row_two_x = g.cell(1.0) + g.cell(3.0);
+    // Row 2 sits past the wide row. Grab its header and drop it on row 1.
+    let row_two_x = g.cell(NARROW) + g.cell(WIDE);
     let grab = row_two_x + g.rail + 30.0;
-    let drop_on_row_one = g.cell(1.0) + 300.0;
+    let drop_on_row_one = g.cell(NARROW) + 300.0;
     drag(ui.window(), grab, drop_on_row_one, g.header_y);
 
     assert_eq!(
@@ -217,7 +213,7 @@ fn a_drop_lands_on_the_row_it_was_made_on() {
         vec![(2, 1)],
         "a device dropped on row 1 did not land on row 1. Travel-based \
          arithmetic reports 0 here: the pointer moved {:.0}px, which is three \
-         nominal one-unit pitches, but only two rows -- the 3U device is one \
+         nominal narrow pitches, but only two rows -- the wide device is one \
          row and three pitches wide.",
         grab - drop_on_row_one
     );
@@ -228,9 +224,9 @@ fn a_drop_lands_on_the_row_it_was_made_on() {
     );
 
     // A wander of 120px, well past the old half-pitch threshold, but entirely
-    // inside the 3U row's own bounds. A row is not a distance.
+    // inside the wide row's own bounds. A row is not a distance.
     moves.borrow_mut().clear();
-    let inside_row_one = g.cell(1.0) + g.rail + 20.0;
+    let inside_row_one = g.cell(NARROW) + g.rail + 20.0;
     drag(ui.window(), inside_row_one, inside_row_one + 120.0, g.header_y);
 
     assert!(

@@ -9,7 +9,7 @@ import { DynamicsCurveDisplay } from "device-displays.slint";
 // differ. Header and drag come from the shared EffectDeviceShell.
 export component CompressorDeviceFace inherits EffectDeviceShell {
     name: "Comp";
-    kind: "FX / 2U";
+    kind: "FX";
     in-out property <float> threshold; // normalized 0..1 (-60..0 dB)
     in-out property <float> ratio;     // normalized 0..1 (1..20 :1)
     in-out property <float> attack;    // normalized 0..1 (0.05..200 ms)

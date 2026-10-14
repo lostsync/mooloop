@@ -2973,39 +2973,43 @@ pub fn effect_kind_index(kind: EffectKind) -> i32 {
     }
 }
 
-/// Rack units a kind's device face occupies. Devices with more working
-/// controls take more width rather than compressing them (docs/UI_DESIGN.md,
-/// "Device Rack Layout").
+/// The width of a kind's device face, in logical pixels, inside its rails.
+/// Each face is as wide as its own controls need: there is no rack unit to
+/// round to, and a face that outgrows its width takes more width rather than
+/// compressing (docs/UI_DESIGN.md, "Device Rack Layout"). The figures below
+/// are the widths the faces had when widths were counted in 220px units, so
+/// nothing moved when the units went; each changes as its face is redesigned.
 ///
 /// Public alongside [`effect_kind_index`], so a test fixture builds a row at
 /// the width the application would give it rather than at a width of its own.
-pub fn effect_kind_units(kind: EffectKind) -> i32 {
+pub fn effect_kind_face_width(kind: EffectKind) -> f32 {
     match kind {
         EffectKind::Filter
         | EffectKind::Drive
         | EffectKind::Bitcrush
         | EffectKind::Preamp
-        | EffectKind::Limiter => 1,
-        // Nine parameters and a waveform. `UI_DESIGN.md` is explicit that a
-        // face which outgrows its width takes another unit rather than
-        // compressing, and the waveform earns its place here in a way it does
-        // not on a synth: the memory *is* the instrument.
-        EffectKind::Buffer => 2,
-        EffectKind::Gate | EffectKind::Compressor | EffectKind::Plate => 2,
-        EffectKind::Delay => 3,
-        EffectKind::Reverb => 3,
+        | EffectKind::Limiter => 220.0,
+        // Nine parameters and a waveform: the waveform earns its place here
+        // in a way it does not on a synth, because the memory *is* the
+        // instrument.
+        EffectKind::Buffer => 444.0,
+        EffectKind::Gate | EffectKind::Compressor | EffectKind::Plate => 444.0,
+        EffectKind::Delay => 668.0,
+        EffectKind::Reverb => 668.0,
         // The master section's face, needle and all, at the master's width
         // (MOO-216): one component draws both.
-        EffectKind::BusComp => 3,
-        EffectKind::Modulation => 2,
-        EffectKind::Eq => 2,
-        // One unit: a name, a mix, and a collapse. The devices it holds are
-        // rows of their own and carry their own width. The rack draws a
-        // layer's face at the width of what it holds instead
-        // (`LayerMetrics.face-width`), so this is only its folded strip's tag.
-        EffectKind::Chain | EffectKind::Layer => 1,
-        // Step 08 of `docs/plans/plugin-hosting/` sizes the plugin face.
-        EffectKind::Plugin => 2,
+        EffectKind::BusComp => 668.0,
+        EffectKind::Modulation => 444.0,
+        EffectKind::Eq => 444.0,
+        // A name, a mix, and a collapse. The devices it holds are rows of
+        // their own and carry their own width. The rack draws a layer's face
+        // at the width of what it holds instead (`LayerMetrics.face-width`),
+        // so this is only its folded strip's.
+        EffectKind::Chain | EffectKind::Layer => 220.0,
+        // A plugin's face is sized from its controls instead
+        // (`plugin_ui::plugin_face_width`); this is only the width a row has
+        // before the plugin's parameters are known.
+        EffectKind::Plugin => 444.0,
     }
 }
 
@@ -3346,7 +3350,7 @@ fn effect_slot_row(
     }
     EffectSlotRow {
         kind: effect_kind_index(kind),
-        units: effect_kind_units(kind),
+        face_width: effect_kind_face_width(kind),
         preset_options: ModelRc::from(Rc::new(VecModel::from(preset_options))),
         preset_name: preset_name.unwrap_or_default().into(),
         bypassed: slot.bypassed,
@@ -22447,8 +22451,8 @@ mod tests {
     }
 
     #[test]
-    fn modulation_uses_two_rack_units() {
-        assert_eq!(effect_kind_units(EffectKind::Modulation), 2);
+    fn modulation_keeps_its_width() {
+        assert_eq!(effect_kind_face_width(EffectKind::Modulation), 444.0);
     }
 
     use super::*;

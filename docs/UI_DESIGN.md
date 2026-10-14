@@ -247,29 +247,18 @@ source is not a special full-width page: it uses the same rack chrome,
 alignment, and height contract as effects.
 
 - Device faces have one fixed 268 px height.
-- Width is quantized in whole 220 px units with 4 px inter-device gaps.
-- A source device declares its width the same way an effect does, and for the
-  same reason: 3U for the sampler, the DS-SX drum synth, the two v1 synths
-  and the ML-M1; 4U for the
-  ML-P8 and the DS-01, which spend pages rather than one dense screen and
-  need the fourth unit to hold three modules of 34 px dials without shrinking
-  one; 2U for Aux In, whose whole content is a source, an outlet and a level,
-  and which at 3U would be empty rather than generous. A hosted plugin's face,
-  instrument or effect, is one unit when its controls fit one unit's page and
-  two otherwise (`face_units`). A bus's output stage
-  stands in the same position, at 2U on its own or 3U bundled with the
-  track's pinned channel strip when `STRIP_PIN` pins it to the head, where
-  identity and routing share the strip's own box rather than standing as a
-  mostly empty box beside it. An effect uses only the units its working
-  controls require, declared once in `effect_kind_units`
-  (`mooloop-ui/src/lib.rs`) rather than in each face: 1U for filter, drive,
-  preamp, bitcrush, and limiter; 2U for gate, compressor, plate, EQ, Mod, and
-  Buffer; 3U for delay, reverb, and Bus Comp, which is the master section's
-  face at the master's width. A Chain or Layer's 1U is
-  only its folded strip's tag: the devices it holds carry their own widths,
-  and the rack draws a Layer's face at the width of what it holds
-  (`LayerMetrics.face-width`). A face that outgrows its width takes another
-  unit; it does not compress.
+- **There are no rack units.** Each face is as wide as its own working
+  controls need, in pixels, and nothing rounds it to a grid (MOO-468; Adam,
+  2026-09-28: *"let things be whatever size they want. it is not serving any
+  purpose. arbitrary restriction at this point."*). An effect states its
+  width once, in `effect_kind_face_width` (`mooloop-ui/src/lib.rs`), rather
+  than in each face; a source states its width beside the source device in
+  `main.slint`; a hosted plugin's face takes one of its two layouts
+  (`plugin_face_width`); a Layer's face is the width of what it holds
+  (`LayerMetrics.face-width`). When the units went on 2026-10-14 every face
+  kept the width it had (220, 444, 664 or 668, 884), so nothing moved; each
+  changes as its face is redesigned. A face that outgrows its width takes
+  more width; it does not compress. Do not fit a new face to 220px steps.
 - The rack scrolls horizontally. Device internals never compress when the
   application narrows.
 - Every device has a 28 px identity header with enabled state, name, kind, and
@@ -316,8 +305,7 @@ alignment, and height contract as effects.
   passes its input on dry into the layer's sum. **Rows reorder by dragging
   them along the list**, Bitwig's and Ableton's gesture (Adam: when in doubt,
   their model is usually right). The face is as wide as its content
-  (`LayerMetrics.face-width` in `layer-device.slint`) and is not fitted to
-  rack units, which are being dropped (MOO-468).
+  (`LayerMetrics.face-width` in `layer-device.slint`).
 
 The device rack is one of five **views**, and a view has exactly one toolbar
 row, led by its slot's tab strip:

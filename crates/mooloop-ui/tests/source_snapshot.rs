@@ -1,7 +1,7 @@
 use mooloop_core::{DeviceKind, Ds01EnvParams, Ds01Params, DrumMode, DrumSynthParams, EffectKind};
 use mooloop_dsp::DrumSynth;
 use mooloop_ui::{
-    device_kind_to_int, effect_kind_index, effect_kind_units, view, ChannelRow, EffectSlotRow,
+    device_kind_to_int, effect_kind_index, effect_kind_face_width, view, ChannelRow, EffectSlotRow,
     MainWindow, MlP8RouteRow, ModulationRouteRow, ModulationSourceRow,
     SourceRow, StepCell,
 };
@@ -433,12 +433,12 @@ fn render_sampler_source_editor() {
 /// a preamp, and the only thing that noticed was the one assertion that
 /// compares a nested rack against a flat one. A fixture that had merely drawn
 /// the wrong face would have passed. Spelling the width out was wrong in a
-/// quieter way: `effect_slot(3, 2)` drew a delay two units wide where the
-/// rack gives it three.
+/// quieter way: `effect_slot(3, 2)` drew a delay 444px wide where the
+/// rack gives it 668.
 fn effect_slot(kind: EffectKind) -> EffectSlotRow {
     EffectSlotRow {
         kind: effect_kind_index(kind),
-        units: effect_kind_units(kind),
+        face_width: effect_kind_face_width(kind),
         preset_options: Vec::<slint::SharedString>::new().as_slice().into(),
         preset_name: Default::default(),
         bypassed: false,
@@ -643,8 +643,8 @@ fn effect_rack_scrolls_horizontally_to_reach_a_long_chain() {
     ui.set_selected_channel_name(SharedString::from("Kick"));
     ui.invoke_show_view(view::DEVICES);
     ui.set_source_kind(device_kind_to_int(DeviceKind::Sampler));
-    // Filter, drive, bitcrush, delay (three units wide), filter: comfortably
-    // past the 960 px window even before the source device's own three units.
+    // Filter, drive, bitcrush, delay (668px), filter: comfortably past the
+    // 960 px window even before the source device's own 664.
     ui.set_effect_slots(ModelRc::from(Rc::new(VecModel::from(vec![
         effect_slot(EffectKind::Filter),
         effect_slot(EffectKind::Drive),

@@ -37,15 +37,15 @@ export component StripRackRow inherits Rectangle {
     callback voicing-picked(int);
     callback point-dragged(int, float, float);
 
-    // **Two units.** It was three while the EQ carried a response plot over
+    // **444px.** It was 664 while the EQ carried a response plot over
     // its band rows and the two right-hand panels split the slack between
     // them; with the plot moved under DRIVE the three columns add up to
-    // 150 + 118 + what is left, and the third unit was empty margin either
+    // 150 + 118 + what is left, and the last 220px was empty margin either
     // side of two small knob clusters. Adam: *"there's a ton of space
     // between the start of the rack area and the first device in a chain.
     // i feel like we could come up with a more compact layout."* This is
     // 220px of that, and the bus face beside it is the rest.
-    width: DeviceRackMetrics.unit-width * 2 + DeviceRackMetrics.half-gap;
+    width: 444px;
     height: DeviceRackMetrics.face-height;
     background: Theme.surface;
     border-width: Theme.hairline;
@@ -71,7 +71,7 @@ export component StripRackRow inherits Rectangle {
         y: 0px;
         width: parent.width;
         name: root.name + " strip";
-        kind: "STRIP / 2U";
+        kind: "STRIP";
         role: "STRIP";
         // A fader cap across its slot (MOO-294): the channel's own strip.
         icon: Icons.strip;
@@ -239,10 +239,11 @@ component BusIdentityPanel inherits Rectangle {
 //
 // Adam, on the head face once the strip's processing had a row of its own
 // beside it: *"maybe the strip could be bundled with some basic track
-// controls like name, maybe ins and outs."* The two used to be a 2U box that
-// said little next to a 2U box that said a lot; `show-strip` folds them into
-// one, at the width `units` states -- 3U, the same unit the EQ's response
-// plot gave back on 2026-09-11, spent here on content instead of margin.
+// controls like name, maybe ins and outs."* The two used to be a 444px box
+// that said little next to a 444px box that said a lot; `show-strip` folds
+// them into one, at the 664px `main.slint` gives it -- the width the EQ's
+// response plot gave back on 2026-09-11, spent here on content instead of
+// margin.
 export component BusDeviceFace inherits Rectangle {
     in property <string> name;
     in property <bool> is-master;
@@ -274,10 +275,6 @@ export component BusDeviceFace inherits Rectangle {
     in property <StripRow> strip;
     /// Which track this is, for the lamps `StripMeters` publishes.
     in property <int> track: -1;
-    // The rack unit count this face is standing in, purely for the header's
-    // own label: `main.slint` is what actually sizes the frame, and it must
-    // agree with what it draws here or the label lies.
-    in property <int> units: 2;
     callback renamed(string);
     callback removed();
     callback output-picked(int);
@@ -368,7 +365,7 @@ export component BusDeviceFace inherits Rectangle {
         y: 0px;
         width: parent.width;
         name: root.name;
-        kind: "BUS / " + root.units + "U";
+        kind: "BUS";
         role: "BUS";
         // Three inputs joining one rail (MOO-294), the master's as any bus's.
         icon: Icons.bus;
@@ -415,9 +412,9 @@ export component BusFaderRow inherits Rectangle {
     callback mute-toggled();
     callback solo-toggled();
 
-    // One unit, where the strip beside it takes two: this is a fader, a pan
-    // and three buttons, and the rack is short of width at the head already.
-    width: DeviceRackMetrics.unit-width;
+    // Half the strip beside it: this is a fader, a pan and three buttons,
+    // and the rack is short of width at the head already.
+    width: 220px;
     height: DeviceRackMetrics.face-height;
     background: Theme.surface;
     border-width: Theme.hairline;
@@ -487,7 +484,7 @@ export component BusFaderRow inherits Rectangle {
         y: 0px;
         width: parent.width;
         name: "Fader";
-        kind: "OUT / 1U";
+        kind: "OUT";
         role: "OUT";
         // A speaker (MOO-294): where the track leaves its rack.
         icon: Icons.output;

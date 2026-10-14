@@ -100,12 +100,12 @@ component PlateTailDisplay inherits Rectangle {
 
 // One "Plate" reverb in a channel's device rack: a lightweight comb/allpass
 // feedback network, the cheap alternative to ReverbDeviceFace's generated-
-// room convolution. Five continuous controls use a 2U face, preserving the
+// room convolution. Five continuous controls use a 444px face, preserving the
 // shared knob baseline rather than compressing them; header, drag, and host
 // actions come from the shared shell.
 export component PlateDeviceFace inherits EffectDeviceShell {
     name: "Plate";
-    kind: "FX / 2U";
+    kind: "FX";
     in-out property <float> size;     // normalized 0..1 (0.5x .. 1.5x tap length)
     in-out property <float> decay;    // normalized 0..1 (0.2 .. 10 s)
     in-out property <float> damping;  // normalized 0..1

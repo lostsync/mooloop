@@ -200,8 +200,19 @@ pub(crate) fn pack(selectors: &[bool], columns: usize) -> (Vec<Place>, usize) {
     (places, pages.max(1))
 }
 
-/// The width of a face: one unit when its controls fit one unit's page,
-/// two otherwise. A face with more than a page pages rather than growing.
+/// The width of a face, in logical pixels, for a layout `units` wide (see
+/// [`face_units`]): 220 for the narrow one, 444 for the wide.
+pub(crate) fn plugin_face_width(units: i32) -> f32 {
+    if units <= 1 {
+        220.0
+    } else {
+        444.0
+    }
+}
+
+/// Which of the face's two layouts it takes: the narrow one (1) when its
+/// controls fit its page, the wide one (2) otherwise. A face with more than a
+/// page pages rather than growing.
 pub(crate) fn face_units(selectors: &[bool]) -> i32 {
     if pack(selectors, face_columns(1)).1 == 1 {
         1
@@ -1019,7 +1030,7 @@ impl PluginFaces {
         };
         let face = self.face_row(session, slot);
         row.is_plugin = true;
-        row.units = face.units;
+        row.face_width = plugin_face_width(face.units);
         row.plugin_name = face.name;
         row.plugin_status = face.status;
         row.plugin_has_gui = face.has_gui;
@@ -1098,7 +1109,7 @@ impl UiState {
             };
             let was = (
                 data.is_plugin,
-                data.units,
+                data.face_width,
                 data.plugin_name.clone(),
                 data.plugin_status.clone(),
                 data.plugin_has_gui,
@@ -1108,7 +1119,7 @@ impl UiState {
             self.plugin_faces.fill_row(&self.session, &effect, &mut data);
             let now = (
                 data.is_plugin,
-                data.units,
+                data.face_width,
                 data.plugin_name.clone(),
                 data.plugin_status.clone(),
                 data.plugin_has_gui,

@@ -1,7 +1,7 @@
 use mooloop_core::strip::{StripBand, StripParams};
 use mooloop_core::{EffectKind, EqBandKind, PreampVoicing, MAX_BUSES};
 use mooloop_ui::{
-    effect_kind_index, effect_kind_units, strip_row, view, ChannelRow, EffectSlotMeters,
+    effect_kind_index, effect_kind_face_width, strip_row, view, ChannelRow, EffectSlotMeters,
     EffectSlotRow, MainWindow, MixerMetrics, MixerSendRow, MixerStripRow, StepCell, StripLevel,
     StripMeters, StripRow,
 };
@@ -254,7 +254,7 @@ fn render_mixer_pane_with_a_bus_chain() {
     ui.set_effect_slots(ModelRc::from(Rc::new(VecModel::from(vec![
         EffectSlotRow {
             kind: effect_kind_index(EffectKind::Compressor),
-            units: effect_kind_units(EffectKind::Compressor),
+            face_width: effect_kind_face_width(EffectKind::Compressor),
             preset_options: Vec::<SharedString>::new().as_slice().into(),
             preset_name: Default::default(),
             bypassed: false,
@@ -323,7 +323,7 @@ fn render_mixer_pane_with_a_bus_chain() {
         },
         EffectSlotRow {
             kind: effect_kind_index(EffectKind::Limiter),
-            units: effect_kind_units(EffectKind::Limiter),
+            face_width: effect_kind_face_width(EffectKind::Limiter),
             preset_options: Vec::<SharedString>::new().as_slice().into(),
             preset_name: Default::default(),
             bypassed: false,
