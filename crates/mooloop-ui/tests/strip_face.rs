@@ -478,7 +478,7 @@ fn the_master_face_s_switches_reach_the_callback() {
         });
     };
     ui.set_voicing(1);
-    // The face: 3 units of 220 and two 4px half-gaps, 268 tall; the panel
+    // The face: 668 wide (`master-comp.slint`), 268 tall; the panel
     // 8px in from each side and under the 28px header.
     let face_width = 3.0 * 220.0 + 2.0 * 4.0;
     let panel_right = face_width - 8.0;

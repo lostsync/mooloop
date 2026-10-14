@@ -34,8 +34,8 @@ use std::rc::Rc;
 
 mod common;
 
-/// Four rack units of `DeviceRackMetrics` minus the two rails, by
-/// `face-height` minus the device header. The same size the rack gives it.
+/// The width `main.slint` gives the source face, by `face-height` minus the
+/// device header. The same size the rack gives it.
 const FACE_WIDTH: f32 = 884.0;
 const FACE_HEIGHT: f32 = 240.0;
 

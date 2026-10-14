@@ -15,7 +15,7 @@ import { PreampDeviationDisplay } from "device-displays.slint";
 // gain stage and nothing else.
 export component PreampDeviceFace inherits EffectDeviceShell {
     name: "Preamp";
-    kind: "FX / 1U";
+    kind: "FX";
     in-out property <float> drive;    // normalized 0..1 (-24 .. +24 dB)
     in-out property <int> voicing;    // 0 = moo, 1 = grip, 2 = punch, 3 = iron
     in-out property <float> mix;      // normalized 0..1

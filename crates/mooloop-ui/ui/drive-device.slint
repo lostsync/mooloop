@@ -8,7 +8,7 @@ import { DriveTransferDisplay } from "device-displays.slint";
 // the shared shell and frame.
 export component DriveDeviceFace inherits EffectDeviceShell {
     name: "Drive";
-    kind: "FX / 1U";
+    kind: "FX";
     in-out property <int> curve;       // 0 = soft, 1 = hard, 2 = fold, 3 = tape
     in-out property <float> drive;      // normalized 0..1 (1x .. 64x)
     in-out property <float> tone;       // normalized 0..1 (-1 .. 1)

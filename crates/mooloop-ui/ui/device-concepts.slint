@@ -107,7 +107,7 @@ component EqDisplay inherits Rectangle {
 
 component SamplerFace inherits DeviceFrame {
     name: "Sampler";
-    kind: "SOURCE / 2U";
+    kind: "SOURCE";
     device-color: Theme.accent;
     VerticalLayout {
         padding-top: 34px; padding-left: 6px; padding-right: 6px; padding-bottom: 6px; spacing: 6px;
@@ -132,7 +132,7 @@ component SamplerFace inherits DeviceFrame {
 
 component BufferFace inherits DeviceFrame {
     name: "History";
-    kind: "BUFFER / 1.5U";
+    kind: "BUFFER";
     device-color: #38bdf8;
     VerticalLayout {
         padding-top: 34px; padding-left: 6px; padding-right: 6px; padding-bottom: 6px; spacing: 6px;
@@ -156,7 +156,7 @@ component BufferFace inherits DeviceFrame {
 
 component EqFace inherits DeviceFrame {
     name: "EQ-3";
-    kind: "EFFECT / 1U";
+    kind: "EFFECT";
     device-color: #f59e0b;
     VerticalLayout {
         padding-top: 34px; padding-left: 6px; padding-right: 6px; padding-bottom: 6px; spacing: 6px;
@@ -238,7 +238,7 @@ component VerticalConcept inherits Rectangle {
                     VerticalLayout {
                         spacing: 4px;
                         DeviceFrame {
-                            name: "Sampler"; kind: "SOURCE / 2U"; device-color: Theme.accent; height: 260px;
+                            name: "Sampler"; kind: "SOURCE"; device-color: Theme.accent; height: 260px;
                             HorizontalLayout {
                                 padding-top: 34px; padding-left: 6px; padding-right: 6px; padding-bottom: 6px; spacing: 6px;
                                 WaveDisplay { horizontal-stretch: 1; }
@@ -253,10 +253,10 @@ component VerticalConcept inherits Rectangle {
                                     }
                                 }
                             }
-                            DeviceHeader { name: "Sampler"; kind: "SOURCE / 2U"; device-color: Theme.accent; }
+                            DeviceHeader { name: "Sampler"; kind: "SOURCE"; device-color: Theme.accent; }
                         }
                         DeviceFrame {
-                            name: "History"; kind: "BUFFER / 1U"; device-color: #38bdf8; height: 164px;
+                            name: "History"; kind: "BUFFER"; device-color: #38bdf8; height: 164px;
                             HorizontalLayout {
                                 padding-top: 34px; padding-left: 6px; padding-right: 6px; padding-bottom: 6px; spacing: 6px;
                                 BufferDisplay { horizontal-stretch: 1; }
@@ -272,10 +272,10 @@ component VerticalConcept inherits Rectangle {
                                     ToolButton { y: (parent.height - 28px) / 2; width: 100%; height: 28px; text: "RETURN LIVE"; }
                                 }
                             }
-                            DeviceHeader { name: "History"; kind: "BUFFER / 1U"; device-color: #38bdf8; }
+                            DeviceHeader { name: "History"; kind: "BUFFER"; device-color: #38bdf8; }
                         }
                         DeviceFrame {
-                            name: "EQ-3"; kind: "EFFECT / 0.5U"; device-color: #f59e0b; height: 92px;
+                            name: "EQ-3"; kind: "EFFECT"; device-color: #f59e0b; height: 92px;
                             HorizontalLayout {
                                 padding-top: 34px; padding-left: 6px; padding-right: 6px; padding-bottom: 6px; spacing: 6px;
                                 EqDisplay { horizontal-stretch: 1; }
@@ -284,7 +284,7 @@ component VerticalConcept inherits Rectangle {
                                 TinyKnob { label: "HIGH"; value: 0.5; value-text: "0.0 dB"; bipolar: true; }
                                 TinyKnob { label: "OUT"; value: 0.5; value-text: "0.0 dB"; bipolar: true; }
                             }
-                            DeviceHeader { name: "EQ-3"; kind: "EFFECT / 0.5U"; device-color: #f59e0b; }
+                            DeviceHeader { name: "EQ-3"; kind: "EFFECT"; device-color: #f59e0b; }
                         }
                     }
                 }

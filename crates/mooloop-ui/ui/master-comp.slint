@@ -526,7 +526,8 @@ export component MasterCompFace inherits Rectangle {
 
     private property <bool> on: root.section.comp-in;
 
-    width: DeviceRackMetrics.unit-width * 3 + DeviceRackMetrics.half-gap * 2;
+    // The width the Bus Comp insert takes (`effect_kind_face_width`).
+    width: 668px;
     height: DeviceRackMetrics.face-height;
     background: Theme.surface;
     border-width: root.on ? 2px : Theme.hairline;
@@ -549,7 +550,7 @@ export component MasterCompFace inherits Rectangle {
         y: 0px;
         width: parent.width;
         name: "Bus Comp";
-        kind: "MASTER / 3U";
+        kind: "MASTER";
         role: "COMP";
         // The insert's own icon (MOO-294): one compressor, drawn once.
         icon: Icons.effect-kinds[16];

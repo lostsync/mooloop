@@ -272,9 +272,9 @@ struct EffectSlotRow {
     // menu and requires every kind's number back exactly once. A container
     // is drawn by `is-container`, not by its number.
     kind: int,
-    // Rack units this device's face occupies. Devices with more working
-    // controls get more width rather than compressing their controls.
-    units: int,
+    // This device's face width, inside its rails: as wide as its controls
+    // need, never compressed (`effect_kind_face_width`).
+    face-width: length,
     // Whether the keyboard's clipboard actions act on this row. Carried on
     // the row rather than as a window property holding a slot index: Rust
     // keeps the selection as a `DeviceId` and rebuilds these rows on every
@@ -4951,7 +4951,7 @@ export component MainWindow inherits Window {
                                 changed drop-hot => { BrowserDrag.over-rack = self.drop-hot; }
                                 // Sized from the rack row's own intrinsic width, not
                                 // a constant: the chain grows as devices are added,
-                                // and faces are width-quantized in rack units, so a
+                                // and every face has a width of its own, so a
                                 // fixed figure leaves later devices unreachable.
                                 content-width: max(self.visible-width, rack-row.preferred-width);
                                 content-height: max(self.visible-height, DeviceRackMetrics.rack-height);
@@ -4991,36 +4991,35 @@ export component MainWindow inherits Window {
                                         // generator, or the bus's own output stage
                                         // when the rack is following the mixer.
                                         source-device := DeviceFrame {
-                                            // A device declares its own width in units, the
-                                            // same way an effect slot does. DS-01 and the
-                                            // ML-P8 are four: both spend pages rather than
-                                            // one dense screen, and four is the width at
-                                            // which a page holds three modules of 34px
-                                            // dials without shrinking one. DS-01 was five
-                                            // while it was one screen with no pages; the
-                                            // pages gave that unit back.
-                                            // Aux In is two: a source, an
+                                            // A device states its own width, the same way an
+                                            // effect slot does. These are the widths the
+                                            // faces had when widths were counted in 220px
+                                            // units; each changes as its face is redesigned.
+                                            // DS-01 and the ML-P8 are the widest: both spend
+                                            // pages rather than one dense screen, and 884 is
+                                            // where a page holds three modules of 34px dials
+                                            // without shrinking one.
+                                            // Aux In is narrow: a source, an
                                             // outlet and a level is the whole
                                             // device, and a wider face would
                                             // be empty rather than generous.
-                                            // A bus's head is 2U on its own -- a
-                                            // destination and a name -- and 3U
+                                            // A bus's head is narrow on its own -- a
+                                            // destination and a name -- and wider
                                             // when `STRIP_PIN` also pins the
                                             // strip's drive/EQ/comp here, the
-                                            // same unit the EQ's response plot
+                                            // width the EQ's response plot
                                             // gave back on 2026-09-11, spent on
                                             // the merged content instead of
                                             // margin.
                                             // A plugin instrument is as wide as
-                                            // the same plugin's face on a chain,
-                                            // one unit or two (`face_units`).
-                                            property <int> source-units: root.editing-bus
-                                                ? (root.strip-pin-head ? 3 : 2)
-                                                : root.source-kind == 8 ? max(1, root.source-plugin-face[0].units)
-                                                : root.source-kind == 7 ? 2
-                                                : (root.source-kind == 6 || root.source-kind == 5 ? 4 : 3);
-                                            width: DeviceRackMetrics.unit-width * self.source-units
-                                                + DeviceRackMetrics.half-gap
+                                            // the same plugin's face on a chain
+                                            // (`plugin_face_width`).
+                                            property <length> source-face-width: root.editing-bus
+                                                ? (root.strip-pin-head ? 664px : 444px)
+                                                : root.source-kind == 8 ? (root.source-plugin-face[0].units > 1 ? 444px : 224px)
+                                                : root.source-kind == 7 ? 444px
+                                                : (root.source-kind == 6 || root.source-kind == 5 ? 884px : 664px);
+                                            width: self.source-face-width
                                                 + DeviceRackMetrics.rail-width * 2;
                                             height: DeviceRackMetrics.face-height;
                                             input-left-db: root.editing-bus ? root.editing-bus-input-left-db : GainMath.min-db;
@@ -5076,7 +5075,6 @@ export component MainWindow inherits Window {
                                                 // the two positions stay mutually
                                                 // exclusive.
                                                 show-strip: root.strip-pin-head;
-                                                units: source-device.source-units;
                                                 strip: root.editing-bus-strip;
                                                 track: root.editing-bus-index;
                                                 moved(id, v) => { root.bus-strip-param(root.editing-bus-index, id, v); }
@@ -5607,7 +5605,7 @@ export component MainWindow inherits Window {
                                                 width: parent.content-width;
                                                 height: parent.height - DeviceRackMetrics.header-height;
                                                 header-inset: 0px;
-                                                units: source-device.source-units;
+                                                units: root.source-plugin-face[0].units;
                                                 status: root.source-plugin-face[0].status;
                                                 params: root.source-plugin-face[0].params;
                                                 has-gui: root.source-plugin-face[0].has-gui;
@@ -5644,7 +5642,7 @@ export component MainWindow inherits Window {
                                                 name: root.source-kind == 8 && root.source-plugin-face.length > 0
                                                     ? root.source-plugin-face[0].name
                                                     : SourceKinds.titles[root.source-kind];
-                                                kind: "SOURCE / " + source-device.source-units + "U";
+                                                kind: "SOURCE";
                                                 preset: root.source-preset-name;
                                                 device-color: Theme.accent;
                                                 // The kind's icon (MOO-273), by the same number
@@ -5677,12 +5675,11 @@ export component MainWindow inherits Window {
                                         // `STRIP_PIN` picks between them, and
                                         // the engine reads the same constant.
                                         for slot[index] in root.effect-slots : cell := Rectangle {
-                                            // A layer is as wide as what its face holds, not a
-                                            // count of units (MOO-462).
+                                            // A layer is as wide as what its face holds
+                                            // (MOO-462); everything else states its own.
                                             property <length> face-width: slot.is-layer
                                                 ? LayerMetrics.face-width
-                                                : DeviceRackMetrics.unit-width * slot.units
-                                                    + DeviceRackMetrics.half-gap * (slot.units - 1);
+                                                : slot.face-width;
                                             // A container draws no output rail against its
                                             // own face -- it draws one past the last device
                                             // it holds -- so its frame is a rail narrower.
@@ -6462,7 +6459,9 @@ export component MainWindow inherits Window {
                                                     bypassed: slot.bypassed;
                                                     preset-name: slot.preset-name;
                                                     icon: Icons.effect-kinds[slot.kind];
-                                                    units: slot.units;
+                                                    // The plugin face's two layouts, by
+                                                    // the width `plugin_face_width` gave it.
+                                                    units: slot.face-width > 220px ? 2 : 1;
                                                     plugin-name: slot.plugin-name;
                                                     status: slot.plugin-status;
                                                     params: slot.plugin-params;
@@ -6616,7 +6615,7 @@ export component MainWindow inherits Window {
                                                 x: cell.shift + (cell.dragging ? RackDrag.dx : 0px);
                                                 y: cell.dragging ? -8px : 0px;
                                                 name: slot.is-plugin && slot.plugin-name != "" ? slot.plugin-name : slot.label;
-                                                kind: "FX / " + slot.units + "U";
+                                                kind: "FX";
                                                 icon: Icons.effect-kinds[slot.kind];
                                                 bypassed: slot.bypassed;
                                                 wet-dry-enabled: !slot.is-container;

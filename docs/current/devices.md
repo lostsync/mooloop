@@ -67,7 +67,7 @@ area, and where each behaviour stops.
   put the parameter, and a dot per incoming route. AMP carries the amp envelope beside allocation and
   character: Unison and Chorus as selectors under a fixed `VOICES 8` and the
   note count Unison leaves, with Detune, Spread, Drift and Glide as knobs. The
-  face stays four rack units. The DS-01 face is six pages at four rack units
+  face stays 884px wide. The DS-01 face is six pages at 884px
   on the same argument -- VOICE, TONE, NOISE, BODY, AMP and DS-01 MOD -- with
   every one of its ninety-two parameters on exactly one of them, at a 34px
   dial with its value typed into. It reads in the units a drum patch is
@@ -81,7 +81,7 @@ area, and where each behaviour stops.
   displays, not editors; their shared span is stated once in the page bar and
   follows the patch, so a 5 ms hat and a 4 s ride both read. The v1
   drum face keeps family, character, shared shaping, and voice-specific controls
-  visible together. The Aux In face is two rack units and one page, because a
+  visible together. The Aux In face is 444px wide and one page, because a
   source, an outlet and a level is the whole device: two pickers, a Level
   knob, and a line saying where the signal is tapped from or why the
   subscription was refused. Replacing a source does not change the channel's notes or
@@ -243,10 +243,9 @@ area, and where each behaviour stops.
   the hall. The thirteenth kind is the retained-audio Buffer described below,
   which is an ordinary insert in the same picker. The fourteenth is the Bus
   Comp, the master section's compressor offered as an insert
-  ([engine.md](engine.md)). Device faces are width-quantized in rack units,
-  declared once in `effect_kind_units`: filter, drive, preamp, bitcrush, and
-  limiter take 1U; gate, compressor, plate, EQ, Mod, and Buffer take 2U;
-  delay, reverb, and Bus Comp take 3U.
+  ([engine.md](engine.md)). Each face is as wide as its controls
+  need, stated once in `effect_kind_face_width`: there are no rack units
+  (MOO-468).
 - Gate, compressor, and limiter share one transfer-curve display with a
   draggable threshold handle. Its live dot is fed by the device's own gain
   computer rather than by the surrounding peak meters: the audio thread
@@ -391,7 +390,7 @@ area, and where each behaviour stops.
   the sidebar's parameter list act on the branch; which branch is shown is
   not saved and is not an undo step. **Dragging a row along the list moves
   the branch** among its siblings, one undo step ("Branch moved"). The face
-  is as wide as what it holds, not a count of rack units. Every branch the
+  is as wide as what it holds. Every branch the
   `+` makes is a Chain. Mute takes a branch out of the sum and Solo keeps only
   the soloed branches of that one layer; both ramp, and both are undoable
   and saved.

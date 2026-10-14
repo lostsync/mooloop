@@ -3,13 +3,13 @@ import { ParameterKnob, SelectorBank, TimeDivisionKnob } from "controls.slint";
 import { DeviceRackMetrics, EffectDeviceShell } from "device-rack.slint";
 import { DelayEchoDisplay } from "device-displays.slint";
 
-// One delay in a channel's device rack. Three units wide, which it now has
+// One delay in a channel's device rack, 668px wide, which it now has
 // room to spare in: the musical time control was a 230px bank of five
 // divisions and is a knob with a sync lamp over the shared twenty-one.
 // Header and drag come from the shared EffectDeviceShell.
 export component DelayDeviceFace inherits EffectDeviceShell {
     name: "Delay";
-    kind: "FX / 3U";
+    kind: "FX";
     in-out property <int> mode;      // 0 = digital, 1 = tape, 2 = reverse
     in-out property <float> time;     // normalized 0..1 (1 ms .. 2000 ms)
     in-out property <float> feedback; // normalized 0..1

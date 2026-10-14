@@ -116,9 +116,8 @@ export component CompressorDeviceDragHarness inherits Window {
     }
 }
 
-// The DS-01's face, at the size the rack gives it: four rack units of
-// `DeviceRackMetrics` minus the two rails, by `face-height` minus the device
-// header.
+// The DS-01's face, at the size the rack gives it: the source width
+// `main.slint` states, by `face-height` minus the device header.
 //
 // Here for the same reason as the three above, and for one more. The face is
 // indexed by descriptor id, so every control's value is a *binding* onto a
@@ -178,8 +177,8 @@ export component Ds01DeviceDragHarness inherits Window {
     }
 }
 
-// The ML-P8's face, at the size the rack gives it: four rack units minus the
-// two rails, by `face-height` minus the device header.
+// The ML-P8's face, at the size the rack gives it: the source width
+// `main.slint` states, by `face-height` minus the device header.
 //
 // Here for the reasons the four above are, and for one that is this face's
 // own. Two of its controls are neither a property Rust sets nor a plain
