@@ -467,6 +467,10 @@ export component SelectorBank inherits Rectangle {
     in property <bool> enabled: true;
     in property <string> tooltip;
     in property <length> segment-width: 44px;
+    /// Registry icons drawn instead of the option text, by position; an
+    /// option past the end, or with "", shows its text. The text is still the
+    /// segment's tooltip and its accessible name.
+    in property <[string]> icons;
     /// Whether the owner writes `selected-index`; see
     /// `ParameterKnob.controlled`.
     in property <bool> controlled: true;
@@ -488,6 +492,7 @@ export component SelectorBank inherits Rectangle {
         // came to be a tooltip.
         for option[i] in root.options : ToolButton {
             text: option;
+            icon: i < root.icons.length ? root.icons[i] : "";
             tooltip: option;
             hint: root.tooltip;
             active: root.selected-index == i;
@@ -1855,6 +1860,11 @@ export component TimeDivisionKnob inherits Rectangle {
     /// Whether the owner writes `value`, `division` and `tempo-sync`; see
     /// `ParameterKnob.controlled`. All three are the delay's model.
     in property <bool> controlled: true;
+    /// Just the dial, filling this knob's width, for a face that switches
+    /// sync with its own control (`set-sync`): no lamp beside it, and the
+    /// value box reads the division while synced.
+    in property <bool> compact;
+    in property <length> diameter: 40px;
     callback changed(float);
     callback tempo-sync-changed(bool);
     callback division-changed(int);
@@ -1871,7 +1881,7 @@ export component TimeDivisionKnob inherits Rectangle {
     // clamped division is visible rather than silently wrong.
     private property <bool> clamped: root.tempo-sync && root.synced-ms > root.maximum-ms + 0.5;
 
-    width: 92px;
+    width: root.compact ? 64px : 92px;
     height: 80px;
 
     pure function normalized-for-ms(ms: float) -> float {
@@ -1893,7 +1903,7 @@ export component TimeDivisionKnob inherits Rectangle {
         root.changed(normalized);
     }
 
-    function set-sync(on: bool) {
+    public function set-sync(on: bool) {
         if (on != root.tempo-sync) {
             if (!root.controlled) { root.tempo-sync = on; }
             root.tempo-sync-changed(on);
@@ -1911,8 +1921,8 @@ export component TimeDivisionKnob inherits Rectangle {
             // the first drag left it at and stop following `division` --
             // which a preset load or a sync toggle changes underneath it.
             controlled: true;
-            width: 64px;
-            diameter: 40px;
+            width: root.compact ? root.width : 64px;
+            diameter: root.diameter;
             label: root.label;
             tooltip: root.tooltip;
             value: root.tempo-sync ? root.division * 1.0 : root.value;
@@ -1920,7 +1930,9 @@ export component TimeDivisionKnob inherits Rectangle {
             maximum: root.tempo-sync ? 20 : 1;
             default-value: root.tempo-sync ? 7 : root.default-value;
             step: root.tempo-sync ? 1 : 0;
-            value-text: root.effective-ms >= 100
+            value-text: root.compact && root.tempo-sync
+                ? Divisions.label(root.division)
+                : root.effective-ms >= 100
                 ? round(root.effective-ms) + " ms"
                 : round(root.effective-ms * 10) / 10 + " ms";
             modulation-armed: root.modulation-armed;
@@ -1940,7 +1952,7 @@ export component TimeDivisionKnob inherits Rectangle {
                 }
             }
         }
-        VerticalLayout {
+        if !root.compact : VerticalLayout {
             alignment: center;
             spacing: 3px;
             HorizontalLayout {
