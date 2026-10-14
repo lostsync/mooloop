@@ -124,6 +124,15 @@ export global Icons {
     out property <string> eq-face-low-pass: "M 2 5 L 7 5 C 10 5 11 13 14 13";
     out property <string> eq-face-analyzer:
         "M 3 13 L 3 9 M 6.5 13 L 6.5 5 M 10 13 L 10 8 M 13.5 13 L 13.5 3";
+    // --- Effects: the filter face -------------------------------------
+    //
+    // The three responses the filter's type selector picks between, drawn as
+    // the curve each one is rather than as LP, BP and HP. The low-pass and
+    // high-pass carry a small resonance peak at the corner, because the
+    // filter has one and the EQ's pass filters do not.
+    out property <string> filter-low-pass: "M 2 6 L 8 6 C 10 6 10 3.5 11 3.5 C 12 3.5 12 13 14 13";
+    out property <string> filter-band-pass: "M 2 13 C 6 13 7 4 8 4 C 9 4 10 13 14 13";
+    out property <string> filter-high-pass: "M 2 13 C 4 13 4 3.5 5 3.5 C 6 3.5 6 6 8 6 L 14 6";
     out property <string> eq-face-proportional-q: "M 2 12 L 5 12 L 8 4 L 11 12 L 14 12";
 
     // --- Device kinds (MOO-273, step 02) ------------------------------

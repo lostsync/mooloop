@@ -415,18 +415,21 @@ fn compressor_threshold_drag_updates_the_parameter_and_curve() {
         move |v| thresholds.borrow_mut().push(v)
     });
 
-    // The graph is inset 10px from the face's left and 38px from its top,
-    // and is 424x96px. At threshold 0.55 (-27 dB) with 6 dB makeup, the
-    // handle lies at input -27 dB / output -21 dB on the rendered curve.
-    let start = (10.0 + 33.0 / 60.0 * 424.0, 38.0 + 21.0 / 60.0 * 96.0);
-    let end = (start.0, start.1 - 24.0);
+    // The graph is inset 12px from the face's left and 40px from its top
+    // (8px of face padding, the 28px header, 4px inside the plot), and is
+    // 380x140px: the face's 444px less its padding, the 34px gain-reduction
+    // meter and the 6px between them. At threshold 0.55 (-27 dB) with 6 dB
+    // makeup, the handle lies at input -27 dB / output -21 dB on the
+    // rendered curve.
+    let start = (12.0 + 33.0 / 60.0 * 380.0, 40.0 + 21.0 / 60.0 * 140.0);
+    let end = (start.0, start.1 - 35.0);
     drag(ui.window(), start, end, 12);
 
     assert_monotonic(&thresholds.borrow(), true, "compressor threshold");
     let threshold = *thresholds.borrow().last().unwrap();
     assert!(
         (threshold - 0.8).abs() < 0.02,
-        "24px upward should raise threshold by 15 dB: got {threshold}"
+        "35px upward should raise threshold by 15 dB: got {threshold}"
     );
     assert!(
         (ui.get_threshold() - threshold).abs() < 1e-4,
