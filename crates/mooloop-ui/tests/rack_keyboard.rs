@@ -185,7 +185,7 @@ fn harness() -> Harness {
     ui.invoke_show_view(view::DEVICES);
     ui.set_source_kind(device_kind_to_int(DeviceKind::DrumSynth));
     ui.set_effect_slots(ModelRc::from(Rc::new(VecModel::from(vec![
-        effect_slot(EffectKind::Filter),
+        effect_slot(EffectKind::Limiter),
         effect_slot(EffectKind::Drive),
         effect_slot(EffectKind::Bitcrush),
     ]))));

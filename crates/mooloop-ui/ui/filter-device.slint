@@ -2,10 +2,18 @@ import { Theme } from "theme.slint";
 import { CutoffLaw, NoteFormat, ParameterKnob, SelectorBank } from "controls.slint";
 import { DeviceRackMetrics, EffectDeviceShell } from "device-rack.slint";
 import { FilterResponseDisplay } from "device-displays.slint";
+import { Icons } from "icons.slint";
 
 // One filter effect in a channel's device rack: only the working controls
 // live here; the header and drag-to-reorder come from the shared
 // EffectDeviceShell, and bypass/remove live on the host DeviceFrame.
+//
+// Redrawn 2026-10-14 (Joam picked layout A of two): the type and slope on
+// one row, the response wide enough to aim at with its octaves named and
+// the cutoff read out in its corner, and Drive, Cutoff and Reso as three
+// equal knobs under it, in the order the signal meets them. Placed by hand
+// rather than in a layout: a full-size knob inside a layout is a
+// binding loop.
 export component FilterDeviceFace inherits EffectDeviceShell {
     name: "Filter";
     kind: "FX";
@@ -20,110 +28,149 @@ export component FilterDeviceFace inherits EffectDeviceShell {
     callback slope-changed(int);
     callback drive-changed(float);
 
-    VerticalLayout {
-        padding: 6px;
-        padding-top: DeviceRackMetrics.header-height + 6px;
-        spacing: 4px;
-        HorizontalLayout {
-            alignment: start;
-            spacing: 4px;
-            SelectorBank {
-                options: ["LP", "BP", "HP"];
-                selected-index <=> root.mode;
-                segment-width: 30px;
-                tooltip: "Filter mode";
-                selected(i) => { root.mode-changed(i); }
+
+    private property <length> pad: 8px;
+    private property <length> inner: root.width - 2 * root.pad;
+    private property <length> top: DeviceRackMetrics.header-height + 8px;
+    private property <length> plot-y: root.top + 30px;
+    private property <length> plot-height: 118px;
+    private property <length> knob-y: root.plot-y + root.plot-height + 6px;
+    private property <float> cutoff-hz: CutoffLaw.hz(root.cutoff);
+
+    SelectorBank {
+        x: root.pad;
+        y: root.top;
+        // The names are each segment's tooltip; the segments draw the curve.
+        options: ["Low-pass", "Band-pass", "High-pass"];
+        icons: [Icons.filter-low-pass, Icons.filter-band-pass, Icons.filter-high-pass];
+        selected-index <=> root.mode;
+        segment-width: 30px;
+        tooltip: "Filter mode";
+        selected(i) => { root.mode-changed(i); }
+    }
+    SelectorBank {
+        x: root.width - root.pad - self.width;
+        y: root.top;
+        options: ["12", "24"];
+        selected-index <=> root.slope;
+        segment-width: 30px;
+        tooltip: "Filter slope (dB per octave)";
+        selected(i) => { root.slope-changed(i); }
+    }
+
+    Rectangle {
+        x: root.pad;
+        y: root.plot-y;
+        width: root.inner;
+        height: root.plot-height;
+        background: Theme.panel;
+        border-radius: Theme.radius-sm;
+        FilterResponseDisplay {
+            x: 4px;
+            y: 4px;
+            width: parent.width - 8px;
+            height: parent.height - 20px;
+            mode: root.mode;
+            cutoff: root.cutoff;
+            resonance: root.resonance;
+            slope: root.slope;
+            env-amount: 0;
+            point-dragged(cutoff, resonance) => {
+                root.cutoff-changed(cutoff);
+                root.resonance-changed(resonance);
             }
-            SelectorBank {
-                options: ["12", "24"];
-                selected-index <=> root.slope;
-                segment-width: 30px;
-                tooltip: "Filter slope (dB per octave)";
-                selected(i) => { root.slope-changed(i); }
-            }
-            Rectangle { horizontal-stretch: 1; }
+            point-scrolled(resonance) => { root.resonance-changed(resonance); }
         }
-        Rectangle {
-            height: 104px;
-            background: Theme.panel;
-            border-radius: Theme.radius-sm;
-            FilterResponseDisplay {
-                x: 4px;
-                y: 4px;
-                width: parent.width - 8px;
-                height: parent.height - 8px;
-                mode: root.mode;
-                cutoff: root.cutoff;
-                resonance: root.resonance;
-                slope: root.slope;
-                env-amount: 0;
-                point-dragged(cutoff, resonance) => {
-                    root.cutoff-changed(cutoff);
-                    root.resonance-changed(resonance);
-                }
-                point-scrolled(resonance) => { root.resonance-changed(resonance); }
-            }
+        // The octaves the curve spans, at CutoffLaw's positions:
+        // log10(f / 20) / 3 across the plot.
+        for mark in [{ text: "50", at: 0.1327 }, { text: "200", at: 0.3333 },
+                { text: "1k", at: 0.5663 }, { text: "5k", at: 0.7993 }] : Text {
+            x: 4px + (parent.width - 8px) * mark.at - self.width / 2;
+            y: parent.height - 14px;
+            text: mark.text;
+            color: Theme.text-faint;
+            font-size: Theme.text-xs;
         }
-        HorizontalLayout {
-            spacing: 0px;
-            ParameterKnob {
-                width: 52px;
-                diameter: 36px;
-                label: "Cutoff";
-                tooltip: "Filter cutoff frequency: " + NoteFormat.name(CutoffLaw.hz(root.cutoff));
-                value <=> root.cutoff;
-                // Normalized, because this knob declares no range: the table's
-                // 8 kHz on an exponential 20 Hz..20 kHz. It was 0.9 -- about
-                // 10 kHz -- so a double-click reset the filter a quarter of an
-                // octave above where a fresh one opens.
-                default-value: 0.867353;
-                modulation-armed: root.modulation-armed;
-                modulation-allowed: root.modulation-allowed[0];
-                modulation-depth: root.modulation-depths[0];
-                modulation-offset: root.modulation-offsets[0];
-                modulation-route-count: root.modulation-route-counts[0];
-                value-text: round(CutoffLaw.hz(root.cutoff)) + " Hz";
-                changed(v) => { root.cutoff-changed(v); }
-                modulation-depth-changed(v) => { root.modulation-depth-changed(0, v); }
-                modulation-edit-started => { root.modulation-edit-started(0); }
-                modulation-edit-finished => { root.modulation-edit-finished(0); }
-            }
-            ParameterKnob {
-                width: 52px;
-                diameter: 36px;
-                label: "Reso";
-                tooltip: "Filter resonance";
-                value <=> root.resonance;
-                default-value: 0;
-                modulation-armed: root.modulation-armed;
-                modulation-allowed: root.modulation-allowed[1];
-                modulation-depth: root.modulation-depths[1];
-                modulation-offset: root.modulation-offsets[1];
-                modulation-route-count: root.modulation-route-counts[1];
-                value-text: round(root.resonance * 100) + "%";
-                changed(v) => { root.resonance-changed(v); }
-                modulation-depth-changed(v) => { root.modulation-depth-changed(1, v); }
-                modulation-edit-started => { root.modulation-edit-started(1); }
-                modulation-edit-finished => { root.modulation-edit-finished(1); }
-            }
-            ParameterKnob {
-                width: 52px;
-                diameter: 36px;
-                label: "Drive";
-                tooltip: "Soft saturation before the filter";
-                value <=> root.drive;
-                default-value: 0;
-                modulation-armed: root.modulation-armed;
-                modulation-allowed: root.modulation-allowed[4];
-                modulation-depth: root.modulation-depths[4];
-                modulation-offset: root.modulation-offsets[4];
-                modulation-route-count: root.modulation-route-counts[4];
-                value-text: round(root.drive * 100) + "%";
-                changed(v) => { root.drive-changed(v); }
-                modulation-depth-changed(v) => { root.modulation-depth-changed(4, v); }
-                modulation-edit-started => { root.modulation-edit-started(4); }
-                modulation-edit-finished => { root.modulation-edit-finished(4); }
-            }
+        // What the cutoff is, in the two ways a musician reads one, in the
+        // corner the handle is furthest from so the peak never sits under it.
+        Text {
+            x: root.cutoff > 0.5 ? 8px : parent.width - self.width - 8px;
+            y: 6px;
+            text: (root.cutoff-hz < 1000
+                    ? round(root.cutoff-hz) + " Hz"
+                    : round(root.cutoff-hz / 10) / 100 + " kHz")
+                + "  " + NoteFormat.name(root.cutoff-hz);
+            color: Theme.text-muted;
+            font-size: Theme.text-md;
+            font-family: "monospace";
         }
+    }
+
+    ParameterKnob {
+        x: root.pad + root.inner * 0 / 3;
+        y: root.knob-y;
+        width: root.inner / 3;
+        height: root.height - root.knob-y - 4px;
+        diameter: 34px;
+        label: "Drive";
+        tooltip: "Soft saturation before the filter";
+        value <=> root.drive;
+        default-value: 0;
+        modulation-armed: root.modulation-armed;
+        modulation-allowed: root.modulation-allowed[4];
+        modulation-depth: root.modulation-depths[4];
+        modulation-offset: root.modulation-offsets[4];
+        modulation-route-count: root.modulation-route-counts[4];
+        value-text: round(root.drive * 100) + "%";
+        changed(v) => { root.drive-changed(v); }
+        modulation-depth-changed(v) => { root.modulation-depth-changed(4, v); }
+        modulation-edit-started => { root.modulation-edit-started(4); }
+        modulation-edit-finished => { root.modulation-edit-finished(4); }
+    }
+    ParameterKnob {
+        x: root.pad + root.inner * 1 / 3;
+        y: root.knob-y;
+        width: root.inner / 3;
+        height: root.height - root.knob-y - 4px;
+        diameter: 34px;
+        label: "Cutoff";
+        tooltip: "Filter cutoff frequency: " + NoteFormat.name(CutoffLaw.hz(root.cutoff));
+        value <=> root.cutoff;
+        // Normalized, because this knob declares no range: the table's
+        // 8 kHz on an exponential 20 Hz..20 kHz. It was 0.9 -- about
+        // 10 kHz -- so a double-click reset the filter a quarter of an
+        // octave above where a fresh one opens.
+        default-value: 0.867353;
+        modulation-armed: root.modulation-armed;
+        modulation-allowed: root.modulation-allowed[0];
+        modulation-depth: root.modulation-depths[0];
+        modulation-offset: root.modulation-offsets[0];
+        modulation-route-count: root.modulation-route-counts[0];
+        value-text: round(CutoffLaw.hz(root.cutoff)) + " Hz";
+        changed(v) => { root.cutoff-changed(v); }
+        modulation-depth-changed(v) => { root.modulation-depth-changed(0, v); }
+        modulation-edit-started => { root.modulation-edit-started(0); }
+        modulation-edit-finished => { root.modulation-edit-finished(0); }
+    }
+    ParameterKnob {
+        x: root.pad + root.inner * 2 / 3;
+        y: root.knob-y;
+        width: root.inner / 3;
+        height: root.height - root.knob-y - 4px;
+        diameter: 34px;
+        label: "Reso";
+        tooltip: "Filter resonance";
+        value <=> root.resonance;
+        default-value: 0;
+        modulation-armed: root.modulation-armed;
+        modulation-allowed: root.modulation-allowed[1];
+        modulation-depth: root.modulation-depths[1];
+        modulation-offset: root.modulation-offsets[1];
+        modulation-route-count: root.modulation-route-counts[1];
+        value-text: round(root.resonance * 100) + "%";
+        changed(v) => { root.resonance-changed(v); }
+        modulation-depth-changed(v) => { root.modulation-depth-changed(1, v); }
+        modulation-edit-started => { root.modulation-edit-started(1); }
+        modulation-edit-finished => { root.modulation-edit-finished(1); }
     }
 }
