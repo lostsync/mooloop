@@ -678,7 +678,9 @@ const FROZEN: &[(Owner, &[(u32, &str)])] = &[
     (Modulator(ModulatorKind::Scale), &[(0, "Root"), (1, "Mode")]),
     (Modulator(ModulatorKind::Transpose), &[(0, "Semitones")]),
     (Modulator(ModulatorKind::Chance), &[(0, "Chance")]),
+    (Modulator(ModulatorKind::Num), &[(0, "Value"), (1, "Low"), (2, "High"), (3, "Format")]),
     (Modulator(ModulatorKind::NoteGate), &[]),
+    (Modulator(ModulatorKind::Hold), &[]),
 ];
 
 fn live(owner: Owner) -> &'static [crate::effect::ParamDescriptor] {

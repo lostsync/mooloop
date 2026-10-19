@@ -643,9 +643,14 @@ impl CompiledModulation {
         if !policy.allowed {
             return 0.0;
         }
-        let shape = |source: CompiledSource, polarity: ModPolarity, output: f32| match polarity {
-            ModPolarity::Bipolar => output,
-            ModPolarity::Unipolar => (output + self.wire_span(source)) * 0.5,
+        // A route reads its source inside `-1..1`, as the engine does,
+        // though a num box's wires may carry more.
+        let shape = |source: CompiledSource, polarity: ModPolarity, output: f32| {
+            let output = output.clamp(-1.0, 1.0);
+            match polarity {
+                ModPolarity::Bipolar => output,
+                ModPolarity::Unipolar => (output + self.wire_span(source)) * 0.5,
+            }
         };
         if let Some(id) = destination.module() {
             let Some(at) = self.position_of(id).and_then(|at| u16::try_from(at).ok()) else {

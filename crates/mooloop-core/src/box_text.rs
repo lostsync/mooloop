@@ -15,8 +15,8 @@ use crate::harmony::{ChordQuality, Mode, MAX_CHORD_NOTES, PITCH_NAMES};
 use crate::modulation::{
     ModChanceParams, ModChordParams, ModModalParams, ModScaleParams, ModTransposeParams,
     TRANSPOSE_MAX_SEMITONES, ModCounterParams, ModLfoParams, ModLfoWaveform, ModMathOp, ModMathParams, ModSelectParams,
-    ModSlewParams, ModStepParams, ModTimeDivision, ModulatorKind, ModulatorParams,
-    COUNTER_MAX_STEPS, MOD_STEP_MAX_STEPS, SELECT_MAX_INPUTS,
+    ModNumParams, ModSlewParams, ModStepParams, ModTimeDivision, ModulatorKind, ModulatorParams,
+    NumFormat, COUNTER_MAX_STEPS, MOD_STEP_MAX_STEPS, NUM_LIMIT, SELECT_MAX_INPUTS,
 };
 
 /// One name a box can be typed as, and the line the completion list shows
@@ -33,7 +33,7 @@ const fn word(name: &'static str, says: &'static str) -> Word {
 
 /// The boxes, the control boxes then the note boxes, as the completion
 /// list offers them.
-pub const VOCABULARY: [Word; 20] = [
+pub const VOCABULARY: [Word; 22] = [
     word("lfo", "Periodic movement. lfo tri 1/4"),
     word("env", "Attack, decay, sustain, release from a gate."),
     word("step", "A row of values, one per advance. step 4"),
@@ -41,6 +41,8 @@ pub const VOCABULARY: [Word; 20] = [
     word("counter", "Counts advances and wraps at n. counter 4"),
     word("select", "Passes one of n inputs, picked by index. select 4"),
     word("slew", "Smooths jumps over time. slew 0.2"),
+    word("num", "Shows a value, or sends one. num int 0 16"),
+    word("hold", "Keeps its input from the last trigger."),
     word("+", "Adds. + 0.5"),
     word("-", "Subtracts. - 0.5"),
     word("*", "Multiplies. * -0.5 inverts and halves"),
@@ -242,7 +244,82 @@ pub fn spell(params: &ModulatorParams, text: &str) -> String {
         ModulatorParams::Transpose(transpose) => format!("transpose {}", transpose.semitones),
         ModulatorParams::Chance(chance) => format!("chance {}", format_number(chance.probability)),
         ModulatorParams::NoteGate => "gate".into(),
+        ModulatorParams::Num(num) => {
+            let mut spelled = String::from("num");
+            if let Some(format) = NUM_FORMATS.iter().find(|(_, held)| *held == num.format) {
+                if num.format != NumFormat::Float {
+                    spelled.push(' ');
+                    spelled.push_str(format.0);
+                }
+            }
+            if (num.low, num.high) != num_range(num.format) {
+                spelled.push_str(&format!(" {} {}", format_number(num.low), format_number(num.high)));
+            }
+            spelled
+        }
+        ModulatorParams::Hold => "hold".into(),
         ModulatorParams::Unknown => text.trim().to_string(),
+    }
+}
+
+/// How a num box's format is typed and spelled.
+const NUM_FORMATS: [(&str, NumFormat); 3] = [
+    ("float", NumFormat::Float),
+    ("int", NumFormat::Int),
+    ("note", NumFormat::Note),
+];
+
+/// The range a num box of `format` has when none is typed: a pitch's
+/// `0..1`, otherwise the patch's `-1..1`.
+fn num_range(format: NumFormat) -> (f32, f32) {
+    match format {
+        NumFormat::Note => (0.0, 1.0),
+        NumFormat::Float | NumFormat::Int => (-1.0, 1.0),
+    }
+}
+
+/// A num box as typed: a format word anywhere, then one number for its
+/// value, two for its range, or three for its range and value.
+fn num(args: &[&str]) -> Option<ModulatorParams> {
+    let mut format = NumFormat::Float;
+    let mut numbers = Vec::new();
+    for arg in args {
+        let arg = arg.to_ascii_lowercase();
+        match NUM_FORMATS.iter().find(|(name, _)| *name == arg) {
+            Some((_, named)) => format = *named,
+            None => numbers.push(number(&arg)?.clamp(-NUM_LIMIT, NUM_LIMIT)),
+        }
+    }
+    let (low, high) = match numbers.len() {
+        0 | 1 => num_range(format),
+        2 | 3 => (numbers[0], numbers[1]),
+        _ => return None,
+    };
+    let mut params = ModNumParams {
+        low,
+        high,
+        format,
+        ..ModNumParams::default()
+    };
+    params.position = match numbers.len() {
+        1 => params.position_of(numbers[0]),
+        3 => params.position_of(numbers[2]),
+        _ => params.position_of(0.0_f32.clamp(low.min(high), low.max(high))),
+    };
+    Some(ModulatorParams::Num(params))
+}
+
+/// What a num box shows for `value`: two decimals, a whole number, or a
+/// pitch (`0..1` across notes 0 to 127, middle C being `C4`).
+pub fn num_readout(params: &ModNumParams, value: f32) -> String {
+    match params.format {
+        NumFormat::Float => format_number(value),
+        NumFormat::Int => format!("{}", value.round() as i32),
+        NumFormat::Note => {
+            let note = (value.clamp(0.0, 1.0) * 127.0).round() as i32;
+            let name = crate::harmony::PITCH_NAMES[(note % 12) as usize].to_ascii_uppercase();
+            format!("{name}{}", note / 12 - 1)
+        }
     }
 }
 
@@ -367,6 +444,8 @@ pub fn parse(text: &str) -> Option<ModulatorParams> {
             }))
         }
         "gate" => at_most(0).map(|()| ModulatorParams::NoteGate),
+        "num" => num(&args),
+        "hold" => at_most(0).map(|()| ModulatorParams::Hold),
         "clip" => {
             at_most(2)?;
             let low = args.first().map_or(Some(-1.0), |arg| number(arg))?;
@@ -429,6 +508,40 @@ mod tests {
         assert_eq!(round_trip("lfo 2hz"), "lfo 2hz");
         assert_eq!(round_trip("env"), "env");
         assert_eq!(round_trip("random"), "random");
+        assert_eq!(round_trip("hold"), "hold");
+    }
+
+    #[test]
+    fn a_num_box_spells_its_format_and_range_and_keeps_its_value() {
+        assert_eq!(round_trip("num"), "num");
+        assert_eq!(round_trip("num 0.25"), "num", "a value is set, not spelled");
+        assert_eq!(round_trip("num int 0 16"), "num int 0 16");
+        assert_eq!(round_trip("num 0 1 float"), "num 0 1");
+        assert_eq!(round_trip("num note"), "num note");
+        assert_eq!(round_trip("num note -1 1"), "num note -1 1");
+        let value = |typed: &str| match parse(typed) {
+            Some(ModulatorParams::Num(num)) => num.value(),
+            other => panic!("{typed}: {other:?}"),
+        };
+        assert_eq!(value("num"), 0.0);
+        assert_eq!(value("num .25"), 0.25);
+        assert_eq!(value("num 2"), 1.0, "held to its range");
+        assert_eq!(value("num int 0 16 5"), 5.0);
+        assert_eq!(value("num 2 4"), 2.0, "zero is outside, so the nearest end");
+        for typed in ["num a", "num 1 2 3 4", "hold 1"] {
+            assert_eq!(parse(typed), None, "{typed:?}");
+        }
+    }
+
+    #[test]
+    fn a_num_box_reads_as_its_format() {
+        let Some(ModulatorParams::Num(note)) = parse("num note") else { panic!() };
+        assert_eq!(num_readout(&note, 60.0 / 127.0), "C4");
+        assert_eq!(num_readout(&note, 0.0), "C-1");
+        let Some(ModulatorParams::Num(int)) = parse("num int 0 16") else { panic!() };
+        assert_eq!(num_readout(&int, 3.4), "3");
+        let Some(ModulatorParams::Num(float)) = parse("num") else { panic!() };
+        assert_eq!(num_readout(&float, -0.126), "-0.13");
     }
 
     #[test]

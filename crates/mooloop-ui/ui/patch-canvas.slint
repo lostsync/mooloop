@@ -46,6 +46,9 @@ export struct PatchNodeRow {
     // knobs are `PatchView.knobs`. `empty-face` is an open box with none.
     open: bool,
     empty-face: bool,
+    // A num box's value as it reads (song patch boxes step 01), beside its
+    // spelling; empty for every other box.
+    readout: string,
 }
 
 // One knob on an open box's face, at the top-left of its cell. `value` and
@@ -329,12 +332,25 @@ export component PatchCanvas inherits Rectangle {
                     Text {
                         x: 12px;
                         y: 0;
-                        width: parent.width - 16px - 18px;
+                        width: parent.width - 16px - 18px - (node.readout != "" ? 70px : 0);
                         height: 28px;
                         text: node.spelling;
                         font-family: Theme.font-family-mono;
                         font-size: Theme.text-2xl;
                         color: node.unknown ? Theme.text-muted : Theme.text;
+                        vertical-alignment: center;
+                        overflow: elide;
+                    }
+                    if node.readout != "" : Text {
+                        x: parent.width - 20px - 70px;
+                        y: 0;
+                        width: 66px;
+                        height: 28px;
+                        text: node.readout;
+                        font-family: Theme.font-family-mono;
+                        font-size: Theme.text-2xl;
+                        color: Theme.accent;
+                        horizontal-alignment: right;
                         vertical-alignment: center;
                         overflow: elide;
                     }

@@ -272,7 +272,9 @@ impl SongModulator {
         tick
     }
 
-    /// Module `at`'s output at control tick `tick` of this block.
+    /// Module `at`'s output at control tick `tick` of this block, as a
+    /// route reads it: inside `-1..1`, though a num box's wires may carry
+    /// more.
     #[inline]
     pub(crate) fn output(&self, tick: usize, at: u16) -> f32 {
         let modules = self.set.len();
@@ -280,7 +282,7 @@ impl SongModulator {
         if at >= modules {
             return 0.0;
         }
-        self.table.get(tick * modules + at).copied().unwrap_or(0.0)
+        self.table.get(tick * modules + at).copied().unwrap_or(0.0).clamp(-1.0, 1.0)
     }
 
     /// Tag `at`'s value at control tick `tick` of this block.

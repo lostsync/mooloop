@@ -768,6 +768,11 @@ enum Source {
     /// A gate box: the notes held, and the latest NoteOn's pitch and
     /// velocity.
     NoteGate { held: u16, pitch: f32, velocity: f32 },
+    /// A num box: what it sends with nothing wired in, and how it keeps
+    /// what is.
+    Num(mooloop_core::ModNumParams),
+    /// A hold box: its `in` as of its last trigger.
+    Hold(f32),
     /// A box this build does not know. It puts out nothing.
     Silent,
 }
@@ -823,6 +828,8 @@ impl ModuleSpec {
                 pitch: 0.0,
                 velocity: 0.0,
             },
+            ModulatorParams::Num(params) => Source::Num(params),
+            ModulatorParams::Hold => Source::Hold(0.0),
             ModulatorParams::Unknown => Source::Silent,
         }
     }
@@ -1184,6 +1191,7 @@ impl ModulatorSet {
             }
             (ModulatorParams::Select(next), Source::Select(inputs)) => *inputs = next.inputs,
             (ModulatorParams::Slew(next), Source::Slew(slew)) => slew.time_seconds = next.time_seconds,
+            (ModulatorParams::Num(next), Source::Num(num)) => *num = next,
             (
                 ModulatorParams::Chord(_)
                 | ModulatorParams::Modal(_)
@@ -1193,6 +1201,7 @@ impl ModulatorSet {
                 Source::Notes(_),
             )
             | (ModulatorParams::NoteGate, Source::NoteGate { .. })
+            | (ModulatorParams::Hold, Source::Hold(_))
             | (ModulatorParams::Unknown, Source::Silent) => {}
             _ => module.source = module.spec.build(),
         }
@@ -1219,7 +1228,9 @@ impl ModulatorSet {
                 // A box by list position, then the tags.
                 let source = usize::from(knob.source);
                 let output = match source.checked_sub(self.modules.len()) {
-                    None => self.outputs.get(source).copied().unwrap_or(0.0),
+                    // A num box may send past -1..1 on its wires; a route
+                    // reads the patch's span (`docs/MODULATION.md`).
+                    None => self.outputs.get(source).copied().unwrap_or(0.0).clamp(-1.0, 1.0),
                     Some(tag) => self.tags.get(tag).map_or(0.0, |tag| tag.value),
                 };
                 offset += match knob.polarity {
@@ -1508,6 +1519,13 @@ impl ModulatorSet {
                     gate_out = Some((tick.events, [*pitch, *velocity]));
                     if *held > 0 { 1.0 } else { 0.0 }
                 }
+                Source::Num(num) => inlets[0].map_or_else(|| num.value(), |signal| num.shape(signal.value)),
+                Source::Hold(held) => {
+                    if fired[1] {
+                        *held = inlets[0].map_or(0.0, |signal| signal.value);
+                    }
+                    *held
+                }
                 Source::Silent => 0.0,
             };
             self.outputs[node] = value;
@@ -1536,6 +1554,8 @@ impl ModulatorSet {
                 | Source::Slew(_)
                 | Source::Notes(_)
                 | Source::NoteGate { .. }
+                | Source::Num(_)
+                | Source::Hold(_)
                 | Source::Silent => {}
             }
         }
@@ -2450,7 +2470,7 @@ mod tests {
         use super::super::{ModuleSpec as Spec, ModulatorSet, NoteGateEvents, SpecInlet};
         use super::NO_GATES;
         use mooloop_core::{
-            ModCounterParams, ModMathOp, ModMathParams, ModSelectParams, ModSlewParams,
+            ModCounterParams, ModLfoParams, ModMathOp, ModMathParams, ModSelectParams, ModSlewParams,
             ModulatorParams, MAX_INLETS,
         };
 
@@ -2537,6 +2557,45 @@ mod tests {
             let mut set = set(vec![constant(1.0), box_of(select, &[(0, 0)])], 0);
             set.tick(48_000, 32, 120.0, None, &NO_GATES);
             assert_eq!(set.outputs()[1], 0.0, "index 1 picks b, which nothing feeds");
+        }
+
+        #[test]
+        fn a_num_sends_its_value_until_a_wire_comes_in_then_keeps_it_in_range() {
+            let num = |typed: &str| mooloop_core::box_text::parse(typed).expect(typed);
+            let mut set = set(
+                vec![
+                    constant(0.8),
+                    box_of(num("num 0.25"), &[]),
+                    box_of(num("num 0 0.5"), &[(0, 0)]),
+                    box_of(num("num int -1 1"), &[(0, 0)]),
+                ],
+                0,
+            );
+            set.tick(48_000, 32, 120.0, None, &NO_GATES);
+            assert_eq!(&set.outputs()[1..], [0.25, 0.5, 1.0]);
+        }
+
+        #[test]
+        fn a_hold_keeps_its_input_from_the_last_trigger() {
+            // Node 2 is the gate tag; the LFO keeps moving between notes.
+            let lfo = ModulatorParams::Lfo(ModLfoParams {
+                rate_hz: 5.0,
+                ..ModLfoParams::default()
+            });
+            let mut set = set(vec![box_of(lfo, &[]), box_of(ModulatorParams::Hold, &[(0, 0), (1, 2)])], 1);
+            set.tick(48_000, 32, 120.0, None, &NO_GATES);
+            assert_eq!(set.outputs()[1], 0.0, "nothing held before a trigger");
+            for _ in 0..20 {
+                set.tick(48_000, 32, 120.0, None, &NO_GATES);
+            }
+            set.tick(48_000, 32, 120.0, None, &note_on());
+            let held = set.outputs()[1];
+            assert_eq!(held, set.outputs()[0]);
+            for _ in 0..50 {
+                set.tick(48_000, 32, 120.0, None, &NO_GATES);
+            }
+            assert_ne!(set.outputs()[0], held, "the LFO moved on");
+            assert_eq!(set.outputs()[1], held, "the hold did not");
         }
 
         #[test]
