@@ -103,6 +103,7 @@ const TRANSPOSE_IN: &[Port] = &[note("notes"), control("semitones")];
 const CHANCE_IN: &[Port] = &[note("notes"), control("probability")];
 const NUM_IN: &[Port] = &[control("in")];
 const HOLD_IN: &[Port] = &[control("in"), control("trigger")];
+const TABLE_IN: &[Port] = &[control("index"), control("value"), control("write")];
 /// A gate box's outlets: the gate, as a gate tag's (step 06), then the
 /// latest NoteOn's pitch and velocity.
 const GATE_OUT: &[Port] = &[control("gate"), control("pitch"), control("velocity")];
@@ -165,6 +166,10 @@ impl ModulatorKind {
             },
             Self::Hold => Ports {
                 inlets: HOLD_IN,
+                outlets: OUT,
+            },
+            Self::Table => Ports {
+                inlets: TABLE_IN,
                 outlets: OUT,
             },
             Self::Unknown => Ports {

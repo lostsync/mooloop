@@ -92,6 +92,22 @@ export struct PatchJackRow {
     refused: bool,
 }
 
+// A Step's steps or a table's values, drawn as bars under its knobs (song
+// patch boxes step 02). `values` are `-1..1` (`0..1` drawn from the floor
+// when not `bipolar`); bar `i` is setting `base + i` of box `module`;
+// `playing` is the bar the box reads now.
+export struct PatchBarsRow {
+    x: length,
+    y: length,
+    width: length,
+    height: length,
+    module: int,
+    base: int,
+    values: [float],
+    bipolar: bool,
+    playing: int,
+}
+
 export struct PatchWireRow {
     // SVG path commands in canvas units, corners rounded.
     d: string,
@@ -175,6 +191,12 @@ export global PatchView {
     callback knob-depth-started();
     callback knob-depth-changed(int, int, float);
     callback knob-depth-finished();
+    in property <[PatchBarsRow]> bars;
+    // A stroke across the bars: pressed, each bar it sets (module, setting,
+    // value `-1..1`), released.
+    callback bars-started();
+    callback bars-drawn(int, int, float);
+    callback bars-finished();
 }
 
 global PatchColors {
@@ -523,6 +545,65 @@ export component PatchCanvas inherits Rectangle {
                     font-size: Theme.text-xs;
                     horizontal-alignment: center;
                     overflow: elide;
+                }
+            }
+
+            // The bars of every open Step and table, drawn by dragging across
+            // them, over the canvas's pointer as the knobs are.
+            for bars in PatchView.bars : Rectangle {
+                x: bars.x;
+                y: bars.y;
+                width: bars.width;
+                height: bars.height;
+                background: Theme.panel;
+                border-radius: Theme.radius-sm;
+                clip: true;
+                property <length> slot: self.width / max(1, bars.values.length);
+                property <length> zero: bars.bipolar ? self.height / 2 : self.height;
+                if bars.bipolar : Rectangle {
+                    y: parent.zero;
+                    height: 1px;
+                    background: PatchColors.edge;
+                }
+                for value[index] in bars.values : Rectangle {
+                    property <float> shown: bars.bipolar ? clamp(value, -1, 1) : clamp(value, 0, 1);
+                    property <length> reach: bars.bipolar ? abs(self.shown) * parent.height / 2 : self.shown * parent.height;
+                    x: index * parent.slot + 1px;
+                    width: max(1px, parent.slot - 2px);
+                    y: self.shown >= 0 ? parent.zero - self.reach : parent.zero;
+                    height: max(1px, self.reach);
+                    background: index == bars.playing ? Theme.accent : Theme.accent.transparentize(0.55);
+                }
+                bar-touch := TouchArea {
+                    mouse-cursor: crosshair;
+                    property <bool> drawing;
+                    function draw() {
+                        if bars.values.length == 0 {
+                            return;
+                        }
+                        let index = clamp(floor(self.mouse-x / parent.slot), 0, bars.values.length - 1);
+                        let height = clamp(1 - self.mouse-y / self.height, 0, 1);
+                        PatchView.bars-drawn(bars.module, bars.base + index,
+                            bars.bipolar ? height * 2 - 1 : height);
+                    }
+                    pointer-event(event) => {
+                        if event.button != PointerEventButton.left {
+                            return;
+                        }
+                        if event.kind == PointerEventKind.down {
+                            self.drawing = true;
+                            PatchView.bars-started();
+                            self.draw();
+                        } else if event.kind == PointerEventKind.up && self.drawing {
+                            self.drawing = false;
+                            PatchView.bars-finished();
+                        }
+                    }
+                    moved => {
+                        if self.drawing {
+                            self.draw();
+                        }
+                    }
                 }
             }
 

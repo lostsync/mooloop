@@ -16,7 +16,7 @@ use crate::modulation::{
     ModChanceParams, ModChordParams, ModModalParams, ModScaleParams, ModTransposeParams,
     TRANSPOSE_MAX_SEMITONES, ModCounterParams, ModLfoParams, ModLfoWaveform, ModMathOp, ModMathParams, ModSelectParams,
     ModNumParams, ModSlewParams, ModStepParams, ModTimeDivision, ModulatorKind, ModulatorParams,
-    NumFormat, COUNTER_MAX_STEPS, MOD_STEP_MAX_STEPS, NUM_LIMIT, SELECT_MAX_INPUTS,
+    ModTableParams, NumFormat, COUNTER_MAX_STEPS, TABLE_MAX_VALUES, MOD_STEP_MAX_STEPS, NUM_LIMIT, SELECT_MAX_INPUTS,
 };
 
 /// One name a box can be typed as, and the line the completion list shows
@@ -33,16 +33,17 @@ const fn word(name: &'static str, says: &'static str) -> Word {
 
 /// The boxes, the control boxes then the note boxes, as the completion
 /// list offers them.
-pub const VOCABULARY: [Word; 22] = [
+pub const VOCABULARY: [Word; 23] = [
     word("lfo", "Periodic movement. lfo tri 1/4"),
     word("env", "Attack, decay, sustain, release from a gate."),
-    word("step", "A row of values, one per advance. step 4"),
+    word("step", "A row of values, one per advance. step 8 uni"),
     word("random", "A new value on each trigger."),
     word("counter", "Counts advances and wraps at n. counter 4"),
     word("select", "Passes one of n inputs, picked by index. select 4"),
     word("slew", "Smooths jumps over time. slew 0.2"),
     word("num", "Shows a value, or sends one. num int 0 16"),
     word("hold", "Keeps its input from the last trigger."),
+    word("table", "Stores n values, read and written by index. table 8"),
     word("+", "Adds. + 0.5"),
     word("-", "Subtracts. - 0.5"),
     word("*", "Multiplies. * -0.5 inverts and halves"),
@@ -199,10 +200,17 @@ pub fn spell(params: &ModulatorParams, text: &str) -> String {
             spelled
         }
         ModulatorParams::Envelope(_) => "env".into(),
-        ModulatorParams::Step(step) if step.length != ModStepParams::default().length => {
-            format!("step {}", step.length)
+        ModulatorParams::Step(step) => {
+            let mut spelled = String::from("step");
+            if step.length != ModStepParams::default().length {
+                spelled.push_str(&format!(" {}", step.length));
+            }
+            if step.unipolar {
+                spelled.push_str(" uni");
+            }
+            spelled
         }
-        ModulatorParams::Step(_) => "step".into(),
+        ModulatorParams::Table(table) => format!("table {}", table.length()),
         ModulatorParams::Random(_) => "random".into(),
         ModulatorParams::Math(math) => {
             let name = ARITHMETIC
@@ -379,10 +387,27 @@ pub fn parse(text: &str) -> Option<ModulatorParams> {
         "env" => at_most(0).map(|()| ModulatorKind::Envelope.default_params()),
         "random" => at_most(0).map(|()| ModulatorKind::Random.default_params()),
         "step" => {
-            at_most(1)?;
+            at_most(2)?;
             let mut step = ModStepParams::default();
-            step.length = count(args.first().copied(), step.length, 1, MOD_STEP_MAX_STEPS as u8)?;
+            let mut length = None;
+            for arg in &args {
+                match arg.to_ascii_lowercase().as_str() {
+                    "uni" => step.unipolar = true,
+                    "bi" => step.unipolar = false,
+                    _ if length.is_none() => length = Some(*arg),
+                    _ => return None,
+                }
+            }
+            step.length = count(length, step.length, 1, MOD_STEP_MAX_STEPS as u8)?;
             Some(ModulatorParams::Step(step))
+        }
+        "table" => {
+            at_most(1)?;
+            let length = count(args.first().copied(), 8, 2, TABLE_MAX_VALUES as u8)?;
+            Some(ModulatorParams::Table(ModTableParams {
+                length,
+                ..ModTableParams::default()
+            }))
         }
         "counter" => {
             at_most(1)?;
@@ -509,6 +534,14 @@ mod tests {
         assert_eq!(round_trip("env"), "env");
         assert_eq!(round_trip("random"), "random");
         assert_eq!(round_trip("hold"), "hold");
+        assert_eq!(round_trip("step 8 uni"), "step uni");
+        assert_eq!(round_trip("step bi 4"), "step 4");
+        assert_eq!(round_trip("step uni 12"), "step 12 uni");
+        assert_eq!(round_trip("table"), "table 8");
+        assert_eq!(round_trip("table 40"), "table 16", "held to its range");
+        for typed in ["step 4 4", "step uni uni uni", "table a"] {
+            assert_eq!(parse(typed), None, "{typed:?}");
+        }
     }
 
     #[test]

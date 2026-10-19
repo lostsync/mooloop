@@ -763,6 +763,9 @@ impl PlayheadMeters {
 /// overwritten unseen -- the audio thread should not pay to store them.
 pub struct ModulatorMeters {
     modules: Vec<AtomicU32>,
+    /// Where each module is reading: a Step's step, a table's slot
+    /// (`ModulatorSet::position`), which their faces light.
+    positions: Vec<AtomicU32>,
     /// Each tag's count of NoteOns, in tag order, and its value: the patch
     /// canvas's cables show both.
     tags: Vec<AtomicU32>,
@@ -785,6 +788,7 @@ impl ModulatorMeters {
         };
         Arc::new(Self {
             modules: cells(MAX_METERED_MODULES),
+            positions: (0..MAX_METERED_MODULES).map(|_| AtomicU32::new(0)).collect(),
             tags: cells(MAX_METERED_MODULES),
             tag_values: cells(MAX_METERED_MODULES),
             channels: cells(MAX_CHANNELS * CHANNEL_SOURCES),
@@ -797,6 +801,22 @@ impl ModulatorMeters {
         for (cell, value) in self.modules.iter().zip(outputs) {
             cell.store(value.to_bits(), Ordering::Relaxed);
         }
+    }
+
+    /// Publish where every module is reading, in list order. Called on the
+    /// audio thread, once per block.
+    pub fn publish_positions(&self, positions: impl Iterator<Item = u16>) {
+        for (cell, position) in self.positions.iter().zip(positions) {
+            cell.store(u32::from(position), Ordering::Relaxed);
+        }
+    }
+
+    /// Where the module at list position `at` is reading. Called on the GUI
+    /// thread.
+    pub fn position(&self, at: usize) -> u16 {
+        self.positions
+            .get(at)
+            .map_or(0, |cell| cell.load(Ordering::Relaxed) as u16)
     }
 
     /// Publish every tag's NoteOn count and value, in tag order. Called on

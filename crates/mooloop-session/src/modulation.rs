@@ -71,6 +71,9 @@ pub struct ModulationLevels {
     /// Each tag's count of NoteOns and value, in the set last sent's tag
     /// order.
     pub tags: Vec<(u32, f32)>,
+    /// Where each module is reading, in list order: a Step's step, a
+    /// table's slot (song patch boxes step 02).
+    pub positions: Vec<u16>,
 }
 
 impl ModulationLevels {
@@ -252,6 +255,31 @@ impl Session {
             *value = next;
         }
         moved
+    }
+
+    /// Read where every module is reading off the engine (`position` for a
+    /// list position in the set last sent). Returns whether any moved,
+    /// which is when a Step's or a table's face needs redrawing.
+    pub fn read_modulation_positions(&self, position: impl Fn(usize) -> u16) -> bool {
+        let mut levels = self.modulation_levels.borrow_mut();
+        let modules = self.modulation_sent.modules.len();
+        let mut moved = levels.positions.len() != modules;
+        levels.positions.resize(modules, 0);
+        for (at, value) in levels.positions.iter_mut().enumerate() {
+            let next = position(at);
+            moved |= *value != next;
+            *value = next;
+        }
+        moved
+    }
+
+    /// Where box `node` is reading as of the last read: a Step's playing
+    /// step, a table's slot; 0 for any other.
+    pub fn patch_box_position(&self, node: ModSourceId) -> u16 {
+        self.modulation_sent
+            .position_of(node)
+            .and_then(|at| self.modulation_levels.borrow().positions.get(at).copied())
+            .unwrap_or(0)
     }
 
     /// What patch node `node` is putting on its outlet as of the last read:

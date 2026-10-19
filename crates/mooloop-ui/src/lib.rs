@@ -6309,6 +6309,7 @@ impl UiState {
                     | ModulatorParams::NoteGate
                     | ModulatorParams::Num(_)
                     | ModulatorParams::Hold
+                    | ModulatorParams::Table(_)
                     | ModulatorParams::Unknown => {}
                 }
                 row
@@ -18952,7 +18953,7 @@ impl AppUi {
                         |at| handle.module_output(at),
                         |seat| handle.channel_sources(seat),
                         |at| handle.tag_activity(at),
-                    );
+                    ) | state.session.read_modulation_positions(|at| handle.module_position(at));
                     // Once the outputs stop moving, the meters and the arcs
                     // are already where they belong, so neither is worth a
                     // model write.

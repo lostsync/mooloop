@@ -10551,6 +10551,7 @@ impl RenderState {
         }
         if ticks > 0 {
             self.modulator_meters.publish_modules(self.song_modulation.outputs());
+            self.modulator_meters.publish_positions(self.song_modulation.positions());
             self.modulator_meters.publish_tags(self.song_modulation.tag_activity());
         }
         // Lanes resolve whether or not the transport is running: stopped, the
@@ -15138,6 +15139,7 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
             glide: 0.3,
             length: 7,
             steps: core::array::from_fn(|step| step as f32 / 10.0 - 0.6),
+            unipolar: false,
         });
         let random = ModulatorParams::Random(ModRandomParams {
             trigger: ModRandomTrigger::Clock,

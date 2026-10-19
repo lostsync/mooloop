@@ -395,7 +395,7 @@ impl StepSequencer {
             .get(self.step)
             .copied()
             .unwrap_or(0.0)
-            .clamp(-1.0, 1.0)
+            .clamp(if self.params.unipolar { 0.0 } else { -1.0 }, 1.0)
     }
 
     fn step_seconds(&self, bpm: f64) -> f32 {
@@ -773,6 +773,13 @@ enum Source {
     Num(mooloop_core::ModNumParams),
     /// A hold box: its `in` as of its last trigger.
     Hold(f32),
+    /// A table box: its values as drawn, what it holds now (drawn, then
+    /// written by its wire), and the slot it read last.
+    Table {
+        drawn: mooloop_core::ModTableParams,
+        values: [f32; mooloop_core::TABLE_MAX_VALUES],
+        slot: u8,
+    },
     /// A box this build does not know. It puts out nothing.
     Silent,
 }
@@ -830,6 +837,11 @@ impl ModuleSpec {
             },
             ModulatorParams::Num(params) => Source::Num(params),
             ModulatorParams::Hold => Source::Hold(0.0),
+            ModulatorParams::Table(params) => Source::Table {
+                drawn: params,
+                values: params.values,
+                slot: 0,
+            },
             ModulatorParams::Unknown => Source::Silent,
         }
     }
@@ -1192,6 +1204,16 @@ impl ModulatorSet {
             (ModulatorParams::Select(next), Source::Select(inputs)) => *inputs = next.inputs,
             (ModulatorParams::Slew(next), Source::Slew(slew)) => slew.time_seconds = next.time_seconds,
             (ModulatorParams::Num(next), Source::Num(num)) => *num = next,
+            // A value drawn anew replaces what a wire wrote there; the rest
+            // keep what was written.
+            (ModulatorParams::Table(next), Source::Table { drawn, values, .. }) => {
+                for (at, value) in values.iter_mut().enumerate() {
+                    if next.values[at] != drawn.values[at] {
+                        *value = next.values[at];
+                    }
+                }
+                *drawn = next;
+            }
             (
                 ModulatorParams::Chord(_)
                 | ModulatorParams::Modal(_)
@@ -1312,6 +1334,16 @@ impl ModulatorSet {
     /// Current `-1..1` output of every module, in list order.
     pub fn outputs(&self) -> &[f32] {
         &self.outputs
+    }
+
+    /// Where module `at` is reading, for its face to light: a Step's
+    /// playing step, a table's slot; 0 for every other box.
+    pub fn position(&self, at: usize) -> u16 {
+        match self.modules.get(at).map(|module| &module.source) {
+            Some(Source::Step(sequencer)) => sequencer.step as u16,
+            Some(Source::Table { slot, .. }) => u16::from(*slot),
+            _ => 0,
+        }
     }
 
     /// Each tag, in tag order: how many NoteOns it has passed, wrapping,
@@ -1526,6 +1558,15 @@ impl ModulatorSet {
                     }
                     *held
                 }
+                Source::Table { drawn, values, slot } => {
+                    let at = drawn.slot(inlets[0].map_or(0.0, |signal| signal.value));
+                    if fired[2] {
+                        let written = inlets[1].map_or(0.0, |signal| signal.value);
+                        values[at] = if written.is_finite() { written } else { 0.0 };
+                    }
+                    *slot = at as u8;
+                    values[at]
+                }
                 Source::Silent => 0.0,
             };
             self.outputs[node] = value;
@@ -1556,6 +1597,7 @@ impl ModulatorSet {
                 | Source::NoteGate { .. }
                 | Source::Num(_)
                 | Source::Hold(_)
+                | Source::Table { .. }
                 | Source::Silent => {}
             }
         }
@@ -2596,6 +2638,46 @@ mod tests {
             }
             assert_ne!(set.outputs()[0], held, "the LFO moved on");
             assert_eq!(set.outputs()[1], held, "the hold did not");
+        }
+
+        #[test]
+        fn a_table_reads_what_was_drawn_and_keeps_what_a_wire_writes() {
+            let mut table = mooloop_core::ModTableParams { length: 4, ..Default::default() };
+            table.values[3] = 0.5;
+            // Index 1.0 is the last of four slots; node 3 is the gate tag
+            // that writes.
+            let mut set = set(
+                vec![
+                    constant(1.0),
+                    constant(-0.25),
+                    box_of(ModulatorParams::Table(table), &[(0, 0), (1, 1), (2, 3)]),
+                ],
+                1,
+            );
+            set.tick(48_000, 32, 120.0, None, &NO_GATES);
+            assert_eq!(set.outputs()[2], 0.5, "as drawn");
+            assert_eq!(set.position(2), 3);
+            set.tick(48_000, 32, 120.0, None, &note_on());
+            assert_eq!(set.outputs()[2], -0.25, "written");
+            set.tick(48_000, 32, 120.0, None, &NO_GATES);
+            assert_eq!(set.outputs()[2], -0.25, "and kept");
+        }
+
+        #[test]
+        fn a_unipolar_step_plays_below_zero_as_zero() {
+            let mut steps = [0.0; mooloop_core::MOD_STEP_MAX_STEPS];
+            steps[0] = -0.5;
+            let step = |unipolar| {
+                ModulatorParams::Step(mooloop_core::ModStepParams {
+                    steps,
+                    length: 1,
+                    unipolar,
+                    ..Default::default()
+                })
+            };
+            let mut set = set(vec![box_of(step(false), &[]), box_of(step(true), &[])], 0);
+            set.tick(48_000, 32, 120.0, None, &NO_GATES);
+            assert_eq!(set.outputs(), [-0.5, 0.0]);
         }
 
         #[test]
