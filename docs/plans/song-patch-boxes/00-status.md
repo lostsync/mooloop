@@ -36,3 +36,19 @@ from the step file:
   (`CompiledModulation::offset_for`).
 - The format is a stepped knob on the face (float, int, note); low and high
   are typed only.
+
+**02 (MOO-534).** A Step's steps and a table's values are bars on the open
+face (`patch_face::bars`, `PatchBarsRow`), drawn by dragging, one undo step
+per stroke; the playing step or the slot read is lit from a new per-module
+position the engine publishes (`ModulatorSet::position`,
+`ModulatorMeters::publish_positions`, `Session::read_modulation_positions`).
+The Step's sixteen value knobs left its face. Where it differs from the
+step file:
+
+- **Unipolar is a switch, not a rescale** (`STEP_PARAM_UNIPOLAR`, id 20,
+  after the value block). Steps keep `-1..1` storage; unipolar plays a
+  negative step as zero and draws `0..1` from the floor, so switching back
+  loses nothing.
+- **A table's wire writes are not saved.** Only drawn values are params; a
+  write is runtime state, as a counter's count is. Drawing a value again
+  replaces what a wire wrote there.

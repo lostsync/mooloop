@@ -311,6 +311,12 @@ impl SongModulator {
         self.set.outputs()
     }
 
+    /// Where every module is reading, in list order: a Step's step, a
+    /// table's slot, 0 for the rest.
+    pub(crate) fn positions(&self) -> impl Iterator<Item = u16> + '_ {
+        (0..self.set.len()).map(|at| self.set.position(at))
+    }
+
     /// Each tag's NoteOn count and value, in tag order. A notes tag's
     /// count is the notes the note pass ran through it, and its value how
     /// many a notes-out tag has refused.

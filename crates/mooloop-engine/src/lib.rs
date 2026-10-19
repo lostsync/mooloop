@@ -2552,6 +2552,12 @@ impl EngineHandle {
         self.shared.modulator_meters.module(at)
     }
 
+    /// Where the song's module `at` (in list order) is reading as of the
+    /// last block: a Step's step, a table's slot.
+    pub fn module_position(&self, at: usize) -> u16 {
+        self.shared.modulator_meters.position(at)
+    }
+
     /// How many NoteOns the patch's tag `at` (in tag order) has passed, as
     /// of the last block, wrapping, and the value it put out.
     pub fn tag_activity(&self, at: usize) -> (u32, f32) {

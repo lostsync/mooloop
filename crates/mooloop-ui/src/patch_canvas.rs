@@ -41,6 +41,10 @@ pub(crate) const FOLD_WIDTH: f32 = 18.0;
 /// Room a num box keeps beside its spelling for the value it shows
 /// (`PatchNodeRow::readout`).
 pub(crate) const READOUT_WIDTH: f32 = 70.0;
+/// A Step's or a table's bars under its knobs (song patch boxes step 02):
+/// their height, and the least width a bar is drawn at.
+pub(crate) const BARS_HEIGHT: f32 = 72.0;
+const BAR_WIDTH: f32 = 14.0;
 /// How far from a jack a press still takes it.
 const JACK_REACH: f32 = 8.0;
 /// How far from a wire a press still selects it.
@@ -128,6 +132,9 @@ pub(crate) enum Face {
         unknown: bool,
         open: bool,
         knobs: Vec<FaceKnob>,
+        /// Where its bars are drawn when it is open and has them: x, y,
+        /// width and height on the canvas.
+        bars: Option<(f32, f32, f32, f32)>,
     },
     /// A tag: an arrow pointing right (a source, its outlet at the point) or
     /// left (a sink, its inlet at the point).
@@ -335,6 +342,11 @@ pub(crate) fn lay_out(
             _ => 8,
         };
         let rows = params.len().div_ceil(columns.max(1));
+        let bars = module
+            .open
+            .then(|| crate::patch_face::bars(&module.params))
+            .flatten()
+            .map(|bars| bars.values.len());
         let readout = if matches!(module.params, ModulatorParams::Num(_)) {
             READOUT_WIDTH
         } else {
@@ -343,12 +355,15 @@ pub(crate) fn lay_out(
         let width = (26.0 + text_width(&spelling, MONO_CHAR) + FOLD_WIDTH + readout)
             .max(64.0)
             .max(jacks * 24.0)
-            .max(columns as f32 * CELL_WIDTH + 2.0 * FACE_PAD);
-        let height = match (module.open, rows) {
+            .max(columns as f32 * CELL_WIDTH + 2.0 * FACE_PAD)
+            .max(bars.map_or(0.0, |count| count as f32 * BAR_WIDTH + 2.0 * FACE_PAD));
+        let knobs_height = match (module.open, rows) {
             (false, _) => BOX_HEIGHT,
-            (true, 0) => BOX_HEIGHT + EMPTY_FACE,
+            (true, 0) if bars.is_none() => BOX_HEIGHT + EMPTY_FACE,
             (true, rows) => BOX_HEIGHT + rows as f32 * CELL_HEIGHT + FACE_PAD,
         };
+        let bars = bars.map(|_| (x + FACE_PAD, y + knobs_height, width - 2.0 * FACE_PAD, BARS_HEIGHT));
+        let height = knobs_height + bars.map_or(0.0, |_| BARS_HEIGHT + FACE_PAD);
         let knobs = params
             .into_iter()
             .enumerate()
@@ -369,6 +384,7 @@ pub(crate) fn lay_out(
                 unknown,
                 open: module.open,
                 knobs,
+                bars,
             },
             inlets: ports.inlets.to_vec(),
             outlets: ports.outlets.to_vec(),
@@ -1565,6 +1581,7 @@ impl UiState {
         let mut nodes = Vec::with_capacity(layout.nodes.len());
         let mut jacks = Vec::new();
         let mut knobs = Vec::new();
+        let mut bar_rows = Vec::new();
         for node in &layout.nodes {
             let selected = canvas.selected.contains(&node.key);
             let source = match node.key {
@@ -1605,12 +1622,16 @@ impl UiState {
                     unknown,
                     open,
                     knobs: face,
+                    bars: place,
                 } => {
                     row.is_box = true;
                     row.spelling = spelling.into();
                     row.unknown = *unknown;
                     row.open = *open;
                     row.empty_face = *open && face.is_empty();
+                    if let (NodeKey::Node(id), Some(place)) = (node.key, place) {
+                        bar_rows.extend(self.bars_row(id, *place));
+                    }
                     if let NodeKey::Node(id) = node.key {
                         row.readout = self.readout(id).unwrap_or_default().into();
                         knobs.extend(face.iter().filter_map(|knob| self.face_knob_row(id, *knob)));
@@ -1686,6 +1707,7 @@ impl UiState {
         // In place when the faces on show are the same knobs, so a knob
         // being dragged is not rebuilt under the pointer.
         patch.set_knobs(crate::models::rows_in_place(Some(patch.get_knobs()), knobs));
+        patch.set_bars(crate::models::rows_in_place(Some(patch.get_bars()), bar_rows));
         patch.set_jacks(ModelRc::new(VecModel::from(jacks)));
         patch.set_wires(ModelRc::new(VecModel::from(wires)));
         patch.set_canvas_width(layout.width);
@@ -1785,6 +1807,7 @@ impl UiState {
         flashing.set(false);
         self.refresh_refusals(window);
         self.refresh_readouts(window);
+        self.refresh_bars(window);
         if window.global::<crate::DisplayPrefs>().get_cable_activity() == 0 {
             return;
         }
@@ -1814,6 +1837,43 @@ impl UiState {
             flashing.set(flashing.get() || row.flash > 0);
             if changed {
                 wires.set_row_data(index, row);
+            }
+        }
+    }
+
+    /// Box `id`'s bars, placed at `place` (x, y, width, height).
+    fn bars_row(&self, id: ModSourceId, place: (f32, f32, f32, f32)) -> Option<crate::PatchBarsRow> {
+        let module = self.session.modulation.module(id)?;
+        let bars = crate::patch_face::bars(&module.params)?;
+        let (x, y, width, height) = place;
+        Some(crate::PatchBarsRow {
+            x,
+            y,
+            width,
+            height,
+            module: id.0 as i32,
+            base: bars.base as i32,
+            values: ModelRc::new(VecModel::from(bars.values)),
+            bipolar: bars.bipolar,
+            playing: i32::from(self.session.patch_box_position(id)),
+        })
+    }
+
+    /// The step each Step plays and the slot each table reads, where it
+    /// moved.
+    fn refresh_bars(&self, window: &MainWindow) {
+        let bars = window.global::<crate::PatchView>().get_bars();
+        for index in 0..bars.row_count() {
+            let Some(mut row) = bars.row_data(index) else {
+                continue;
+            };
+            let Ok(id) = u32::try_from(row.module).map(ModSourceId) else {
+                continue;
+            };
+            let playing = i32::from(self.session.patch_box_position(id));
+            if row.playing != playing {
+                row.playing = playing;
+                bars.set_row_data(index, row);
             }
         }
     }
@@ -2542,6 +2602,55 @@ pub(crate) fn wire(
                 .and_then(|typing| typing.words().get(index as usize).copied());
             if let Some(word) = word {
                 commit_typing(&st, &commands, &window, word.name);
+            }
+        });
+    }
+    {
+        let st = state.clone();
+        let weak = window.as_weak();
+        patch.on_bars_started(move || {
+            let Some(window) = weak.upgrade() else { return };
+            st.borrow_mut().begin_gesture(&window);
+        });
+    }
+    {
+        let st = state.clone();
+        let commands = commands.clone();
+        let weak = window.as_weak();
+        // One bar drawn: its setting, `-1..1`. A stroke across many is one
+        // undo step, held open from press to release.
+        patch.on_bars_drawn(move |module, param, value| {
+            let (Some(window), Ok(module), Ok(param)) =
+                (weak.upgrade(), u32::try_from(module), u32::try_from(param))
+            else {
+                return;
+            };
+            let id = ModSourceId(module);
+            with_gesture_history(&st, &commands, &window, "Bars drawn", || {
+                let mut state = st.borrow_mut();
+                let unchanged = state
+                    .session
+                    .modulation
+                    .module(id)
+                    .and_then(|module| module.params.get(param))
+                    .is_some_and(|held| (held - value).abs() < 1.0e-4);
+                if unchanged || !state.session.set_patch_box_param(id, param, value.clamp(-1.0, 1.0)) {
+                    return false;
+                }
+                state.modulation_edited(&window);
+                true
+            });
+        });
+    }
+    {
+        let st = state.clone();
+        let commands = commands.clone();
+        let weak = window.as_weak();
+        patch.on_bars_finished(move || {
+            let Some(window) = weak.upgrade() else { return };
+            let before = st.borrow_mut().session.finish_gesture();
+            if let Some(before) = before {
+                record_project_history(&commands, before, &st, &window, "Bars drawn");
             }
         });
     }

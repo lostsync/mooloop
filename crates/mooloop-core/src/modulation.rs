@@ -824,6 +824,9 @@ pub const STEP_PARAM_DIVISION: u32 = 1;
 pub const STEP_PARAM_GLIDE: u32 = 2;
 pub const STEP_PARAM_TRIGGER: u32 = 3;
 pub const STEP_PARAM_VALUE_BASE: u32 = 4;
+/// Whether the steps run `0..1` rather than `-1..1` (song patch boxes step
+/// 02); after the value block, so the block's ids stay where they were.
+pub const STEP_PARAM_UNIPOLAR: u32 = STEP_PARAM_VALUE_BASE + MOD_STEP_MAX_STEPS as u32;
 
 /// The step-value block as an index into [`ModStepParams::steps`].
 pub const fn step_value_index(id: u32) -> Option<usize> {
@@ -1073,7 +1076,7 @@ const STEP_VALUE_NAMES: [&str; MOD_STEP_MAX_STEPS] = [
 /// A fresh pattern is flat: every step rests at zero, so adding a sequencer
 /// changes nothing until it is drawn. Descriptor defaults and
 /// `ModStepParams::default` are the same statement, pinned by a test.
-pub const STEP_DESCRIPTORS: [ParamDescriptor; 4 + MOD_STEP_MAX_STEPS] = {
+pub const STEP_DESCRIPTORS: [ParamDescriptor; 5 + MOD_STEP_MAX_STEPS] = {
     let mut table = [ParamDescriptor {
         id: 0,
         name: "",
@@ -1082,7 +1085,7 @@ pub const STEP_DESCRIPTORS: [ParamDescriptor; 4 + MOD_STEP_MAX_STEPS] = {
         max: 1.0,
         curve: ParamCurve::Linear,
         default: 0.0,
-    }; 4 + MOD_STEP_MAX_STEPS];
+    }; 5 + MOD_STEP_MAX_STEPS];
     table[0] = ParamDescriptor {
         id: STEP_PARAM_LENGTH,
         name: "Length",
@@ -1119,6 +1122,54 @@ pub const STEP_DESCRIPTORS: [ParamDescriptor; 4 + MOD_STEP_MAX_STEPS] = {
             curve: ParamCurve::Linear,
             default: 0.0,
         };
+        index += 1;
+    }
+    table[4 + MOD_STEP_MAX_STEPS] = toggle(STEP_PARAM_UNIPOLAR, "Unipolar");
+    table
+};
+
+/// The most values a table box holds.
+pub const TABLE_MAX_VALUES: usize = MOD_STEP_MAX_STEPS;
+/// A table's length, then its values as one block, as the Step's are.
+pub const TABLE_PARAM_LENGTH: u32 = 0;
+pub const TABLE_PARAM_VALUE_BASE: u32 = 1;
+
+/// The table's value block as an index into [`ModTableParams::values`].
+pub const fn table_value_index(id: u32) -> Option<usize> {
+    match id.checked_sub(TABLE_PARAM_VALUE_BASE) {
+        Some(offset) if (offset as usize) < TABLE_MAX_VALUES => Some(offset as usize),
+        _ => None,
+    }
+}
+
+const TABLE_VALUE_NAMES: [&str; TABLE_MAX_VALUES] = [
+    "Value 1", "Value 2", "Value 3", "Value 4", "Value 5", "Value 6", "Value 7", "Value 8",
+    "Value 9", "Value 10", "Value 11", "Value 12", "Value 13", "Value 14", "Value 15", "Value 16",
+];
+
+pub const TABLE_DESCRIPTORS: [ParamDescriptor; 1 + TABLE_MAX_VALUES] = {
+    let mut table = [ParamDescriptor {
+        id: 0,
+        name: "",
+        unit: "",
+        min: -1.0,
+        max: 1.0,
+        curve: ParamCurve::Linear,
+        default: 0.0,
+    }; 1 + TABLE_MAX_VALUES];
+    table[0] = ParamDescriptor {
+        id: TABLE_PARAM_LENGTH,
+        name: "Length",
+        unit: "",
+        min: 2.0,
+        max: TABLE_MAX_VALUES as f32,
+        curve: ParamCurve::Stepped(TABLE_MAX_VALUES as u16 - 1),
+        default: 8.0,
+    };
+    let mut index = 0;
+    while index < TABLE_MAX_VALUES {
+        table[1 + index].id = TABLE_PARAM_VALUE_BASE + index as u32;
+        table[1 + index].name = TABLE_VALUE_NAMES[index];
         index += 1;
     }
     table
@@ -1449,6 +1500,9 @@ pub struct ModStepParams {
     /// hard staircase a stepped source is expected to make.
     pub glide: f32,
     pub trigger: ModStepTrigger,
+    /// Steps run `0..1`, drawn up from the floor, rather than `-1..1`
+    /// round the middle. A step held below zero plays as zero.
+    pub unipolar: bool,
 }
 
 impl Default for ModStepParams {
@@ -1459,7 +1513,41 @@ impl Default for ModStepParams {
             division: ModTimeDivision::Sixteenth,
             glide: 0.0,
             trigger: ModStepTrigger::Clock,
+            unipolar: false,
         }
+    }
+}
+
+/// n stored values (song patch boxes step 02): read at `index`, written at
+/// `index` with `value` on each `write`. What is drawn on its face is saved;
+/// what a wire writes lasts until the song is played from a fresh set.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct ModTableParams {
+    pub values: [f32; TABLE_MAX_VALUES],
+    /// Values in use, `2..=16`.
+    pub length: u8,
+}
+
+impl Default for ModTableParams {
+    fn default() -> Self {
+        Self {
+            values: [0.0; TABLE_MAX_VALUES],
+            length: 8,
+        }
+    }
+}
+
+impl ModTableParams {
+    pub fn length(&self) -> usize {
+        usize::from(self.length).clamp(2, TABLE_MAX_VALUES)
+    }
+
+    /// The slot `index` names, `0..1` across the length.
+    pub fn slot(&self, index: f32) -> usize {
+        let last = self.length() - 1;
+        let index = if index.is_finite() { index.clamp(0.0, 1.0) } else { 0.0 };
+        (index * last as f32).round() as usize
     }
 }
 
@@ -1739,6 +1827,8 @@ pub enum ModulatorParams {
     Num(ModNumParams),
     /// Keeps its `in` as of its last trigger.
     Hold,
+    /// n stored values.
+    Table(ModTableParams),
     /// A box whose name this build does not know: typed, or saved by a
     /// later build. It keeps its text ([`SongModule::text`]), has no jacks,
     /// and puts out nothing.
@@ -1764,6 +1854,7 @@ impl ModulatorParams {
             Self::NoteGate => ModulatorKind::NoteGate,
             Self::Num(_) => ModulatorKind::Num,
             Self::Hold => ModulatorKind::Hold,
+            Self::Table(_) => ModulatorKind::Table,
             Self::Unknown => ModulatorKind::Unknown,
         }
     }
@@ -1806,6 +1897,7 @@ impl ModulatorParams {
                 STEP_PARAM_DIVISION => p.division.to_index() as f32,
                 STEP_PARAM_GLIDE => p.glide,
                 STEP_PARAM_TRIGGER => p.trigger.to_index() as f32,
+                STEP_PARAM_UNIPOLAR => f32::from(p.unipolar),
                 _ => p.steps[step_value_index(id)?],
             }),
             Self::Random(p) => Some(match id {
@@ -1871,6 +1963,10 @@ impl ModulatorParams {
                 NUM_PARAM_FORMAT => Some(p.format.to_index() as f32),
                 _ => None,
             },
+            Self::Table(p) => match id {
+                TABLE_PARAM_LENGTH => Some(f32::from(p.length)),
+                _ => Some(p.values[table_value_index(id)?]),
+            },
             Self::NoteGate | Self::Hold | Self::Unknown => None,
         }
     }
@@ -1923,6 +2019,7 @@ impl ModulatorParams {
                 STEP_PARAM_DIVISION => p.division = ModTimeDivision::from_index(index),
                 STEP_PARAM_GLIDE => p.glide = value,
                 STEP_PARAM_TRIGGER => p.trigger = ModStepTrigger::from_index(index),
+                STEP_PARAM_UNIPOLAR => p.unipolar = index != 0,
                 _ => {
                     if let Some(step) = step_value_index(id) {
                         p.steps[step] = value;
@@ -2002,6 +2099,14 @@ impl ModulatorParams {
                 NUM_PARAM_FORMAT => p.format = NumFormat::from_index(index),
                 _ => {}
             },
+            Self::Table(p) => match id {
+                TABLE_PARAM_LENGTH => p.length = index.clamp(2, TABLE_MAX_VALUES as i32) as u8,
+                _ => {
+                    if let Some(at) = table_value_index(id) {
+                        p.values[at] = value;
+                    }
+                }
+            },
             Self::NoteGate | Self::Hold | Self::Unknown => {}
         }
     }
@@ -2027,6 +2132,7 @@ pub enum ModulatorKind {
     NoteGate,
     Num,
     Hold,
+    Table,
     /// A box this build has no name for; never in [`Self::ALL`].
     Unknown,
 }
@@ -2035,7 +2141,7 @@ impl ModulatorKind {
     /// Every kind a box can be made as, in the order the shelf's kind
     /// tokens number them: new kinds are appended, so a token keeps naming
     /// the kind it did.
-    pub const ALL: [ModulatorKind; 16] = [
+    pub const ALL: [ModulatorKind; 17] = [
         ModulatorKind::Lfo,
         ModulatorKind::Envelope,
         ModulatorKind::Step,
@@ -2052,6 +2158,7 @@ impl ModulatorKind {
         ModulatorKind::NoteGate,
         ModulatorKind::Num,
         ModulatorKind::Hold,
+        ModulatorKind::Table,
     ];
 
     /// Whether the kind works on notes: the engine's note pass runs it,
@@ -2081,6 +2188,7 @@ impl ModulatorKind {
             Self::NoteGate => "Gate",
             Self::Num => "Number",
             Self::Hold => "Hold",
+            Self::Table => "Table",
             Self::Unknown => "Unknown",
         }
     }
@@ -2105,6 +2213,7 @@ impl ModulatorKind {
             Self::NoteGate => "GATE",
             Self::Num => "NUM",
             Self::Hold => "HOLD",
+            Self::Table => "TBL",
             Self::Unknown => "?",
         }
     }
@@ -2143,6 +2252,7 @@ impl ModulatorKind {
             Self::NoteGate => ModulatorParams::NoteGate,
             Self::Num => ModulatorParams::Num(ModNumParams::default()),
             Self::Hold => ModulatorParams::Hold,
+            Self::Table => ModulatorParams::Table(ModTableParams::default()),
             Self::Unknown => ModulatorParams::Unknown,
         }
     }
@@ -2164,6 +2274,7 @@ impl ModulatorKind {
             Self::Transpose => &TRANSPOSE_DESCRIPTORS,
             Self::Chance => &CHANCE_DESCRIPTORS,
             Self::Num => &NUM_DESCRIPTORS,
+            Self::Table => &TABLE_DESCRIPTORS,
             Self::NoteGate | Self::Hold | Self::Unknown => &[],
         }
     }
@@ -3208,6 +3319,7 @@ impl ModRack {
             | ModulatorParams::NoteGate
             | ModulatorParams::Num(_)
             | ModulatorParams::Hold
+            | ModulatorParams::Table(_)
             | ModulatorParams::Unknown => 1.0,
         }
     }
@@ -3381,6 +3493,7 @@ fn rack_input(
         | ModulatorParams::NoteGate
         | ModulatorParams::Num(_)
         | ModulatorParams::Hold
+        | ModulatorParams::Table(_)
         | ModulatorParams::Unknown => InputSource::None,
         // A seat with no identity: a preset's gate on its own channel's notes,
         // which means the channel it lands on.
@@ -3515,9 +3628,9 @@ impl<'de> serde::Deserialize<'de> for UnknownParams {
 }
 
 /// Every `kind` a module's params are saved under, as serde spells them.
-const KNOWN_KINDS: [&str; 17] = [
+const KNOWN_KINDS: [&str; 18] = [
     "lfo", "envelope", "step", "random", "math", "counter", "select", "slew", "chord", "modal", "scale",
-    "transpose", "chance", "gate", "num", "hold", "unknown",
+    "transpose", "chance", "gate", "num", "hold", "table", "unknown",
 ];
 
 fn is_zero(value: &u32) -> bool {
@@ -5122,6 +5235,7 @@ param = 7
                 division: ModTimeDivision::Eighth,
                 glide: 0.3,
                 trigger: ModStepTrigger::NoteAdvance,
+                unipolar: true,
             }),
         );
         rack.install(

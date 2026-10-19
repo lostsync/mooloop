@@ -651,6 +651,7 @@ const FROZEN: &[(Owner, &[(u32, &str)])] = &[
         (17, "Step 14"),
         (18, "Step 15"),
         (19, "Step 16"),
+        (20, "Unipolar"),
     ]),
     (Modulator(ModulatorKind::Random), &[
         (0, "Rate"),
@@ -681,6 +682,25 @@ const FROZEN: &[(Owner, &[(u32, &str)])] = &[
     (Modulator(ModulatorKind::Num), &[(0, "Value"), (1, "Low"), (2, "High"), (3, "Format")]),
     (Modulator(ModulatorKind::NoteGate), &[]),
     (Modulator(ModulatorKind::Hold), &[]),
+    (Modulator(ModulatorKind::Table), &[
+        (0, "Length"),
+        (1, "Value 1"),
+        (2, "Value 2"),
+        (3, "Value 3"),
+        (4, "Value 4"),
+        (5, "Value 5"),
+        (6, "Value 6"),
+        (7, "Value 7"),
+        (8, "Value 8"),
+        (9, "Value 9"),
+        (10, "Value 10"),
+        (11, "Value 11"),
+        (12, "Value 12"),
+        (13, "Value 13"),
+        (14, "Value 14"),
+        (15, "Value 15"),
+        (16, "Value 16"),
+    ]),
 ];
 
 fn live(owner: Owner) -> &'static [crate::effect::ParamDescriptor] {

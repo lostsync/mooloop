@@ -130,6 +130,8 @@ pub use modulation::{
     TRANSPOSE_PARAM_SEMITONES,
     ModNumParams, NumFormat, NUM_DESCRIPTORS, NUM_LIMIT, NUM_PARAM_FORMAT, NUM_PARAM_HIGH, NUM_PARAM_LOW,
     NUM_PARAM_POSITION,
+    ModTableParams, table_value_index, STEP_PARAM_UNIPOLAR, TABLE_DESCRIPTORS, TABLE_MAX_VALUES,
+    TABLE_PARAM_LENGTH, TABLE_PARAM_VALUE_BASE,
 };
 pub use strip::{
     strip_band_of, strip_band_param, strip_band_shelf, StripBand, StripParams, STRIP_BAND_BASE,

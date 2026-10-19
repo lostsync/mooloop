@@ -23,8 +23,37 @@ use mooloop_core::{
     RANDOM_PARAM_DRUNK, RANDOM_PARAM_PROBABILITY, RANDOM_PARAM_QUANTIZE, RANDOM_PARAM_RATE_DIVISION,
     RANDOM_PARAM_RATE_HZ, RANDOM_PARAM_TEMPO_SYNC, RANDOM_PARAM_TRIGGER, RANDOM_PARAM_WALK,
     SELECT_PARAM_INPUTS, SLEW_PARAM_TIME_S, STEP_PARAM_DIVISION, STEP_PARAM_GLIDE,
-    STEP_PARAM_LENGTH, STEP_PARAM_TRIGGER, STEP_PARAM_VALUE_BASE,
+    STEP_PARAM_LENGTH, STEP_PARAM_TRIGGER, STEP_PARAM_UNIPOLAR, STEP_PARAM_VALUE_BASE,
+    TABLE_PARAM_LENGTH, TABLE_PARAM_VALUE_BASE,
 };
+
+/// The values a box draws as bars under its knobs (song patch boxes step
+/// 02): a Step's steps, a table's values. Each bar is a setting,
+/// `base + index`, `-1..1`.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct Bars {
+    pub base: u32,
+    pub values: Vec<f32>,
+    /// Bars grow from the middle; otherwise from the floor, over `0..1`.
+    pub bipolar: bool,
+}
+
+/// What `params` draws as bars, if anything.
+pub(crate) fn bars(params: &ModulatorParams) -> Option<Bars> {
+    match params {
+        ModulatorParams::Step(step) => Some(Bars {
+            base: STEP_PARAM_VALUE_BASE,
+            values: step.steps[..usize::from(step.length).clamp(1, MOD_STEP_MAX_STEPS)].to_vec(),
+            bipolar: !step.unipolar,
+        }),
+        ModulatorParams::Table(table) => Some(Bars {
+            base: TABLE_PARAM_VALUE_BASE,
+            values: table.values[..table.length()].to_vec(),
+            bipolar: true,
+        }),
+        _ => None,
+    }
+}
 
 /// The settings `params`' face has a knob for, in the order they sit.
 pub(crate) fn face_params(params: &ModulatorParams) -> Vec<u32> {
@@ -52,15 +81,15 @@ pub(crate) fn face_params(params: &ModulatorParams) -> Vec<u32> {
             ENV_PARAM_RELEASE_SYNC,
             ENV_PARAM_AMOUNT,
         ],
-        ModulatorParams::Step(_) => [
+        // Its steps are drawn as bars below ([`bars`]), not turned.
+        ModulatorParams::Step(_) => vec![
             STEP_PARAM_LENGTH,
             STEP_PARAM_DIVISION,
             STEP_PARAM_GLIDE,
             STEP_PARAM_TRIGGER,
-        ]
-        .into_iter()
-        .chain((0..MOD_STEP_MAX_STEPS as u32).map(|step| STEP_PARAM_VALUE_BASE + step))
-        .collect(),
+            STEP_PARAM_UNIPOLAR,
+        ],
+        ModulatorParams::Table(_) => vec![TABLE_PARAM_LENGTH],
         ModulatorParams::Random(random) => vec![
             pick(random.tempo_sync, RANDOM_PARAM_RATE_DIVISION, RANDOM_PARAM_RATE_HZ),
             RANDOM_PARAM_TEMPO_SYNC,
@@ -107,6 +136,7 @@ pub(crate) fn label(params: &ModulatorParams, id: u32) -> String {
         (ModulatorParams::Envelope(_), ENV_PARAM_DECAY_SYNC) => "D.Sync",
         (ModulatorParams::Envelope(_), ENV_PARAM_RELEASE_SYNC) => "R.Sync",
         (ModulatorParams::Step(_), STEP_PARAM_TRIGGER) => "Advance",
+        (ModulatorParams::Step(_), STEP_PARAM_UNIPOLAR) => "Polarity",
         (ModulatorParams::Step(_), step) if step >= STEP_PARAM_VALUE_BASE => {
             return format!("{}", step - STEP_PARAM_VALUE_BASE + 1);
         }
@@ -158,6 +188,7 @@ pub(crate) fn readout(params: &ModulatorParams, id: u32) -> String {
             on_off(value)
         }
         (ModulatorParams::Step(step), STEP_PARAM_DIVISION) => division_name(step.division).into(),
+        (ModulatorParams::Step(step), STEP_PARAM_UNIPOLAR) => if step.unipolar { "uni" } else { "bi" }.into(),
         (ModulatorParams::Step(_), STEP_PARAM_TRIGGER) | (ModulatorParams::Random(_), RANDOM_PARAM_TRIGGER) => {
             if value >= 0.5 { "note" } else { "clock" }.into()
         }
@@ -245,6 +276,19 @@ mod tests {
         assert_eq!(readout(&parse("chance 0.7").unwrap(), CHANCE_PARAM_PROBABILITY), "70%");
         assert_eq!(readout(&parse("transpose -12").unwrap(), TRANSPOSE_PARAM_SEMITONES), "-12st");
         assert!(face_params(&ModulatorParams::NoteGate).is_empty());
+    }
+
+    /// A Step's steps and a table's values are bars, as long as it plays.
+    #[test]
+    fn steps_and_tables_draw_their_values_as_bars() {
+        let step = parse("step 4 uni").unwrap();
+        assert!(face_params(&step).iter().all(|&id| id < STEP_PARAM_VALUE_BASE || id == STEP_PARAM_UNIPOLAR));
+        assert_eq!(readout(&step, STEP_PARAM_UNIPOLAR), "uni");
+        let bars_of = bars(&step).unwrap();
+        assert_eq!((bars_of.values.len(), bars_of.bipolar), (4, false));
+        let table = bars(&parse("table 6").unwrap()).unwrap();
+        assert_eq!((table.base, table.values.len(), table.bipolar), (TABLE_PARAM_VALUE_BASE, 6, true));
+        assert_eq!(bars(&parse("lfo").unwrap()), None);
     }
 
     /// A num box's knob reads the value it sends, in its format.
