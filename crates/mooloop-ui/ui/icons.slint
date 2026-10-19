@@ -133,6 +133,16 @@ export global Icons {
     out property <string> filter-low-pass: "M 2 6 L 8 6 C 10 6 10 3.5 11 3.5 C 12 3.5 12 13 14 13";
     out property <string> filter-band-pass: "M 2 13 C 6 13 7 4 8 4 C 9 4 10 13 14 13";
     out property <string> filter-high-pass: "M 2 13 C 4 13 4 3.5 5 3.5 C 6 3.5 6 6 8 6 L 14 6";
+    // --- Effects: the drive face --------------------------------------
+    //
+    // The four shaping curves, drawn as the transfer each one is: input
+    // across, output up. Soft rounds into its ceiling, hard meets it at a
+    // corner, fold turns back on itself, and tape rounds early and sits
+    // lower, which is the compression it is chosen for.
+    out property <string> drive-soft: "M 2 13 C 5 13 6 12 8 8 C 10 4 11 3 14 3";
+    out property <string> drive-hard: "M 2 13 L 5 13 L 11 3 L 14 3";
+    out property <string> drive-fold: "M 2 10 L 5 3 L 8 13 L 11 3 L 14 10";
+    out property <string> drive-tape: "M 2 13 C 4 13 6 11 8 8 C 9 6 10 5 14 5";
     out property <string> eq-face-proportional-q: "M 2 12 L 5 12 L 8 4 L 11 12 L 14 12";
 
     // --- Device kinds (MOO-273, step 02) ------------------------------

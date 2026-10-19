@@ -2,10 +2,16 @@ import { Theme } from "theme.slint";
 import { ParameterKnob, SelectorBank } from "controls.slint";
 import { DeviceRackMetrics, EffectDeviceShell } from "device-rack.slint";
 import { DriveTransferDisplay } from "device-displays.slint";
+import { Icons } from "icons.slint";
 
 // One drive/saturation effect in a channel's device rack: only the working
 // controls live here; header, drag-to-reorder, and host actions come from
 // the shared shell and frame.
+//
+// Redrawn 2026-10-19 to the Filter's grid: the four curves as drawings of
+// themselves on one row, the transfer across the face, and three equal
+// knobs under it. Placed by hand: a full-size knob inside a layout is a
+// binding loop.
 export component DriveDeviceFace inherits EffectDeviceShell {
     name: "Drive";
     kind: "FX";
@@ -24,93 +30,105 @@ export component DriveDeviceFace inherits EffectDeviceShell {
     // matching `ParamCurve::Exponential` over [1, 64] in mooloop-core.
     private property <float> drive-natural: pow(64, root.drive);
 
-    VerticalLayout {
-        padding: 6px;
-        padding-top: DeviceRackMetrics.header-height + 6px;
-        spacing: 4px;
-        HorizontalLayout {
-            alignment: start;
-            spacing: 4px;
-            SelectorBank {
-                options: ["SOFT", "HARD", "FOLD", "TAPE"];
-                selected-index <=> root.curve;
-                segment-width: 34px;
-                tooltip: "Saturation curve";
-                selected(i) => { root.curve-changed(i); }
-            }
-            Rectangle { horizontal-stretch: 1; }
+    private property <length> pad: 8px;
+    private property <length> inner: root.width - 2 * root.pad;
+    private property <length> top: DeviceRackMetrics.header-height + 8px;
+    private property <length> plot-y: root.top + 30px;
+    private property <length> plot-height: 118px;
+    private property <length> knob-y: root.plot-y + root.plot-height + 6px;
+
+    SelectorBank {
+        x: root.pad;
+        y: root.top;
+        // The names are each segment's tooltip; the segments draw the curve.
+        options: ["Soft", "Hard", "Fold", "Tape"];
+        icons: [Icons.drive-soft, Icons.drive-hard, Icons.drive-fold, Icons.drive-tape];
+        selected-index <=> root.curve;
+        segment-width: 30px;
+        tooltip: "Saturation curve";
+        selected(i) => { root.curve-changed(i); }
+    }
+
+    Rectangle {
+        x: root.pad;
+        y: root.plot-y;
+        width: root.inner;
+        height: root.plot-height;
+        background: Theme.panel;
+        border-radius: Theme.radius-sm;
+        DriveTransferDisplay {
+            x: 4px;
+            y: 4px;
+            width: parent.width - 8px;
+            height: parent.height - 8px;
+            drive: root.drive-natural;
+            curve: root.curve;
         }
-        Rectangle {
-            height: 104px;
-            background: Theme.panel;
-            border-radius: Theme.radius-sm;
-            DriveTransferDisplay {
-                x: 4px;
-                y: 4px;
-                width: parent.width - 8px;
-                height: parent.height - 8px;
-                drive: root.drive-natural;
-                curve: root.curve;
-            }
-        }
-        HorizontalLayout {
-            spacing: 0px;
-            ParameterKnob {
-                width: 69px;
-                diameter: 36px;
-                label: "Drive";
-                tooltip: "Input gain into the shaping curve";
-                value <=> root.drive;
-                default-value: 0.1667;
-                value-text: round(root.drive-natural * 10) / 10 + "x";
-                modulation-armed: root.modulation-armed;
-                modulation-allowed: root.modulation-allowed[0];
-                modulation-depth: root.modulation-depths[0];
-                modulation-offset: root.modulation-offsets[0];
-                modulation-route-count: root.modulation-route-counts[0];
-                changed(v) => { root.drive-changed(v); }
-                modulation-depth-changed(v) => { root.modulation-depth-changed(0, v); }
-                modulation-edit-started => { root.modulation-edit-started(0); }
-                modulation-edit-finished => { root.modulation-edit-finished(0); }
-            }
-            ParameterKnob {
-                width: 69px;
-                diameter: 36px;
-                label: "Tone";
-                tooltip: "Post-shaper tilt: dark to bright";
-                value <=> root.tone;
-                default-value: 0.5;
-                value-text: round((root.tone * 2 - 1) * 100) + "%";
-                modulation-armed: root.modulation-armed;
-                modulation-allowed: root.modulation-allowed[2];
-                modulation-depth: root.modulation-depths[2];
-                modulation-offset: root.modulation-offsets[2];
-                modulation-route-count: root.modulation-route-counts[2];
-                changed(v) => { root.tone-changed(v); }
-                modulation-depth-changed(v) => { root.modulation-depth-changed(2, v); }
-                modulation-edit-started => { root.modulation-edit-started(2); }
-                modulation-edit-finished => { root.modulation-edit-finished(2); }
-            }
-            // This is Drive's own blend, inside its DSP.  The frame Wet/dry
-            // control remains an outer, host-level parallel blend.
-            ParameterKnob {
-                width: 69px;
-                diameter: 36px;
-                label: "Mix";
-                tooltip: "Drive's internal dry/wet blend";
-                value <=> root.mix;
-                default-value: 1.0;
-                value-text: round(root.mix * 100) + "%";
-                modulation-armed: root.modulation-armed;
-                modulation-allowed: root.modulation-allowed[3];
-                modulation-depth: root.modulation-depths[3];
-                modulation-offset: root.modulation-offsets[3];
-                modulation-route-count: root.modulation-route-counts[3];
-                changed(v) => { root.mix-changed(v); }
-                modulation-depth-changed(v) => { root.modulation-depth-changed(3, v); }
-                modulation-edit-started => { root.modulation-edit-started(3); }
-                modulation-edit-finished => { root.modulation-edit-finished(3); }
-            }
-        }
+    }
+
+    ParameterKnob {
+        x: root.pad + root.inner * 0 / 3;
+        y: root.knob-y;
+        width: root.inner / 3;
+        height: root.height - root.knob-y - 4px;
+        diameter: 34px;
+        label: "Drive";
+        tooltip: "Input gain into the shaping curve";
+        value <=> root.drive;
+        default-value: 0.1667;
+        value-text: round(root.drive-natural * 10) / 10 + "x";
+        modulation-armed: root.modulation-armed;
+        modulation-allowed: root.modulation-allowed[0];
+        modulation-depth: root.modulation-depths[0];
+        modulation-offset: root.modulation-offsets[0];
+        modulation-route-count: root.modulation-route-counts[0];
+        changed(v) => { root.drive-changed(v); }
+        modulation-depth-changed(v) => { root.modulation-depth-changed(0, v); }
+        modulation-edit-started => { root.modulation-edit-started(0); }
+        modulation-edit-finished => { root.modulation-edit-finished(0); }
+    }
+    ParameterKnob {
+        x: root.pad + root.inner * 1 / 3;
+        y: root.knob-y;
+        width: root.inner / 3;
+        height: root.height - root.knob-y - 4px;
+        diameter: 34px;
+        label: "Tone";
+        tooltip: "Post-shaper tilt: dark to bright";
+        value <=> root.tone;
+        default-value: 0.5;
+        value-text: round((root.tone * 2 - 1) * 100) + "%";
+        modulation-armed: root.modulation-armed;
+        modulation-allowed: root.modulation-allowed[2];
+        modulation-depth: root.modulation-depths[2];
+        modulation-offset: root.modulation-offsets[2];
+        modulation-route-count: root.modulation-route-counts[2];
+        changed(v) => { root.tone-changed(v); }
+        modulation-depth-changed(v) => { root.modulation-depth-changed(2, v); }
+        modulation-edit-started => { root.modulation-edit-started(2); }
+        modulation-edit-finished => { root.modulation-edit-finished(2); }
+    }
+    // This is Drive's own blend, inside its DSP.  The frame Wet/dry
+    // control remains an outer, host-level parallel blend.
+    ParameterKnob {
+        x: root.pad + root.inner * 2 / 3;
+        y: root.knob-y;
+        width: root.inner / 3;
+        height: root.height - root.knob-y - 4px;
+        diameter: 34px;
+        label: "Mix";
+        tooltip: "Drive's internal dry/wet blend";
+        value <=> root.mix;
+        default-value: 1.0;
+        value-text: round(root.mix * 100) + "%";
+        modulation-armed: root.modulation-armed;
+        modulation-allowed: root.modulation-allowed[3];
+        modulation-depth: root.modulation-depths[3];
+        modulation-offset: root.modulation-offsets[3];
+        modulation-route-count: root.modulation-route-counts[3];
+        changed(v) => { root.mix-changed(v); }
+        modulation-depth-changed(v) => { root.modulation-depth-changed(3, v); }
+        modulation-edit-started => { root.modulation-edit-started(3); }
+        modulation-edit-finished => { root.modulation-edit-finished(3); }
     }
 }

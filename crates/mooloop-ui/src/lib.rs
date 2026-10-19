@@ -2987,12 +2987,16 @@ pub fn effect_kind_face_width(kind: EffectKind) -> f32 {
         // Redesigned 2026-10-14: a type row, the response wide enough to
         // aim at, and three equal knobs under it.
         EffectKind::Filter => 280.0,
-        EffectKind::Drive | EffectKind::Bitcrush | EffectKind::Preamp | EffectKind::Limiter => 220.0,
+        // Redrawn 2026-10-19 to the same grid: a plot across the face and
+        // one row of equal knobs.
+        EffectKind::Drive | EffectKind::Limiter => 280.0,
+        EffectKind::Bitcrush | EffectKind::Preamp => 220.0,
         // Nine parameters and a waveform: the waveform earns its place here
         // in a way it does not on a synth, because the memory *is* the
         // instrument.
         EffectKind::Buffer => 444.0,
-        EffectKind::Gate | EffectKind::Compressor | EffectKind::Plate => 444.0,
+        EffectKind::Gate => 340.0,
+        EffectKind::Compressor | EffectKind::Plate => 444.0,
         // Redrawn 2026-10-14 to the Filter's grid: five knobs under the
         // repeats.
         EffectKind::Delay => 420.0,

@@ -51,13 +51,20 @@ use std::rc::Rc;
 const SOURCE_WIDTH: f32 = 664.0 + 30.0 * 2.0;
 const RACK_X: f32 = 16.0;
 const RACK_Y: f32 = 384.0;
-const CELL: f32 = 220.0 + 30.0 * 2.0 + 20.0;
+/// The rack's devices, in order. Each one's pitch is its own face width,
+/// read from the table the application sizes it by, plus both rails and the
+/// join after it.
+const RACK: [EffectKind; 3] = [EffectKind::Limiter, EffectKind::Drive, EffectKind::Bitcrush];
 /// Inside the header strip, right of the left rail and left of the host's
 /// bypass and wet/dry controls.
 const HEADER_Y: f32 = RACK_Y + 14.0;
 
 fn effect_x(index: usize) -> f32 {
-    RACK_X + SOURCE_WIDTH + 20.0 + CELL * index as f32 + 30.0 + 40.0
+    let before: f32 = RACK[..index]
+        .iter()
+        .map(|kind| effect_kind_face_width(*kind) + 30.0 * 2.0 + 20.0)
+        .sum();
+    RACK_X + SOURCE_WIDTH + 20.0 + before + 30.0 + 40.0
 }
 
 fn channels() -> ModelRc<ChannelRow> {
@@ -88,18 +95,8 @@ fn channels() -> ModelRc<ChannelRow> {
     }])))
 }
 
-/// A narrow device. `effect_x` walks the rack in fixed `CELL` steps, so
-/// every row in this fixture has to be 220px wide for the coordinates to
-/// mean anything -- which is a fact about the kinds chosen, and is asserted
-/// rather than assumed.
+/// A device at the width the rack gives it, which `effect_x` reads too.
 fn effect_slot(kind: EffectKind) -> EffectSlotRow {
-    assert_eq!(
-        effect_kind_face_width(kind),
-        220.0,
-        "{} is not 220px wide, so effect_x would point at the \
-         wrong device",
-        kind.label()
-    );
     EffectSlotRow {
         kind: effect_kind_index(kind),
         face_width: effect_kind_face_width(kind),
@@ -185,9 +182,9 @@ fn harness() -> Harness {
     ui.invoke_show_view(view::DEVICES);
     ui.set_source_kind(device_kind_to_int(DeviceKind::DrumSynth));
     ui.set_effect_slots(ModelRc::from(Rc::new(VecModel::from(vec![
-        effect_slot(EffectKind::Limiter),
-        effect_slot(EffectKind::Drive),
-        effect_slot(EffectKind::Bitcrush),
+        effect_slot(RACK[0]),
+        effect_slot(RACK[1]),
+        effect_slot(RACK[2]),
     ]))));
 
     let keys: Rc<RefCell<Vec<String>>> = Rc::new(RefCell::new(Vec::new()));
