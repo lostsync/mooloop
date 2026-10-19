@@ -736,9 +736,13 @@ before any of them existed still loads:
     `reset`; Random `trigger`; an arithmetic box `in`, `operand` (`clip` has
     only `in`); select `index`, then `a` to `h` as many as it has; slew
     `in`; transpose and chance `notes`, then `semitones` or `probability`;
-    chord, modal, scale and gate `notes`. Every box has one outlet, `out`,
-    except a counter's `index`, a note box's `notes`, and a gate box's
-    `gate`, `pitch` and `velocity`. An inlet tag has one outlet, a notes-in
+    chord, modal, scale and held `notes`; num `in`; hold `in`, `trigger`;
+    table `index`, `value`, `write`; switch `in`, `which`; gate `in`,
+    `open`. Every box has one outlet, `out`, except a counter's `index`, a
+    note box's `notes`, a held box's `gate`, `pitch` and `velocity`, and a
+    switch's `a` to `h`, as many as it has. The held box is saved with
+    `kind = "gate"`, its name before song patch boxes step 03; the gate box
+    typed `gate` now is saved as `kind = "pass"`. An inlet tag has one outlet, a notes-in
     tag one `notes` outlet, and a notes-out tag one `notes` inlet. An inlet
     takes at most one wire, and a wire joins two jacks of one sort (control
     or notes). Loading drops a wire naming a box

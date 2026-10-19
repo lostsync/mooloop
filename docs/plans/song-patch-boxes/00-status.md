@@ -52,3 +52,17 @@ step file:
 - **A table's wire writes are not saved.** Only drawn values are params; a
   write is runtime state, as a counter's count is. Drawing a value again
   replaces what a wire wrote there.
+
+**03 (MOO-535).** `switch n` (`ModulatorParams::Switch`, outlets `a` to `h`
+as many as it has) and `gate` (`ModulatorParams::Gate`) on control wires;
+today's note-reading `gate` is now typed and shown as `held`. Where it
+differs from the step file:
+
+- **The new gate is saved as `kind = "pass"`.** A saved `kind = "gate"` is
+  the held box, so a song saved before the rename opens unchanged; only the
+  text and label say `held`.
+- **A gate passes events as well as the value.** An open gate fed by a gate
+  tag lets its NoteOns through to an Envelope or a counter; with nothing
+  wired into `open` it is closed.
+- A switch sends values only, not events, on whichever outlet it picks; a
+  route from a switch reads outlet `a`.
