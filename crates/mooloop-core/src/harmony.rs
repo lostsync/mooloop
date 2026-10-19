@@ -1,5 +1,5 @@
 //! Pitch, chords and modes for the patch's note boxes
-//! (`docs/plans/song-patch/08-note-boxes.md`).
+//! (`docs/plans/archive/song-patch/08-note-boxes.md`).
 //!
 //! The one place these tables live: the boxes' text, their faces and the
 //! engine's note pass all read them. There is no song key in mooloop; a

@@ -267,5 +267,5 @@ Step 05 done 2026-10-06, plan archived. `MODULATION.md`, `current/modulation.md`
 `UI_DESIGN.md`, `PROJECT_FORMAT.md`, `PRODUCT.md`, `TERMINOLOGY.md`,
 `SCOPE.md` §4, `FOCUS.md`, `IDEAS.md` and `ENHANCEMENTS.md` now say the song
 owns modulation. The Song Patch proposal moved out of this plan's
-`README.md` to `docs/plans/song-patch/README.md`. The three items under
+`README.md` to `docs/plans/archive/song-patch/README.md`. The three items under
 *Open* above are still owed.

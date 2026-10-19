@@ -1920,7 +1920,7 @@ fn site_timing_cost() {
 /// 128-frame block at 64, 256 and 1024 boxes, with no wires (every box an
 /// LFO), wired as a chain (an LFO, then Math boxes each reading the one
 /// before), and as a fan (one LFO read by every other box). Printed, not
-/// asserted; the numbers are recorded in `plans/song-patch/00-status.md`.
+/// asserted; the numbers are recorded in `plans/archive/song-patch/00-status.md`.
 #[test]
 #[ignore = "measures wall time; run deliberately in release"]
 fn patch_control_cost() {

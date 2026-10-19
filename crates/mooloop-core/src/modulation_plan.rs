@@ -10,7 +10,7 @@
 //!   modules;
 //! - the patch's wires become each box's **inlets**, and the boxes and tags
 //!   a **tick order**: topological over the wires, ties in the file's order,
-//!   tags first (`docs/plans/song-patch/02-the-engine-runs-a-graph.md`). A
+//!   tags first (`docs/plans/archive/song-patch/02-the-engine-runs-a-graph.md`). A
 //!   wire that would close a loop, and a wire saved [`crate::Wire::late`],
 //!   reads its outlet as of the previous tick;
 //! - every gate tag is the **seat** whose notes it hears;

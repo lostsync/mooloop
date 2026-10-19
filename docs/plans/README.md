@@ -19,11 +19,6 @@ reopening it. A plan's own `00-status.md` says how it got where it is.
 - `icon-pass/` (planned 2026-09-26) — one registry, `icons.slint`, and one
   `Icon` component for every icon. Read its README for the survey, and
   `00-status.md` for Adam's four rulings.
-- `song-patch/` (planned 2026-10-06) — the Modulation pane becomes one
-  patching canvas for the song: typed boxes, control and note wires, and
-  the song's sources and destinations as tags. Read its README for Adam's
-  words, the survey and what it reverses, and `00-status.md` for the
-  defaults it picked that he can overturn.
 - `extract-mid-level-dsp-blocks/` — only step 03 is left: `device-displays.slint`
   holds eight visualizers with no shared canvas. `00-status.md` explains why
   step 02 is cancelled.
@@ -50,6 +45,12 @@ tempting change was rejected:
   takes the keys, instruments and effects are listed apart, and plugins filter
   by format, category and a favourites star. Its README says what each plugin
   format reports about a plugin's kind; VST3 categories wait on VST3 hosting.
+- `song-patch/` (planned 2026-10-06, done 2026-10-19, for 0.1.7) — the
+  Modulation pane is one patching canvas for the song: typed boxes, control
+  and note wires, and the song's sources and destinations as tags.
+  `MODULATION.md` is the contract it left. Read its README for Adam's words
+  and what it reversed, and `00-status.md` for where each step differed
+  from its plan and the defaults Adam can still overturn.
 - `song-modulation/` (planned 2026-10-05, done 2026-10-06, for 0.1.7) —
   modulators belong to the song, not a channel, and have the Modulation
   pane. Read its README for what it reversed in `MODULATION.md`, and

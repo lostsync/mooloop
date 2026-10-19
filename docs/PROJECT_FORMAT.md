@@ -694,7 +694,7 @@ before any of them existed still loads:
   the saved value is what the knob showed, and silently resetting it would
   change the file behind the face.
 - `modulation` is **the song's** modulation set (0.1.7), saved as a patch
-  (`plans/song-patch/`): boxes on a canvas, tags that bring the song's
+  (`MODULATION.md`, `plans/archive/song-patch/`): boxes on a canvas, tags that bring the song's
   sources in, the wires between them, and every route from a source to a
   parameter anywhere in the song. A channel holds none. The table is left
   out when the song has no modulation, so such a song writes nothing new.
@@ -702,36 +702,60 @@ before any of them existed still loads:
     `name` (`<channel name> <kind> <n>` when made), its random `seed`, its
     place on the canvas `at` (`{ x, y }`, whole canvas units), `open = true`
     when its face is shown in place (left out when not), and its `params`
-    as a rack slot wrote them. A Math module's `input_slot` param is
-    written out of range (255): its operand is the wire into its `in`.
-    Modules run in list order, so a Math module reading one listed before
-    it reads that tick's value. A module saved before song patch step 09
+    (`kind` and that kind's settings, as a rack slot wrote them for the five
+    kinds a rack had). A Math module's `input_slot` param is written out of
+    range (255): what it works on is the wire into its `in`. A box typed with
+    a name this build does not know saves `kind = "unknown"` and its `text`
+    (`text = "frob 3"`); a `kind` this build does not know loads as such a
+    box, its text kept, while a known kind with settings it cannot read
+    still refuses the song. The boxes run in the order their wires compile
+    to (`CompiledModulation::compile`); the array order only breaks ties and
+    picks where a loop is broken. A module saved before song patch step 09
     also wrote `rack` (`{ channel, slot }`), a home seat on the channel it
     was made on; loading reads it only to wire a step-01 Math module's
     operand (below), and nothing writes it now.
   - `modulation.tags[]`: the tags, boxes with no face. Each has an `id`
     from the same mint as the modules, its `at`, and `tag`, one of:
-    `inlet` with `bind = { gate = <ChannelId> }` (a channel's notes as a
-    gate); `notes_in` with `channel` and `take = true` when the patch takes
-    the notes rather than copying them; `notes_out` with `channel`. A tag
-    with no `bind` or `channel` is an empty `[ ]` slot.
+    `inlet` with a `bind` (below); `notes_in` with `channel` and
+    `take = true` when the patch takes the notes rather than copying them;
+    `notes_out` with `channel`. A tag with no `bind` or `channel` is an
+    empty `[ ]` slot. An inlet's `bind` is one of `{ gate = <ChannelId> }`
+    (a channel's notes as a gate), `{ outlet = { channel, outlet } }` (a
+    generator's control outlet, by its declared id),
+    `{ performance = { channel, source } }` (a channel's mod wheel or
+    aftertouch), or the transport: `"beat"`, `"bar"`, `"pattern_position"`,
+    `"pattern"`.
   - `modulation.wires[]`: `from` (an outlet) and `to` (an inlet), each
-    `{ node = <box or tag id>, port = <n> }`, and `bend` (`{ axis =
-    "horizontal" | "vertical", at }`) when a cable was bent by hand. Ports
-    count from 0 in the kind's jack table (`ModulatorKind::ports` in
-    `core/src/patch.rs`): LFO `rate`, `retrigger`; Envelope `gate`; Step
-    `advance`, `reset`; Random `trigger`; Math `in`; every box has one
-    outlet, `out`. An inlet takes at most one wire, and a wire joins two
-    jacks of one sort (control or notes). Loading drops a wire naming a box
+    `{ node = <box or tag id>, port = <n> }`, `bend` (`{ axis =
+    "horizontal" | "vertical", at }`) when a cable was bent by hand, and
+    `late = true` when the wire reads its outlet as of the previous control
+    tick whatever the order (a converted song's list-order read, below).
+    Ports count from 0 in the kind's jack table (`ModulatorKind::ports` and
+    `ModulatorParams::ports` in `crates/mooloop-core/src/patch.rs`): LFO
+    `rate`, `retrigger`; Envelope `gate`; Step and counter `advance`,
+    `reset`; Random `trigger`; an arithmetic box `in`, `operand` (`clip` has
+    only `in`); select `index`, then `a` to `h` as many as it has; slew
+    `in`; transpose and chance `notes`, then `semitones` or `probability`;
+    chord, modal, scale and gate `notes`. Every box has one outlet, `out`,
+    except a counter's `index`, a note box's `notes`, and a gate box's
+    `gate`, `pitch` and `velocity`. An inlet tag has one outlet, a notes-in
+    tag one `notes` outlet, and a notes-out tag one `notes` inlet. An inlet
+    takes at most one wire, and a wire joins two jacks of one sort (control
+    or notes). Loading drops a wire naming a box
     or port the song does not have, a wire of the wrong sort and a second
     wire into one inlet, and empties a tag naming a channel the song does
     not have.
-  - `modulation.routes[]`: one of `source` (a module id), `outlet` or
-    `performance` (with `channel`, the identity of the channel whose
-    generator or keyboard it is), then `destination`, `depth` and
-    `polarity`. A route has no slot; the runtime one is derived on load. A
-    route whose source or destination no longer resolves is dropped at load
-    rather than parked.
+  - `modulation.routes[]`: `source` (a box or tag id), then
+    `destination`, `depth`, `polarity`, and `at` when its assignment tag
+    was put somewhere on the canvas. A destination on a box's own knob has
+    `owner.modulator.module = <box id>` under a scope no channel or track
+    uses. A song saved before song patch step 06 may hold a route with
+    `outlet` or `performance` (with `channel`, the identity of the channel
+    whose generator or keyboard it is) instead of `source`; loading points
+    it at the inlet tag bound to that source, made if the song has none. A
+    route has no slot; the runtime one is derived on load. A route whose
+    source or destination no longer resolves is dropped at load rather
+    than parked.
   - `modulation.hints[]`: `{ tag = <tag id>, text }`, what an empty tag a
     patch preset brought in was bound to when the preset was saved, shown
     in its `[ ]` slot (`Kick 1 · gate`). Text only; binding the tag drops
@@ -752,8 +776,9 @@ before any of them existed still loads:
   `retrigger`, the Envelope's `gate`, the Step's `advance`, the Random's
   `trigger`, Math's `in`). Every input naming one channel shares one
   `inlet` tag bound to it, placed in a column at the canvas's left edge.
-  The boxes keep their list order and are laid out in a grid in that
-  order. A Math module in a song saved before Math read a module by id
+  The boxes keep their list order and are laid out in a grid in that order;
+  a wire from a module listed at or after the one it feeds is saved
+  `late`, so the song keeps the list-order read it played with. A Math module in a song saved before Math read a module by id
   kept its operand as a slot, and loading wires it to the module seated in
   that slot. The song saves in the new shape and writes no `input` again.
 - **A song written by 0.1.6 or earlier** carries a `ModRack` per channel at

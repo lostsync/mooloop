@@ -138,12 +138,11 @@ og drumsynth was simple but honestly sounded pretty good. why has simply updatin
 i want to move and redesign the modulation rack. i have an image somewhere, a mockup from chatgpt. ah its here: reference/img/mooloop-1.0-mockup.png
   **MOVED, 2026-10-06** (`docs/plans/archive/song-modulation/`). Modulation
   belongs to the song, a route reaches any channel or track, and the modules
-  have the Modulation pane (Ctrl+6), holding the song patch canvas (song patch step 03). The
-  redesign is still open: the mockup's tracker-shaped modulator is the
-  `IDEAS.md` question (MOO-159), and the song-wide patching canvas Adam
-  prototyped since is the Song Patch proposal
-  (`docs/plans/song-patch/README.md`). `MODULATION.md` holds the contracts
-  either must not break.
+  have the Modulation pane (Ctrl+6). **REDESIGNED, 2026-10-19**
+  (`docs/plans/archive/song-patch/`): the pane is the song-wide patching
+  canvas Adam prototyped, built in ten steps, and `MODULATION.md` is its
+  contract. The mockup's tracker-shaped modulator is still the `IDEAS.md`
+  question (MOO-159).
 
 i want to make a sidebar on the left that lets you change channel settings like name, track color, input channel, etc. its also illustrated in the mockup
   IN THE SEQUENCE (`docs/plans/archive/interface-iteration/` step 03, which builds the

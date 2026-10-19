@@ -196,6 +196,18 @@ one-clipboard question `docs/plans/archive/interface-iteration/02-device-clipboa
 raised is still open and is still not this: three tagged clipboards behind
 one focus model is the part that had to exist first.
 
+### The patch canvas added none
+
+The song patch canvas (`MODULATION.md`, `UI_DESIGN.md`) registered no
+action: its gestures are pointer gestures and menus, and showing the pane
+is the existing `view.pane-modulation`. While the canvas has keyboard focus
+it keeps three keys for itself, as a text field does: Delete and Backspace
+remove the selection, and Escape ends a gesture under way or disarms
+(`patch.on_key` in `crates/mooloop-ui/src/patch_canvas.rs`). They do not
+appear on the Shortcuts page and cannot be rebound. If the canvas grows
+verbs worth a chord (select all, duplicate, type a box at the pointer),
+they become actions here, and Delete joins them.
+
 ## How a new action is added
 
 1. Add one `ActionSpec` entry to `actions.rs`: id, label, category, and a

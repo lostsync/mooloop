@@ -1,4 +1,4 @@
-//! The song patch canvas (`docs/plans/song-patch/03-the-canvas.md`).
+//! The song patch canvas (`docs/plans/archive/song-patch/03-the-canvas.md`).
 //!
 //! The Modulation pane draws the song's patch: boxes where the song put
 //! them, tags at the patch's edges, an assignment tag for every route from a

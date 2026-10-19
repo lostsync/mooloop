@@ -146,9 +146,9 @@ to document-wide and move it into its own pane"*), and it is done: modules
 belong to the song and live in the Modulation pane
 (`plans/archive/song-modulation/`). The pane holds the song patch canvas, not
 a tracker, so the fork above is still unanswered for the modulator column.
-What comes after the move is the Song Patch proposal
-(`plans/song-patch/README.md`), a song-wide patching canvas, which is a
-different shape from the tracker and does not settle it either.
+The song patch came after the move and is built
+(`plans/archive/song-patch/`, 2026-10-19): a song-wide patching canvas,
+which is a different shape from the tracker and does not settle it either.
 
 Recorded while writing `docs/plans/archive/console/`, which is the mixer half of the
 same morning list and which deliberately does not touch the playlist.
@@ -156,6 +156,15 @@ same morning list and which deliberately does not touch the playlist.
 ---
 
 ## Node-based patching in the device rack
+
+**2026-10-19: the note and control rows of the table below are built, but
+song-wide, not in the rack.** The song patch (`plans/archive/song-patch/`,
+`MODULATION.md`) is one canvas for the song with note boxes (`chord`,
+`scale`, `chance`, ...) and control boxes into any knob, on Adam's word
+(2026-09-23: *"if you wanna do node based processing, maybe just draw some
+damn nodes like a grownup"*). The velocity alternator below can be made
+there. The audio row is still only an idea, and so is patching inside one
+rack. The rest of this section is as recorded.
 
 Folded in from `IDEAS.md` on 2026-09-14, which was a 108-line document
 whose own status line said *"not scheduled, and not a plan"* — which is this
@@ -214,6 +223,37 @@ wire shipped ones; whether the graph is rewireable at runtime or compiled per
 edit; and any visual design. None of it needs answering to keep the option
 open. What keeps it open is the three habits in
 `COMPOSABLE_DEVICE_UNITS.md`, which are worth following regardless.
+
+---
+
+## What the song patch left out
+
+The song patch plan (`plans/archive/song-patch/README.md`, *Not in this
+plan*) left these out on purpose. Each is an idea, not a decision.
+
+- **Patch 5, the algorithmic Buffer.** Adam's fifth patch, *"something to
+  play the buffer device sorta in auto/algo mode"*. It needs the Buffer to
+  take actions (play, jump the playhead), not just parameters, which is a
+  device change and belongs with the devices push. The canvas can already
+  drive Buffer's parameters. `MODULATION.md`'s "Note-triggered effects" is
+  the same request for inserts.
+- **Patterns played on conditions.** Adam: *"being able to have patterns
+  play based on conditions could be cool."* The patch can read the pattern
+  number and position (the Pattern tags); choosing what plays is a
+  Sequencing question, with Song mode in the way.
+- **A Pd box** that runs a `.pd` file, agreed on 2026-09-27 as the one later
+  escape hatch from a curated vocabulary.
+- **MIDI out.** A notes-out tag reaches a channel, not a port. MIDI out is
+  0.2.0 and not next (`FOCUS.md`).
+- **Modulators inside containers** (MOO-160), **audio-rate wires** and
+  **per-voice control**: the canvas is control-rate and monophonic, and
+  per-voice modulation stays inside its device.
+- **Reason's rack flip** (Tab to the back of the rack) as a second view of
+  the same cables. Raised in September, not decided.
+- **Durable-id destinations.** An assignment is still a `ParamAddr`,
+  rescoped on every channel and track edit, as song modulation left it.
+- **Wiring from a knob's right-click** ("connect to…") beside the Assign
+  drag. Raised in September, not decided.
 
 ---
 

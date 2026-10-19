@@ -1,6 +1,6 @@
 //! The song's modulation as a patch: boxes with a place on a canvas, the
 //! jacks each kind of box has, the tags that bring the song's sources in, and
-//! the wires between them (`docs/plans/song-patch/`, step 01).
+//! the wires between them (`docs/plans/archive/song-patch/`, step 01).
 //!
 //! A box is a [`SongModule`]; a tag is a [`SongTag`]; both are named by a
 //! [`ModSourceId`] from one counter, so a wire names either the same way. A

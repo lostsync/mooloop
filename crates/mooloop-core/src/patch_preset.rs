@@ -1,4 +1,4 @@
-//! Patches you can keep (`docs/plans/song-patch/09-patches-you-can-keep.md`):
+//! Patches you can keep (`docs/plans/archive/song-patch/09-patches-you-can-keep.md`):
 //! a selection of the canvas lifted out as a fragment, and a fragment landed
 //! back in a song.
 //!

@@ -998,7 +998,7 @@ const TRIGGER_LEVEL: f32 = 0.5;
 
 /// The song's patch as the audio thread runs it: its boxes, its gate tags
 /// and every node's latest outlet
-/// (`docs/plans/song-patch/02-the-engine-runs-a-graph.md`).
+/// (`docs/plans/archive/song-patch/02-the-engine-runs-a-graph.md`).
 ///
 /// Built off the audio thread at the size of the song's patch and never
 /// resized on it: a box added or removed arrives as a new set, which takes

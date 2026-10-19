@@ -18,12 +18,15 @@ area, and where each behaviour stops.
   destination, handed to the device once a block. A device with no curve
   path of its own (every native device but the EQ) receives it as the
   parameter events it already took, so no effect needed a change.
-- **Modulation belongs to the song, not to a channel.** The song holds one
-  set of modules and routes (`SongModulation`), with no limit on how many of
-  either. A route reaches any channel's generator, inserts and strip, and
-  any track's inserts and strip, the master's included, so one LFO can move
-  a filter on the kick and a send return's EQ at once. The modules tick once
-  per control tick, in list order, before anything renders.
+- **Modulation belongs to the song, not to a channel, and is a patch.** The
+  song holds one patch (`SongModulation`): boxes, tags, wires and routes,
+  with no limit on how many of any. A route reaches any channel's generator,
+  inserts and strip, and any track's inserts and strip, the master's
+  included, so one LFO can move a filter on the kick and a send return's EQ
+  at once. The patch ticks once per control tick, before anything renders,
+  in an order compiled from its wires: a box reads what feeds it in the
+  same tick, and a wire that closes a loop reads the tick before and is
+  marked by a short bar above its inlet. `MODULATION.md` is the contract.
 - **The Modulation pane** is a view of its own: **View > Show Modulation**
   or **Ctrl+6** (`view.pane-modulation`). It opens in the bottom slot and
   moves between panes like any other view. It holds the song's patch canvas:
@@ -111,31 +114,38 @@ area, and where each behaviour stops.
   still carries the outlet itself, so a paste finds or makes its own tag. Any bound tag can be routed: a Bar ramp onto
   a cutoff needs no box.
 - Under the canvas, the selected box's name, edited in its header, or what
-  the selected tag reads; and the selected source's routes from the whole song, each naming its
-  chain, device and parameter ("Kick Filter 1 · Cutoff"), with polarity and
-  remove. Eight box kinds ship (LFO, Envelope, Step, Random, Math as the
-  arithmetic boxes `+ - * / min max clip`, Counter, Select and Slew), each
-  a descriptor table plus a tick, so a box's settings undo and persist like
-  an effect's. Selection and arming hold the source itself, so they survive
-  a channel change, a reorder and a new box.
+  the selected tag reads; its **Assign** switch; and the selected source's
+  routes from the whole song, each naming its chain, device and parameter
+  ("Kick Filter 1 · Cutoff"), with polarity and remove. Fourteen box kinds
+  ship under twenty names: seven control boxes (`lfo`, `env`, `step`,
+  `random`, `counter`, `select`, `slew`), Math as the arithmetic boxes
+  `+ - * / min max clip`, and the six note boxes below, each a descriptor
+  table plus a tick, so a box's settings undo and persist like an effect's.
+  Selection and arming hold the source itself, so they survive a channel
+  change and a new box.
 - **A box's inlets are fed by wires**, or by clicking an inlet and picking
-  what feeds it: none, then every channel's notes as a `gate` tag, or
-  another box. A new box is named for the channel it was made on.
-- Routes carry durable `ModSourceId`s, so reordering the grid moves a module
-  without changing what any route means. **A reorder, and any other edit,
-  keeps each module's running state**: an LFO keeps its phase, its smoothing
-  and its fade position, an envelope keeps its stage and level, and a Random
-  module keeps its sequence. An Envelope whose input changed releases.
-- **Assigning.** Arming a module's or outlet's **Assign** makes legal
-  controls assignable on whatever chain the rack shows, any channel's or
-  track's; dragging one sets route depth while the control keeps its base
-  value, and re-dragging retunes the route. Route-count dots and armed
+  what feeds it: none, then every channel's notes as a `gate` tag, then
+  every outlet already on the canvas. An inlet takes one wire. A new box is
+  named for the selected channel (`Kick LFO 1`).
+- Routes and wires carry durable `ModSourceId`s, so nothing depends on a
+  box's place in the list or on the canvas. **Any edit keeps each box's
+  running state**: an LFO keeps its phase, its smoothing and its fade
+  position, an envelope keeps its stage and level, and a Random box keeps
+  its sequence. An Envelope whose gate wire changed releases. A box retyped
+  to another kind is a new box with a new id; its wires follow it onto jacks
+  of the same name, and its routes follow it if it still has their outlet.
+- **Assigning.** Clicking a box's or tag's outlet, or **Assign** under the
+  canvas, arms it, and legal controls become assignable on whatever chain
+  the rack shows, any channel's or track's, and on every open face but its
+  own; dragging one sets route depth while the control keeps its base
+  value, and re-dragging retunes the route. Escape on the canvas disarms.
+  Route-count dots and armed
   depths count the song's routes onto each control. Removing a route
   restores the destination's base, on generator parameters as well as
   effect ones.
 - **Copying a channel copies its routes.** A pasted or cloned channel gets
   the routes that point into the original, aimed at the copy, from the same
-  modules, so one LFO drives both; routes from its own outlets and keyboard
+  boxes, so one LFO drives both; routes from its own outlets and keyboard
   follow the copy.
 - **A channel preset carries its channel's patch** (song patch step 09):
   every box and tag that feeds an assignment into the channel or plays
@@ -148,7 +158,7 @@ area, and where each behaviour stops.
   song's modulation. A preset saved before this lands its rack as before.
 - **Not built yet:** a fader or pan control does not arm a route (a route
   onto a strip plays, but cannot be made by dragging); clicking a face's
-  route dot does not select its module or reveal the pane; and a route onto
+  route dot does not select its box or reveal the pane (MOO-531); and a route onto
   a plugin parameter is named only while its channel is selected, reading
   "Unavailable destination" otherwise, though it still plays. Device
   (effect) outlets and macros remain planned.
@@ -160,33 +170,31 @@ area, and where each behaviour stops.
   the tap point an audio outlet is taken at, and the one-block latency every
   control outlet carries — and the ML-P8 declares fourteen outlets and
   publishes its seven control values, reduced through the group of its most
-  recent note. A modulation route names its source through `ModSourceRef`, so
-  it may be a module or a generator outlet; both resolve into one flat
-  control address space, and an outlet route persists by outlet id. The
+  recent note. In the song an outlet is read through an inlet tag bound to
+  it, and a route from that tag compiles to the same read a route from the
+  outlet made; a copied channel's routes still name the outlet by its
+  durable id, so a paste finds or makes its own tag. The
   latency is an ordering fact rather than a delay: the control table is filled
   before the strips render, so a route necessarily reads what the generator
   published in the previous block, live and offline alike.
-  The Modulation pane offers them: every channel whose generator publishes
-  control outlets has a group in its OUTLETS list, under the channel's name,
-  one named chip per outlet with the same live meter a module tile carries. A chip selects and arms like a
-  module, so the ordinary assign-then-drag gesture builds an outlet route, and
-  the route it writes names the outlet by its durable id. An outlet has no
-  editor, because the device that publishes it owns its behaviour; the pane
-  beside it shows the declaration instead. A generator that publishes nothing
-  has no group at all rather than an empty one. The audio outlets never appear
-  in that list: they are not control sources, and `OutletDomain` is what
+  The Modulation pane offers them in an inlet tag's list, under each
+  publishing channel's name, marked as read a block late. A bound tag is
+  armed and wired like a box's outlet. An outlet has no face, because the
+  device that publishes it owns its behaviour; the pane under the canvas
+  says what the tag reads instead. The audio outlets never appear in that
+  list: they are not control sources, and `OutletDomain` is what
   refuses them structurally rather than a rule the picker remembers. An Aux In
   channel is where they are read instead.
   **The two kinds of source publish in different ranges, and a route's
-  polarity is about the module convention.** A module emits into
-  `-1..1`, and `Unipolar` lifts that into `0..1` so a one-way module rests at
-  the destination's base. The lift stands on the module's **own amount**, not
+  polarity is about the box convention.** A box emits into
+  `-1..1`, and `Unipolar` lifts that into `0..1` so a one-way box rests at
+  the destination's base. The lift stands on the box's **own amount**, not
   on the full range: an LFO at half depth swings `-0.5..0.5`, and a unipolar
   route from it still rests on the base and reaches half the route's depth.
   Turning that amount to zero therefore contributes nothing. An LFO still
   fading in is the one case the lift cannot see, because the fade is engine
   state rather than a parameter: for the length of the fade a unipolar route
-  from it rises from half the module's depth instead of from the floor. An
+  from it rises from half the box's depth instead of from the floor. An
   outlet publishes in its *declared* range, where a
   unipolar one is already `0..1`, so an outlet route takes the destination's
   own default — `Bipolar`, which passes the value through. `Unipolar` on an

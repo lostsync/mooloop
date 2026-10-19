@@ -42,7 +42,7 @@ a control that belongs to one device would look like it belongs to the row.
 Channel presets remain in the channel header because they include the
 generator and channel-level state, which no single device owns.
 
-The modulation modules and their routes are song state. A common device frame
+The song's modulation patch and its routes are song state. A common device frame
 may expose that system because it is where the user reads a chain's signal
 flow, but the frame does not make a modulation source belong to that device.
 Device faces own their parameters; the song owns the control signals that
@@ -483,84 +483,96 @@ a position that can be aimed has to be visible to aim.
 
 ### The Modulation pane
 
-The song's modulation modules have a pane of their own, the sixth view
+The song's patch has a pane of its own, the sixth view
 (`PaneViews.modulation`; **Show Modulation**, Ctrl+6), not a shelf in the
 device rack. Adam, 2026-10-05: *"it will just go in its own pane"*. It
-docks, splits and moves between slots like the other views, and the device
-rack below a channel is a fixed height again. The markup is
+docks, splits and moves between slots like the other views. The markup is
 `ui/modulation-shelf.slint`, whose `ModulationShelf` component kept its name
-when it moved.
+when it moved, holding the canvas, `ui/patch-canvas.slint`.
 
-It holds the song's patch canvas (`ui/patch-canvas.slint`, song patch step
-03): boxes where the song put them, tags at the patch's edges, an assignment
-tag under each route, and the wires, in a canvas larger than the pane that
-scrolls, where a double-click types a box (step 04) and a box's arrow opens
-its face of small knobs in place (step 05) and a right-click makes a song
-inlet tag (step 06), which is how a channel's outlets, its keyboard and the
-transport reach the patch and the knobs, or a Notes in or Notes out tag
-(step 07), whose list picks a channel and, on Notes in, whether it takes
-the channel's notes; the selected box's name, edited in
-its header, or what the selected tag reads; and that source's routes, from
-the whole song.
-A route row names its chain, device and parameter ("Kick Filter 1 · Cutoff"),
-because a route can land on any channel or track. Because it is one pane for
-the whole song, a source can target a source parameter, any insert, and a
-strip on any channel or track at the same time. Do not place a fixed row of
-permanent empty slots in the pane or a separate modulation page inside every
-device: the song has no module limit, so the number is not a layout
-decision.
+**The canvas.** One canvas for the whole song, larger than the pane, that
+scrolls: boxes where the song put them, tags at the patch's edges, an
+assignment tag for each route from a box, and the wires. *"Lean grid, i'd
+say. less busy to look at"* (Adam, 2026-09-27). A box is its spelling in the
+mono face (`lfo tri 1/4`, `* -0.5`) with its jacks along its edges; a tag is
+an arrow, pointing right when it is a source (`gate  Kick 1`) and left when
+it is a sink (an assignment, `Cutoff  ML-M1 9  +40%`, or a notes-out tag).
+An empty tag shows a `[ ]` slot, and what a preset's tag was bound to sits
+dim in it (`[ Kick · gate ]`). A box whose name this build does not know is
+outlined in red, since Slint draws no dashes. Everything is laid out and hit
+tested in Rust (`crates/mooloop-ui/src/patch_canvas.rs`), and one
+`TouchArea` reports press, move and release, as the piano roll's grid does,
+because a touch area on each box would move out from under the pointer as
+its box is dragged.
 
-Selecting a box shows its routes without changing what ordinary parameter
-gestures mean; its settings are on its face in the canvas, not in a surface
-under it. A separate **Assign** switch arms the
-selected source. Legal destination controls then receive a subtle assignable
-state, and dragging a normal control creates or changes route depth without
-changing that control's base value. Its normal value display remains the base;
-an overlay or second arc communicates modulation excursion. Switching source
-tiles while Assign is active moves the assignment focus to the new source;
-turning Assign off restores base-value editing. A small marker on a parameter
-is meant to open its incoming-route inspector, destination-first and
-sufficient for ordinary review and removal; today the route-count dots raise
-nothing when clicked, and a fader or pan control does not take the assign
-gesture yet (open: `docs/plans/archive/song-modulation/00-status.md`).
+**Gestures.** Each is one undo step.
 
-A box's face is a row of `MiniKnob`s with a label above and a readout below,
-four to a row, eight past twelve settings; a stepped setting snaps. A note
-box's arguments (a chord's type and inversion, a root and a mode) are
-stepped knobs whose readout is the name the box is typed with (`min7`,
-`1st`, `d`, `dorian`), not segmented rows. The
-knobs are destinations like any other: an armed outlet's drag sets a
-route's depth, and the arc shows the live offset. Cables are drawn
-orthogonally with rounded corners; a hand-placed bend is a run the user
-dragged, kept until a double-click. Cable activity is a preference (Off,
-Subtle, Full) because the prototype's blinking was, in Adam's word, loud: a
-control wire mixes toward the accent by its level, a note wire thickens
-for about 120 ms per note.
+- **Type a box**: double-click empty canvas; a completion list offers the
+  vocabulary with a line on each. Double-click a box to retype it.
+- **Wire**: drag from a jack to a jack of the same sort. Dropping on an
+  inlet that has a wire replaces it; a wire pulled off its inlet onto
+  nothing comes out. Click an inlet to pick what feeds it from a list.
+- **Select and move**: click, or marquee on empty canvas, and drag.
+  Delete or Backspace removes the selection; Escape ends a gesture under
+  way, or disarms.
+- **Arm**: click a box's or a bound tag's outlet. Then drag a knob anywhere,
+  as below.
+- **Open a face**: the arrow at a box's right.
+- **Bend a cable**: drag any run of a wire. A horizontal run moves up and
+  down, a vertical one sideways; a double-click on the wire goes back to
+  automatic routing. An assignment tag's wire does not bend.
+- **Tags and presets**: right-click empty canvas to make an **Inlet**,
+  **Notes in** or **Notes out** tag, or to land a patch preset; a new tag
+  opens its list at once, and a click on a tag opens it again. Right-click
+  a box for **Save as patch preset…**. Clicking an unbound assignment tag
+  arms its box with the depth it was saved with.
 
-A source's own signal inputs belong on its expanded control surface. Every
-module has one input picker: none, then every channel's notes for the four
-kinds that hear notes, or every other module in the song for Math. An LFO's
-`Reset: Free | Note On` reads that input, so `Kick notes → Envelope → Sampler
-position` is possible across channels before generators publish typed
-outlets. The channel choice is an adapter for the future `Kick / Gate`
-outlet, not a competing routing language. Input selection is intentionally different from Assign: the
-input picker determines what drives the source, while Assign determines where
-that source's output goes.
+**Wires.** Cables are drawn orthogonally with rounded corners, routed round
+the boxes between them; a hand-placed bend is kept until a double-click.
+Note wires are drawn solid in the note colour (`Theme.warning`, until the
+theme has a note colour of its own), since Slint's `Path` has no dash. A
+wire that reads a tick late, a loop's break or a converted song's late
+read, has a short bar above its inlet. **Cable activity** is a preference
+(Preferences > Appearance: Off, Subtle, Full; Subtle is the default and 30 %
+of Full) because the prototype's blinking was, in Adam's word, loud: a
+control wire mixes toward the accent by its level, a note wire thickens for
+about 120 ms per note. A notes-out tag that refused a note reddens its edge
+for about a second.
 
-Sync-capable source timing knobs use the compact `O.` pattern: the knob is the
-circle and a clickable LED immediately to its right selects transport sync.
-When the LED is dark the knob reads continuous time or frequency; when lit it
-steps through musical divisions from `4/1` to `1/64T` and shows the division
-in the same value field. LFO rate/fade-in and envelope attack/decay/release use
-this pattern. Smoothing and square-wave pulse width remain ordinary continuous
-controls; pulse width is visibly disabled when another waveform is selected.
+**Faces in place.** A box's face is a row of `MiniKnob`s with a label above
+and a readout below, four to a row, eight past twelve settings; a stepped
+setting snaps. A box shows the settings that change what it does now, so an
+LFO in sync shows its division and not its rate. A note box's arguments (a
+chord's type and inversion, a root and a mode) are stepped knobs whose
+readout is the name the box is typed with (`min7`, `1st`, `d`, `dorian`),
+not segmented rows. The knobs are destinations like any other: an armed
+outlet's drag sets a route's depth, and the arc shows the live offset.
+Whether a face is open is saved with the song.
 
-The pane does not require drawn patch cords. A later expanded graph may
-draw and edit the same typed inlet and destination edges when that makes a
-complex patch easier to read; cables are a visualization of existing routes,
-not a separate engine. The Song Patch proposal
-(`docs/plans/song-patch/README.md`) is that direction: one song-wide canvas
-that could later replace the pane's contents.
+**Under the canvas**: the selected box's name, edited in its header, or
+what the selected tag reads; an **Assign** switch for it; and that source's
+routes, from the whole song. A route row names its chain, device and
+parameter ("Kick Filter 1 · Cutoff"), because a route can land on any
+channel or track. Do not place a fixed row of permanent empty slots in the
+pane or a separate modulation page inside every device: the song has no box
+limit, so the number is not a layout decision.
+
+**Assigning.** Selecting a box shows its routes without changing what
+ordinary parameter gestures mean. Arming it, by its outlet or by Assign,
+gives legal destination controls a subtle assignable state, and dragging a
+normal control creates or changes route depth without changing that
+control's base value. Its normal value display remains the base; an overlay
+or second arc communicates modulation excursion. Arming another source
+moves the assignment focus to it; turning Assign off restores base-value
+editing. A small marker on a parameter is meant to open its incoming-route
+inspector, destination-first and sufficient for ordinary review and
+removal; today the route-count dots raise nothing when clicked (MOO-531),
+and a fader or pan control does not take the assign gesture yet (open:
+`docs/plans/archive/song-modulation/00-status.md`).
+
+**What drives a box is the wires into it, and where it goes is its
+assignments.** The two stay different gestures on purpose: a wire is drawn
+on the canvas, an assignment is made by dragging the control it moves.
 
 ### Sampler
 

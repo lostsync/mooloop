@@ -538,24 +538,24 @@ moving.
 
 ### 39. Assigning anywhere (MOO-512): in the app
 
-Add an LFO on one channel and arm Assign. Without leaving Assign, drag a
+Type an `lfo` box on the canvas and arm it. Without leaving Assign, drag a
 knob on that channel's filter, then select another channel and drag one of
 its inserts, then open a track's rack and the master's and drag an insert on
 each. Every knob dragged should show its depth while armed, a dot once
 disarmed, and its arc swinging with the LFO while the song plays, whichever
 chain the rack shows. With MIDI learn armed, a press should still learn the
-knob rather than route it. Then pick another channel in an Envelope's input
-and play that channel: the Envelope should open on its notes. Point a Math
-module's input at a module seated on another channel and check it follows.
+knob rather than route it. Then click an `env` box's `gate` inlet, pick
+another channel and play that channel: the Envelope should open on its
+notes.
 
 ### 40. The modulation pane (MOO-513): look, in the app
 
 Press Ctrl+6. The Modulation pane should appear in the bottom pane. Drag
 its tab to the top-left and to the split, and try it zoomed: in each, the
-module grid should wrap to the width, the Add list should stay on the
-right, and the selected module's knobs and its route list should stay
-readable along the bottom. Add an LFO on one channel, select another
-channel: the LFO should still be selected. Rename it, route it to knobs on
+canvas should fill the pane and scroll, and the selected box's name and its
+route list should stay readable along the bottom. Type an `lfo` box with
+one channel selected, then select another channel: the box should still be
+selected. Rename it, route it to knobs on
 two channels and the master, and check the route list names each one with
 its channel or track. Remove a route there and its dot should leave the
 knob. Open a 0.1.6 song with a saved layout: it should open as it was, with

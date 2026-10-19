@@ -1,13 +1,18 @@
 # Modulation and parameters
 
 Status: the approved design and its implementation contract, August–October
-2026. **Modulation is song-wide since 2026-10-06** (0.1.7): the song owns
-every module and route, a route reaches any channel or track, and the modules
-have a pane of their own. Adam, 2026-10-05: *"channels wont have
-modulators"*; asked how many modulators a song can have, *"all of them"*; and
-*"it will just go in its own pane"*. Built: five module kinds with no count
-limit, durable route identity, direct assignment on ordinary controls, and
-the Modulation pane.
+2026. **Modulation is song-wide since 2026-10-06, and a patch since
+2026-10-13** (0.1.7): the song owns every box, tag, wire and route, a route
+reaches any channel or track, and the patch is drawn as one canvas in a pane
+of its own. Adam, 2026-10-05: *"channels wont have modulators"*; asked how
+many modulators a song can have, *"all of them"*; *"it will just go in its
+own pane"*; and on what the rack was meant to be, 2026-09-23: *"if you wanna
+do node based processing, maybe just draw some damn nodes like a grownup."*
+Built: twenty box names typed as text with no count limit, control and note
+wires, song inlet and notes tags, patch presets, durable identity, and
+direct assignment on ordinary controls and on a box's own knobs. The plans
+that built it are `docs/plans/archive/song-modulation/` and
+`docs/plans/archive/song-patch/`.
 
 `AUDIO_ARCHITECTURE.md` owns preparation, execution and realtime lifecycle.
 This document owns descriptors, addressing, ownership, and the resolution rule.
@@ -28,11 +33,11 @@ SONG (ownership)
 ├── channels: source device → insert rack → strip             audio path
 ├── tracks:   insert rack → strip, the master's included
 │
-├── modulation source collection                              control sources
-│     LFO · step · random · macro · note value · device outlet · ...
+├── the patch                                                 control and notes
+│     boxes · tags (the song's sources in, notes out) · wires
 │
-└── explicit routes                                           control path
-      source → transform → ParamAddr destination, on any channel or track
+└── explicit routes (assignments)                             control path
+      outlet → transform → ParamAddr destination, on any channel or track
 ```
 
 - The **song** owns its modulation sources and routes. A source is not the
@@ -53,9 +58,10 @@ SONG (ownership)
   song's Modulation pane. It does not create a device-local modulator.
 - A route adds an offset around a destination's base value; it never writes an
   absolute replacement value.
-- The data is graph-capable, but the product is not graph-first. Patch cords
-  and a full graph editor are deferred; the Song Patch proposal
-  (`docs/plans/song-patch/README.md`) is the direction they would take.
+- The song's modulation is a graph, and the product draws it as one: the
+  Modulation pane is a patching canvas of boxes and wires. The audio path is
+  not: the device rack stays an ordered chain, and nothing on the canvas
+  carries audio.
 
 ## Parameter descriptors
 
@@ -145,76 +151,187 @@ need to know which LFOs or other signals are currently connected to it.
 
 ## Ownership and data model
 
-### Song collection
+### The song's patch
 
 The song holds one modulation set: `Project.modulation`, a `SongModulation`
-(`crates/mooloop-core/src/modulation.rs`) of every module (`SongModule`) and
-every route. A channel holds none. A route runs from one source to one
-`ParamAddr` anywhere in the song: any channel's generator, inserts and strip,
-and any track's inserts and strip, the master's included. The set is a
-patch (`plans/song-patch/`): the modules are boxes, the song's tags bring
-its sources in (a gate tag is one channel's notes), and wires run from an
-outlet to an inlet, one wire per inlet. The patch ticks once per control
-tick, before anything renders, in a compiled order: topological over the
-wires, tags first, ties in list order (`CompiledModulation::compile`).
+(`crates/mooloop-core/src/modulation.rs`, the patch half in
+`crates/mooloop-core/src/patch.rs`). It is a patch: **boxes** (`modules`,
+each a `SongModule`), **tags** (`tags`, each a `SongTag`), the **wires**
+between their jacks (`wires`), and the **routes** from an outlet to a
+parameter (`routes`). A channel holds none. Boxes and tags are named by a
+`ModSourceId` from one mint, so a wire names either the same way.
+
+**A box** is typed as text and spelled back from its settings
+(`mooloop_core::box_text`: `parse`, `spell`, and `VOCABULARY`, the twenty
+names in the order the completion list offers them). A box keeps its
+settings as parameters (`ModulatorParams`), never as text, so `*   -.5`
+typed reads `* -0.5`, and a knob turned on its face changes what the box
+says. The control boxes are `lfo`, `env`, `step`, `random`, `counter`,
+`select` and `slew`, and the arithmetic boxes `+ - * / min max clip` (one
+kind, Math, with an operator). The note boxes are `chord`, `modal`,
+`scale`, `transpose`, `chance` and `gate`; their pitch, chord and mode tables
+are `crates/mooloop-core/src/harmony.rs`. A name the vocabulary lacks makes
+an **unknown** box that keeps its text and does nothing; a song from a later
+build with a kind this one does not know opens with that box unknown.
+
+**Jacks.** Each kind declares its inlets and outlets in port order
+(`ModulatorKind::ports`, and `ModulatorParams::ports` where the settings
+change them: a `select 6` has `index` and `a` to `f`, `clip` has no
+operand), and each jack is one of two sorts (`JackSort`): **control**, a
+value every control tick, or **note**, notes with each NoteOff following
+its NoteOn. A wire (`Wire`) runs from one outlet to one inlet of the same
+sort. **An inlet takes one wire**: two signals into one inlet are summed by
+a `+` box, so the patch reads the way it runs. A wire may carry a hand-made
+`bend`, and `late` (below).
+
+**Tags** are boxes with no face, at the patch's edges. They are made from
+the canvas's menu, not typed (`TagKind`):
+
+- An **inlet** brings a control source from the song (`InletSource`): a
+  channel's notes as a **gate** (1 while a note is held, firing on each
+  NoteOn), one of a channel's generator **outlets**, a channel's mod wheel or
+  aftertouch (**performance**), or the transport: **Beat** and **Bar** (a
+  ramp 0 to 1 that fires on each, counted from the pattern's start in
+  Pattern mode and the song's in Song mode), **Pattern position** (a ramp
+  across the playing pattern, firing as it starts) and **Pattern** (the
+  playing pattern's number, 0 to 1 across the song's patterns, firing when
+  it changes; in Song mode the lowest-numbered pattern playing).
+- A **notes in** tag brings a channel's notes into the patch, copied, or
+  **taken** so that only the patch's output reaches the channel.
+- A **notes out** tag plays notes on a channel.
+
+A tag bound to nothing is an empty `[ ]` slot and sends nothing. One tag per
+source: loading a song, landing a preset or pasting a channel finds the
+song's tag for a source before making one.
+
+**The patch ticks once per control tick, before anything renders**, in a
+compiled order (`CompiledModulation::compile`, in
+`crates/mooloop-core/src/modulation_plan.rs`): topological over the wires
+(Kahn's), tags first, ties in list order. The audio thread runs the order
+and never sees the graph. A box is named by its id, never by its place in
+the list or on the canvas, so the list order is a tie-break and nothing
+else.
 
 **What a control wire carries.** A value, and the events of the tick it was
-sent. Only a gate tag sends events today: its channel's NoteOns, NoteOffs
-and choke, the counts an Envelope's gate has always taken. Its value is 1
-while any note is held on the channel and 0 otherwise.
+sent: a gate tag's channel NoteOns, NoteOffs and choke, the counts an
+Envelope's gate has always taken, and a transport tag's fire, which a
+trigger inlet takes as a NoteOn.
 
-- A **trigger inlet** (the LFO's `retrigger`, the Step's `advance` and
-  `reset`, the Random's `trigger`) fires once a tick, on a NoteOn or when
-  its wire rises through 0.5. A box made while its wire is already high
-  does not fire for that. The LFO's retrigger, the Step's advance and the
-  Random's trigger still act only in the modes that follow notes.
-- The Envelope's **gate** counts a gate tag's notes as before (so
-  overlapping notes and chokes behave as they did), and treats any other
-  wire as a gate by its level: held while at or above 0.5.
+- A **trigger inlet** (the LFO's `retrigger`, the Step's and the counter's
+  `advance` and `reset`, the Random's `trigger`) fires once a tick, on a
+  NoteOn or when its wire rises through 0.5. A box made while its wire is
+  already high does not fire for that. The LFO's retrigger, the Step's
+  advance and the Random's trigger still act only in the modes that follow
+  notes.
+- The Envelope's **gate** counts a gate tag's notes (so overlapping notes
+  and chokes behave as they always did), and treats any other wire as a
+  gate by its level: held while at or above 0.5.
 - The LFO's **rate** adds its wire in octaves: ±1 moves the rate two
   octaves either way.
-- Math's **in** is its operand.
-- A gate box (song patch step 08) sends what a gate tag does from the notes
-  that reach it, on its first outlet; its **pitch** and **velocity**
-  outlets carry the latest NoteOn's, each `0..1`, and no events.
-
-**Note boxes read a control inlet once a block.** The note pass runs before
-the patch ticks, so a `transpose`'s semitones and a `chance`'s probability
-inlet are read as the patch ticked them last, at the end of the block
-before. A wire into transpose adds `round(value * 12)` semitones, so ±1 is
-an octave; into chance it adds to the probability, clamped to `0..1`.
+- An arithmetic box's **in** is what it works on, and a wire into its
+  **operand** replaces the typed operand.
+- A **counter** sends its count as `0..1` across its steps, so a `select`
+  of as many inputs reads it directly; a select reads its **index** as
+  `0..1` across its inputs. A **slew** follows its **in**.
+- A **gate** box sends what a gate tag does from the notes that reach it,
+  on its first outlet; its **pitch** and **velocity** outlets carry the
+  latest NoteOn's, each `0..1`, and no events.
 
 **A loop runs a tick late.** A wire that closes a loop reads its outlet as of
 the previous control tick, which keeps every patch bounded and identical
 realtime and offline (`AUDIO_ARCHITECTURE.md`'s rule that feedback is an
 explicit delayed edge). The loop is broken at the first box in list order
-still waiting. A wire saved `late` reads the previous tick too: songs from
-before the patch read a module listed at or after the reader that way, and
-keep doing so.
+still waiting, and the canvas marks that wire. A wire saved `late` reads the
+previous tick too: a song from before the patch ran its modules in list
+order, and a wire from a module listed at or after its reader is saved late
+on conversion, so the song plays as it did. A wire made on the canvas is
+never late by itself.
+
+**What reads a block late.** A generator's outlet is published as its
+channel renders, after the patch has ticked, so an inlet tag bound to one
+reads it as of the end of the block before (`InletSource::late`), as a
+route from an outlet always has; its tag says **late**. A gate tag, a
+performance tag and the transport tags are read in the tick they happen.
+
+**Note wires.** The note pass (`crates/mooloop-engine/src/note_patch.rs`)
+runs once a block, after every channel's event list is complete (sequencer
+notes, owed releases, chokes, the keyboard and auditions) and before
+anything renders, so a note sent from one channel to another arrives in the
+same block at the same offset, live and in a render. A notes-in tag reads the
+channel's own part, the list as it stands before the pass, so a channel that
+takes its notes and plays them back to itself does not hear its output
+again. A taken channel is taken whether or not its tag is wired: take means
+only the patch's output reaches it. Its chokes, bends and parameters still
+reach it.
+
+- **Every note the patch plays has an id of its own** (from
+  `0xC000_0000_0000_0000`), and each box and each link to a notes-out tag
+  keeps a table from the note it heard to what it played, so a NoteOff
+  releases exactly that whatever the box's settings did since. Two notes
+  that land on one pitch play it once and release with the last. A Choke
+  into a box releases everything it holds.
+- **The release rules.** A NoteOff, a choke, a seek, a panic, a stop, a
+  mute, a pattern switch or a loop fold releases what the patch played, as
+  they release any sequenced note. A set that drops a link (a wire deleted,
+  a tag rebound, a box on the path retyped to another kind) owes its held
+  notes a NoteOff at the next block, on whichever seat the channel has moved
+  to; past 256 owed, a Choke. A box kept across an edit on the same path
+  from its tag keeps its notes.
+- **A wire holds 64 notes at once**, as many as a channel's sequenced
+  voices. One more is refused, never half-played, and the notes-out tag goes
+  red for about a second; its NoteOff then finds nothing to release.
+- **A note wire cannot close a loop** (`WireRefusal::NoteLoop`).
+- **Note boxes read a control inlet once a block.** The note pass runs
+  before the patch ticks, so a `transpose`'s semitones and a `chance`'s
+  probability inlet are read as the patch ticked them last, at the end of
+  the block before. A wire into transpose adds `round(value * 12)`
+  semitones, so ±1 is an octave; into chance it adds to the probability,
+  clamped to `0..1`. `chance` is seeded and restarts with the transport, so
+  a bounce plays what playback did.
+
+**An assignment is a route.** A route (`ModRoute`) runs from a box or a tag
+(`ModSourceRef::Id`), reading its first outlet (a gate box's gate), to one
+`ParamAddr` anywhere in the song: any channel's generator, inserts and
+strip, any track's inserts and strip, the master's included, and a box's
+own knobs (`ParamOwner::Modulator { module }`, under `MODULATOR_SCOPE`, a
+scope no channel or track uses). The canvas draws each route as an
+assignment tag wired from its box, placed through
+`SongModulation::route_places`. A route onto a box's knob moves it in its
+normalized range, summed per knob and clamped, before the box ticks; a
+stepped knob refuses modulation, and a box cannot route onto its own knobs.
+A route from a tag bound to an outlet or a keyboard compiles to the same
+read a route from the outlet itself made, so a song converted to tags reads
+the same values at the same block. `ModSourceRef::GeneratorOutlet` and
+`Performance` remain for what is carried outside the song (a copied
+channel's routes), and inside it are transient: the route reads the tag
+for its source (`SongModulation::adopt_channel_routes`).
+
+**A preset names nothing outside itself.** A patch preset is a piece of the
+patch (`SongModulation::fragment`, landed by `land`, in
+`crates/mooloop-core/src/patch_preset.rs`): its tags are saved empty with a
+hint of what they were bound to (`SongModulation::hints`), and an
+assignment onto anything outside it is saved loose, its destination as text
+(`SongModulation::loose`), driving nothing until it is bound by arming its
+box and dragging a knob. A channel preset and each kit entry carry the piece
+of the patch that plays on their channel (`SongModulation::channel_fragment`,
+landed by `land_on_channel`): a one-channel song in which "this channel" is
+`PRESET_CHANNEL` at seat 0. A preset saved before the patch carries a
+`ModRack` and is lifted where it lands, as a 0.1.6 song's racks are; the
+`MAX_MODULATORS_PER_CHANNEL` (8) and `MAX_MOD_ROUTES_PER_CHANNEL` (16)
+constants bound what such a rack holds, not what a song holds.
 
 **There is no count a user meets.** The set is sized from the song, not
-reserved: any edit that changes its shape (a module or route added, removed
-or reordered, an input repointed, a channel or track moved) installs a whole
-new set built off the audio thread (`StructuralCommand::SetModulation`), and
-the callback carries each surviving module's state into it by id and hands
-the old set back to be dropped off the audio thread. Only a module's params
-and a route's depth and polarity are retuned in place. This is
-`CAPACITY_POLICY.md`'s preallocate-and-grow-by-replacement rule. The UI shows
-existing modules plus an **Add** list, never a fixed row of empty bays.
-
-**A module keeps a home seat**, `SongModule::rack`: the channel it was made
-on, and a slot there. A new module is named for that channel
-(`<channel name> <kind> <n>`), and a channel preset saved from that channel
-carries the modules seated there, plus any module whose route lands on it;
-the engine does not read the seat. The first eight modules made on a channel
-get one, and a module past that, or one whose channel has gone, has none and
-is the song's alone.
-A channel preset still carries its modulation as a `ModRack`, so the
-`MAX_MODULATORS_PER_CHANNEL` (8) and `MAX_MOD_ROUTES_PER_CHANNEL` (16)
-constants bound what one preset holds, not what a song holds.
-
-A durable `ModSourceId` names every module, so its position in the list is an
-implementation detail rather than something a saved song depends on.
+reserved: any edit that changes its shape (a box, tag, wire or route added
+or removed, a box retyped, a route onto a box's knob retuned, a channel or
+track moved) installs a whole new set built off the audio thread
+(`StructuralCommand::SetModulation`), and the callback carries each
+surviving box's state into it by id and hands the old set back to be
+dropped off the audio thread. Only a box's params and a route's depth and
+polarity are retuned in place. This is `CAPACITY_POLICY.md`'s
+preallocate-and-grow-by-replacement rule. The canvas holds what the song
+has; nothing draws a fixed row of empty bays. The control pass costs about
+3% of a 128-frame block at a thousand boxes
+(`docs/plans/archive/song-patch/00-status.md`, step 02).
 
 ### Sources and source metadata
 
@@ -241,28 +358,30 @@ destination is now as reorder-proof as a modulation source.
 See `docs/plans/archive/containers/01-a-device-is-an-identity.md`. It is minted when
 a module is added, carried through reorders, and never reused. `source_slot`
 is a runtime locator derived from `source` and never authored. Legacy routes
-saved before the id existed decode from their slot number. Reordering the
-module list therefore moves a module without changing what any route means,
-and a Math module names the module it reads by id as well
-(`InputSource::Module`).
+saved before the id existed decode from their slot number. A wire names its
+ends by id too (`Jack { node, port }`), so neither the list order nor a
+place on the canvas is something a saved song depends on.
 
-**A source names its channel.** A module's input is an `InputSource`: none,
-one channel's notes (`ChannelNotes`, by `ChannelId`), or, for Math, another
-module (`Module`). A generator outlet or performance source
-(`ModSourceRef::GeneratorOutlet`, `ModSourceRef::Performance`) carries the
-`ChannelId` whose generator or keyboard it is. Nothing means "my channel"
-implicitly.
+**A source names its channel.** A tag that reads a channel names it by
+`ChannelId` (`InletSource::channel`, `TagKind::channel`), and so does a
+generator outlet or performance source carried outside the song
+(`ModSourceRef::GeneratorOutlet`, `ModSourceRef::Performance`). Nothing
+means "my channel" implicitly; a preset's "this channel" is
+`PRESET_CHANNEL`, bound to the receiving channel where it lands.
 
 | Kind | Meaning | Status |
 | --- | --- | --- |
 | LFO | Free-running or note-restarted periodic movement. | Implemented. |
-| Envelope | Gate-driven attack, decay, sustain, and release contour. | Implemented with an explicit channel-note gate adapter; typed device gate outlets are planned. |
-| Step / random generator | Clocked patterns, probability, and controlled variation. | Implemented as the Step and Random modules. |
-| Macro / internal value | User macro, transport phase, velocity, key track, pressure, or another declared channel value. | Planned. The Math module covers user arithmetic over an existing module's output, not a channel value source. |
-| Generator outlet | Generator-reduced values such as last-note velocity, gate, envelope, or Buffer state. | Implemented for the ML-P8's seven and DS-01's six, through `ModSourceRef::GeneratorOutlet` and the one-block control table, and offered in the Modulation pane's OUTLETS list, under each publishing channel's name: a chip selects and arms exactly like a module, so the assign gesture builds the route. Only the control run is offered; an audio outlet is refused by domain. Note the range convention below. |
+| Envelope | Gate-driven attack, decay, sustain, and release contour. | Implemented. Its gate is any control wire: a gate tag's notes, a gate box, a generator's gate outlet through an inlet tag, or any value read by its level. |
+| Step / random generator | Clocked patterns, probability, and controlled variation. | Implemented as the Step and Random boxes, with `counter`, `select` and `slew` beside them. |
+| Arithmetic | Scaling, inverting, offsetting and limiting another signal. | Implemented as the arithmetic boxes, `+ - * / min max clip`. |
+| Transport | Beat, bar, pattern position and the playing pattern. | Implemented as inlet tags. |
+| Note value | Velocity, pitch and gate from a channel's notes, reduced to one control signal. | Implemented as the `gate` box on a note wire: the latest NoteOn's pitch and velocity. |
+| Macro | A user macro knob. | Planned. |
+| Generator outlet | Generator-reduced values such as last-note velocity, gate, envelope, or Buffer state. | Implemented for the ML-P8's seven and DS-01's six, through the one-block control table, and read on the canvas through an inlet tag bound to the outlet: the tag is armed and wired like a box's outlet. Only the control run is offered; an audio outlet is refused by domain. Note the range convention below. |
 | Device outlet | Named effect signals such as gain reduction, envelope-following level, or gate state. | Planned. The vocabulary is shared with generator outlets; no effect declares one. |
 | Audio-derived control | Explicit envelope follower, transient detector, or another control extractor. | Deferred until it has an outlet contract. |
-| Another channel's control | Any channel's notes as a module's input, and any channel's generator outlets and performance controls as a route's source, each naming its channel. | Implemented. |
+| Another channel's control | Any channel's notes, generator outlets, mod wheel and aftertouch, each through a tag naming its channel. | Implemented. |
 | External control | MIDI/CV and other sources from outside the song. | Deferred. |
 
 A musical outlet is not display telemetry. Telemetry is best-effort observation
@@ -376,10 +495,10 @@ mean a second table beside the modules' outputs.
 
 ## Modulation architecture
 
-### Modulator rack
+### The patch, not a rack
 
-The song owns one set of modules and one routing matrix (see "Decisions" and
-"Song collection"). It does not strip an authored instrument of endemic
+The song owns one patch and one routing matrix (see "Decisions" and "The
+song's patch"). It does not strip an authored instrument of endemic
 modulation: per-voice envelopes, velocity/key/gate relationships, audio-rate
 oscillator routing, and a device-specific LFO with saved internal routes
 cannot in general be reproduced after a chord has been reduced to one control
@@ -387,17 +506,21 @@ value.
 
 Song-wide, not per channel. Adam, 2026-10-05: *"channels wont have
 modulators"*. A copied or pasted channel brings the routes that point into
-it, aimed at the copy, from the same modules (*"assignments would
-copy/paste"*); a channel preset brings the modules its routes use and adds
-them to the song.
+it, aimed at the copy, from the same boxes (*"assignments would
+copy/paste"*); a channel preset brings the piece of the patch that plays on
+its channel and adds it to the song.
 
-A source is something that produces a normalized bounded control signal over
-time, conventionally `-1..1` before route transformation. The first source was
-an LFO; LFO, envelope, step, random, and math modules ship now. The taxonomy
-is intentionally broader still: macros, note-derived values, named device
-outlets, and eventually external control or audio-derived signals can all
-participate if they declare their timing and value semantics. Do not make a
-type or UI that assumes a modulator is only a little waveform generator.
+A control source is something that produces a normalized bounded control
+signal over time, conventionally `-1..1` before route transformation. The
+first was an LFO; the boxes, the transport and the channels' notes, outlets
+and keyboards are sources now. The taxonomy is intentionally broader still:
+macros, named device outlets, and eventually external control or
+audio-derived signals can all participate if they declare their timing and
+value semantics. **The vocabulary is curated, not an open language** (Adam,
+2026-09-27): small boxes that combine, so the LFO sequence is `counter` plus
+`select` plus `lfo`s rather than one `lfo-seq` box, and a saved patch preset
+is how a bigger one is kept. A Pd box that runs a `.pd` file may come later
+as the one escape hatch.
 
 ### Mod matrix
 
@@ -466,22 +589,22 @@ modulation is a much larger engine change that can come later if it earns its
 way in. Fixed or authored audio-rate paths inside one prepared DSP device are
 not routed by this matrix and are not prohibited by it.
 
-### Rack semantics, graph-capable model
+### The rack is a chain; the patch is a graph
 
-The ordered device rack remains the normal presentation and audio workflow.
-The modulation model is graph-capable only in the useful, narrow sense that
-cross-device sources, destinations, routes, timing, and latency are explicit
-data. Authored device-local modulation also has persisted, inspectable source
-and destination identities, but may execute inside a voice where channel-rate
-routing cannot preserve its semantics. A future zoomed-out graph view can
-visualize published boundaries and the channel routes alongside the audio
-chain; it must not introduce a parallel cross-device modulation engine or
-redefine the rack model.
+The ordered device rack remains the presentation and workflow of the audio
+path. The patch is the graph of the control and note paths: cross-device
+sources, destinations, routes, timing and latency are explicit data, drawn
+on one canvas. Authored device-local modulation also has persisted,
+inspectable source and destination identities, but may execute inside a
+voice where channel-rate routing cannot preserve its semantics; it stays in
+its device and does not appear on the canvas. Control on the canvas is
+monophonic.
 
-Do not build that graph editor in this pass. Routine modulation is a
-source-selection and direct-manipulation interaction, not a matrix or a field
-of patch cords. A full matrix may later serve inspection and expert editing,
-but it is not the ordinary workflow.
+The canvas carries no audio. It must not introduce a second cross-device
+modulation engine beside the compiled set, or redefine the rack model.
+Assigning stays a direct-manipulation gesture on ordinary controls (arm an
+outlet, drag a knob), not a matrix to fill in: the assignment tags on the
+canvas show the routes, and are not a second way to make them.
 
 ## Timing and realtime contract
 
@@ -510,12 +633,12 @@ square pulse width moves the high-to-low transition without changing the
 route language. Note triggers are observed on the containing 32-frame control
 subdivision, keeping the callback bounded and allocation-free.
 
-An envelope's input names one channel's notes (`InputSource::ChannelNotes`),
-and it stores ADSR values. Attack, decay,
+An envelope's gate is the wire into its `gate` inlet (a gate tag's notes, or
+any control wire by its level), and it stores ADSR values. Attack, decay,
 and release use the same free/synced timing vocabulary as the LFO. Note On
 restarts attack from the current value; the final held Note Off begins release,
 so overlapping piano-roll notes keep the gate high. Runtime output stays in the
-rack's signed convention and a new envelope route defaults to unipolar
+patch's signed convention and a new envelope route defaults to unipolar
 polarity, making idle contribute no offset and sustain/peak rise above the
 destination base.
 
@@ -530,9 +653,9 @@ Note On, held through its life so an envelope outlet has a coherent tail, and
 falling to zero when it goes idle rather than stepping backward onto an older
 sounding note.
 
-**An outlet does not use the rack's signed convention, and a route's polarity
-is about that convention.** A rack module always emits `-1..1`, which is why
-`Unipolar` lifts it — `(v + 1) / 2` — so a one-way module contributes no
+**An outlet does not use the patch's signed convention, and a route's
+polarity is about that convention.** A box always emits `-1..1`, which is
+why `Unipolar` lifts it — `(v + 1) / 2` — so a one-way box contributes no
 offset at idle. An outlet publishes in the range its `SignalShape` declares,
 where a unipolar one is *already* `0..1`. So an outlet route takes the
 destination's default polarity, `Bipolar`, which passes the value through:
@@ -552,17 +675,21 @@ An insert never sees a note. Its node gets its own slot's queue
 frame, and Buffer gestures) and the block's lane and route curves through
 `apply_curves`. The channel's event list, with its notes, goes to the
 generator alone, and the generator never sees an insert's events. Notes also
-reach every module whose input is that channel's notes, as per-tick note
-gates. Keep that
-isolation for parameter events, but **give effect slots access to the
-channel's note stream as a separate input**.
+reach the patch, through gate tags as per-tick gates and through notes-in
+tags as notes.
 
-This is what makes the rack an instrument rather than a chain of processors.
-The rack's own modules already hear notes: an LFO resets its phase on
-note-on, and a step module advances per note. What no insert can do is react
-to one itself: a delay that flushes on a note, a stutter fired from a rack
-step. The sample-accurate note pipe reaches every channel's generator and the
-modules listening to it; it stops one node short of the inserts.
+**The patch is one answer, for anything a parameter can do.** A gate tag or
+a notes-in tag into a `gate` box drives an Envelope, a Step or a Random, and
+its assignment moves any insert's knob: a filter that opens on each kick, a
+delay whose feedback swells while a chord is held, a send that steps per
+note, all at control rate, with the notes from any channel. What the patch
+cannot do is make an insert *act* on a note rather than move a knob: a delay
+that flushes its buffer on a note, a stutter that captures on one, the
+Buffer jumping its playhead. Those need the note at the sample it lands on
+and an action the device takes, not a parameter. **So the request stands:
+give effect slots access to the channel's note stream as a separate input**,
+and keep the isolation for parameter events. It is the same device change
+the algorithmic Buffer (Adam's patch 5) needs.
 
 ## Inter-device and inter-channel data
 
@@ -581,10 +708,9 @@ Generators also publish named, channel-rate outlets. This is how note-derived
 data reaches an effect without pretending a shared channel effect can own
 per-voice state: a generator reduces its voices to one musical control signal,
 then a downstream effect consumes ordinary CV. ML-P8 and DS-01 publish them
-(ML-P8's include Velocity, Gate and its LFO). The Modulation pane's OUTLETS
-list shows every publishing channel's outlets under the channel's name, and a
-route takes one as its source (`ModSourceRef::GeneratorOutlet`) to any legal
-destination in the song.
+(ML-P8's include Velocity, Gate and its LFO). An inlet tag bound to one
+(`InletSource::Outlet`) brings it onto the canvas, where it feeds a box's
+inlet or is assigned straight to any legal destination in the song.
 
 An outlet source names its channel by `ChannelId` and an outlet id on that
 channel's generator, plus its user-facing name. The first reduction is last-note; a later explicit outlet mode can add
@@ -635,17 +761,36 @@ typed control graph.
 
 ### The Modulation pane and common frame
 
-The song's modules live in the **Modulation** pane, a view of its own
+The song's patch lives in the **Modulation** pane, a view of its own
 (`PaneViews.modulation`; **Show Modulation**, `view.pane-modulation`,
-Ctrl+6), not in the device rack. It lists the song's modules as chips, the
-outlets of every channel that publishes some, and an **Add** list. Selecting
-a chip opens its editor without arming assignment. The editor contains
-source-owned controls (for an LFO: waveform, free/synced rate, free/synced
-fade-in, phase, depth, smoothing, square pulse width, and retrigger; for an
-envelope: gate input, free/synced attack/decay/release, sustain, and amount).
-Beside it are the selected source's routes, from the whole song, each naming
-the chain, device and parameter it reaches. There is one pane for the song,
-not a `MOD` page copied into Mono, Poly, Buffer, and every effect.
+Ctrl+6), not in the device rack. It is one canvas for the song
+(`ui/patch-canvas.slint`, laid out and hit tested in
+`crates/mooloop-ui/src/patch_canvas.rs`), larger than the pane and
+scrolling: boxes where the song put them, tags at the patch's edges, an
+assignment tag for each route from a box, and the wires. Under it, the
+selected box's name or what the selected tag reads, its **Assign** switch,
+and the selected source's routes from the whole song, each naming the
+chain, device and parameter it reaches. There is one pane for the song, not
+a `MOD` page copied into Mono, Poly, Buffer, and every effect.
+`UI_DESIGN.md` has the canvas's gestures.
+
+**A box's settings are on its face**, opened in place by the arrow at the
+box's right: a small knob with a label and a readout per setting
+(`crates/mooloop-ui/src/patch_face.rs` picks them). A box shows the settings
+that change what it does now: an LFO in sync shows its division and not its
+rate, so one knob reads as the box's speed whichever way it is set, and the
+sync is a stepped knob of its own. A note box's arguments are stepped knobs
+that read by name (`min7`, `1st`, `dorian`). The face's knobs are
+destinations like any other, so one box can move another's rate or depth.
+
+**A box's inlets are its inputs.** What drives a box is the wires into it:
+a channel's notes through a gate tag, another box, a transport tag, a
+generator's outlet. `Kick gate → env → Sampler / Position` and
+`Kick / Gate outlet → lfo retrigger → Sampler / Position` are both a tag, a
+box and an assignment, with the kick and the sampler on different channels
+if need be. Wiring an inlet binds a declared control signal to a declared
+inlet; it does not create a device-local modulator or infer control data
+from telemetry.
 
 A common device frame shows the routes that terminate there, and may show
 source pills where more legible. Activating that summary reveals the
@@ -653,47 +798,23 @@ Modulation pane focused on a destination-first route inspector. This is the
 UI entry point where signal order is visible without falsely making sources
 device-owned. **Not built yet:** the faces draw route-count dots under each
 modulated parameter, but clicking one raises nothing, so it cannot select
-its module or reveal the pane (open:
-`docs/plans/archive/song-modulation/00-status.md`).
-
-Source tiles are iconified summaries. Selecting one expands its source-owned
-control surface without arming the rest of the pane. The expanded surface has
-a separate **Assign** switch and the module's one input picker
-(`InputSource`): none, then every channel's notes for the four kinds that
-hear notes, or every other module in the song for Math. An LFO's
-`Free | Note On` reset reads that input. A later picker may add named
-generator, effect and Buffer outlets such as `Kick / Gate`. The picker binds
-a declared control signal to a declared source inlet. It does not create a device-local
-modulator or infer control data from telemetry.
-
-Rate and fade-in place a clickable sync LED directly beside the knob. A dark
-LED leaves the knob continuous; a lit LED turns that same gesture and readout
-into the shared `4/1` through `1/64T` musical-division range. This compact
-`O.` affordance is used consistently for source timing controls rather than
-adding a second selector row for each one.
-
-Today `Kick notes → Envelope / Gate → Sampler / Position` is readable and
-playable, with the kick and the sampler on different channels if need be.
-Generators publish typed outlets through the control table, and a route can
-take one as its source, but a module's input cannot: it is a channel's notes
-or another module. `Kick / Gate → LFO / Reset → Sampler / Position` uses the
-same input and route concepts once an input can bind a declared generator
-outlet.
+its box or reveal the pane (MOO-531).
 
 ### Direct assignment
 
-1. Open the Modulation pane and select a module or outlet to edit it.
-2. Activate **Assign** for that source. Legal controls on any channel's
-   source device and inserts, and on any track's inserts, acquire a subtle
-   assignable state; illegal controls do not.
+1. Open the Modulation pane and select a box or tag.
+2. Arm it: click its outlet on the canvas, or switch on **Assign** under
+   the canvas. Legal controls on any channel's source device and inserts,
+   on any track's inserts, and on every open box's face but its own,
+   acquire a subtle assignable state; illegal controls do not.
 3. Drag a normal control to create or adjust the armed source's route depth.
    Preserve the ordinary control's base value.
 4. Keep the base readout; add a marker and modulation arc/range overlay for
    resolved excursion.
 5. Clicking the marker opens a destination-first inspector listing incoming
    routes, source, polarity, depth, and a remove action.
-6. Turning **Assign** off restores ordinary base-value editing while keeping
-   the source selected for editing.
+6. Turning **Assign** off, or Escape on the canvas, restores ordinary
+   base-value editing while keeping the source selected.
 
 **A strip is a destination; its gesture is not built yet.** A channel's and
 a track's volume and pan, the master's included, take routes: the session
@@ -723,11 +844,10 @@ The gesture is one undoable route edit, not a stream of unrelated parameter
 edits. Re-dragging the same pair retunes it. Zero depth is a valid parked route;
 the inspector offers explicit removal.
 
-Patch cords are optional presentation, not a product taboo. The compact rack
-and direct assignment remain the routine workflow; a future matrix/graph may
-draw and edit the identical typed inlet and destination edges when a larger
-patch benefits from it. It may not create parallel routes, implicit
-modulation, or a new audio-rack model.
+**Depth is set by the drag; math boxes do the scaling** (Adam, 2026-09-27).
+A route has a depth and a polarity and nothing else; a curve, an offset or
+an inversion shared by several destinations is a box before the outlet
+(`* -1`, `+ 0.5`, `clip 0 1`), so it is drawn where it acts.
 
 ## Anti-aliasing policy
 
@@ -750,28 +870,34 @@ intentional rather than inconsistent.
 
 ## Scope boundaries and delivery order
 
-This work includes the song-owned model, destination metadata,
-base-plus-offset resolution, current LFO continuity, the pane/common-frame
-interaction, and the direct-assignment inspector.
+This work includes the song-owned patch (boxes, tags, control and note
+wires, the compiled order and its one-tick loops), destination metadata,
+base-plus-offset resolution, current LFO continuity, the canvas and the
+common-frame interaction, the direct-assignment inspector, and patch and
+channel presets that carry a piece of the patch.
 
-It excludes a general visual-programming environment (the Song Patch
-proposal, `docs/plans/song-patch/README.md`, is where that would start);
-copying the same general-purpose LFO into every device; true audio sidechain,
-cross-device audio-rate FM, and control feedback cycles; and treating display
-telemetry as control data. A device-specific LFO or per-voice modulation
-system may remain local when it is an authored part of the instrument, works
-without the song's modules, persists with the device, and publishes any
-cross-device signal through the ordinary outlet contract. Transitional synth
-LFOs that are merely generic modulators should still migrate instead
-of growing a parallel system.
+It excludes an open patching language (the vocabulary is curated; a Pd box
+is the agreed escape hatch, later); audio on the canvas, audio-rate wires and
+per-voice control; copying the same general-purpose LFO into every device;
+true audio sidechain and cross-device audio-rate FM; note loops; MIDI out (a
+notes-out tag reaches a channel, not a port); and treating display telemetry
+as control data. Control loops are in, a tick late. A device-specific LFO or
+per-voice modulation system may remain local when it is an authored part of
+the instrument, works without the song's patch, persists with the device,
+and publishes any cross-device signal through the ordinary outlet contract.
+Transitional synth LFOs that are merely generic modulators should still
+migrate instead of growing a parallel system.
 
-The song-owned model, direct assignment, durable references, the
-step/random/math modules, generator outlets and the Modulation pane are built
+Built: the song-owned patch, direct assignment, durable references, twenty
+box names, transport, gate, outlet and keyboard inlets, note wires and note
+boxes, patch presets, and channel presets carrying their patch
 (`docs/plans/archive/song-modulation/` records the move from per-channel
-racks); macro and note-derived sources are not (`docs/plans/archive/modulator-modules/00-status.md`).
-Next, declared effect and Buffer outlets through the one-block control table.
-After typed auxiliary graph edges and compensation exist, evaluate true
-sidechain and external routing. A graph UI, if useful, comes last.
+racks, `docs/plans/archive/song-patch/` the patch). Not built: macros,
+declared effect and Buffer outlets, inserts that hear notes ("Note-triggered
+effects"), and the route dots' reveal. Next, declared effect and Buffer
+outlets through the one-block control table. After typed auxiliary graph
+edges and compensation exist, evaluate true sidechain and external routing.
+`IDEAS.md` keeps what the song patch plan left out, each with its reason.
 
 ## Acceptance criteria
 
@@ -785,8 +911,20 @@ sidechain and external routing. A graph UI, if useful, comes last.
 - Editing a modulated knob changes its base without deleting or fighting routes,
   and the UI communicates both base and excursion.
 - Devices add parameters/outlets through metadata, not matrix special cases.
-- Reordering the rack does not change durable destination identities; a future
-  graph reconstructs every route from the same persisted data.
+- Reordering the rack does not change durable destination identities, and
+  neither the list order nor a place on the canvas changes what any box,
+  wire or route means.
+- The patch runs in its compiled order: a box reads what feeds it in the
+  same tick, a loop reads a tick late and is marked, an outlet tag reads a
+  block late and says so, and a note box reads its control inlets as of the
+  block before.
+- Notes sent through the patch arrive in the same block at the same offset,
+  realtime and offline, and every note the patch plays is released by
+  whatever releases the note it came from, or at the next block when its
+  link goes.
+- A song saved by an earlier build opens as a patch and plays exactly as it
+  did (`crates/mooloop-engine/tests/modulation_null.rs`,
+  `factory_patch_null.rs`).
 - The callback allocates nothing, locks nothing, performs no I/O, follows no
   implicit cross-channel edge, and never treats best-effort telemetry as
   modulation data.
