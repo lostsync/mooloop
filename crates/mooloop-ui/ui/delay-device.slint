@@ -3,10 +3,16 @@ import { ParameterKnob, SelectorBank, TimeDivisionKnob } from "controls.slint";
 import { DeviceRackMetrics, EffectDeviceShell } from "device-rack.slint";
 import { DelayEchoDisplay } from "device-displays.slint";
 
-// One delay in a channel's device rack, 668px wide, which it now has
-// room to spare in: the musical time control was a 230px bank of five
-// divisions and is a knob with a sync lamp over the shared twenty-one.
-// Header and drag come from the shared EffectDeviceShell.
+// One delay in a channel's device rack. Header and drag come from the shared
+// EffectDeviceShell.
+//
+// Redrawn 2026-10-14 to the Filter's grid (Joam picked layout A): the mode
+// and FREE/SYNC on one row, the repeats across the face on a grid counted in
+// beats, and five equal knobs under them. Sync moved off the Time knob's lamp
+// onto its own switch, so the knob is a plain dial that reads the division
+// while synced. "Cross" reads "Ping-pong", which is what full cross is.
+// Placed by hand: a full-size knob inside a layout is a binding
+// loop.
 export component DelayDeviceFace inherits EffectDeviceShell {
     name: "Delay";
     kind: "FX";
@@ -33,132 +39,183 @@ export component DelayDeviceFace inherits EffectDeviceShell {
     private property <float> time-natural: pow(2000, root.time);
     private property <float> feedback-natural: root.feedback * 0.98;
 
-    VerticalLayout {
-        padding: 6px;
-        padding-top: DeviceRackMetrics.header-height + 6px;
-        spacing: 4px;
-        HorizontalLayout {
-            alignment: start;
-            spacing: 4px;
-            SelectorBank {
-                options: ["DIGI", "TAPE", "REV"];
-                selected-index <=> root.mode;
-                segment-width: 38px;
-                tooltip: "How the repeats respond when the time moves";
-                selected(i) => { root.mode-changed(i); }
-            }
-            Rectangle { horizontal-stretch: 1; }
+    private property <length> pad: 8px;
+    private property <length> inner: root.width - 2 * root.pad;
+    private property <length> top: DeviceRackMetrics.header-height + 8px;
+    private property <length> plot-y: root.top + 30px;
+    private property <length> plot-height: 118px;
+    private property <length> knob-y: root.plot-y + root.plot-height + 6px;
+    // The display's fixed window (`DelayEchoDisplay.span-ms`) in half beats,
+    // so the grid under the repeats is the song's.
+    private property <float> half-beat-span: 2000 / (30000 / max(root.bpm, 1));
+
+    SelectorBank {
+        x: root.pad;
+        y: root.top;
+        options: ["DIGI", "TAPE", "REV"];
+        selected-index <=> root.mode;
+        segment-width: 40px;
+        tooltip: "How the repeats respond when the time moves";
+        selected(i) => { root.mode-changed(i); }
+    }
+    SelectorBank {
+        x: root.width - root.pad - self.width;
+        y: root.top;
+        options: ["FREE", "SYNC"];
+        selected-index: root.tempo-sync ? 1 : 0;
+        segment-width: 40px;
+        tooltip: "Time in milliseconds, or in divisions of the beat";
+        selected(i) => { time-knob.set-sync(i == 1); }
+    }
+
+    Rectangle {
+        x: root.pad;
+        y: root.plot-y;
+        width: root.inner;
+        height: root.plot-height;
+        background: Theme.panel;
+        border-radius: Theme.radius-sm;
+        // Half-beat lines, the beats stronger and numbered.
+        for line in 64 : Rectangle {
+            visible: line > 0 && line < root.half-beat-span;
+            x: 4px + (parent.width - 8px) * line / root.half-beat-span;
+            y: 0px;
+            width: 1px;
+            height: parent.height - 14px;
+            background: Theme.border.with-alpha(mod(line, 2) == 0 ? 0.6 : 0.25);
         }
-        Rectangle {
-            height: 104px;
-            background: Theme.panel;
-            border-radius: Theme.radius-sm;
-            DelayEchoDisplay {
-                x: 4px;
-                y: 4px;
-                width: parent.width - 8px;
-                height: parent.height - 8px;
-                time-ms: root.time-natural;
-                feedback: root.feedback-natural;
-                cross: root.cross;
-            }
+        for line in 64 : Text {
+            visible: line > 0 && mod(line, 2) == 0 && line < root.half-beat-span;
+            x: 4px + (parent.width - 8px) * line / root.half-beat-span + 3px;
+            y: parent.height - 13px;
+            text: line / 2;
+            color: Theme.text-faint;
+            font-size: Theme.text-xs;
         }
-        HorizontalLayout {
-            spacing: 0px;
-            TimeDivisionKnob {
-                label: "Time";
-                tooltip: "Delay time";
-                value <=> root.time;
-                bpm: root.bpm;
-                tempo-sync <=> root.tempo-sync;
-                division <=> root.time-division;
-                default-value: 0.7815;
-                changed(v) => { root.time-changed(v); }
-                tempo-sync-changed(enabled) => { root.tempo-sync-changed(enabled); }
-                division-changed(index) => { root.time-division-changed(index); }
-                modulation-armed: root.modulation-armed;
-                modulation-allowed: root.modulation-allowed[0];
-                modulation-depth: root.modulation-depths[0];
-                modulation-offset: root.modulation-offsets[0];
-                modulation-route-count: root.modulation-route-counts[0];
-                modulation-depth-changed(v) => { root.modulation-depth-changed(0, v); }
-                modulation-edit-started => { root.modulation-edit-started(0); }
-                modulation-edit-finished => { root.modulation-edit-finished(0); }
-            }
-            ParameterKnob {
-                width: 85px;
-                diameter: 40px;
-                label: "Fdbk";
-                tooltip: "How much of each repeat feeds the next";
-                value <=> root.feedback;
-                default-value: 0.3571;
-                value-text: round(root.feedback-natural * 100) + "%";
-                modulation-armed: root.modulation-armed;
-                modulation-allowed: root.modulation-allowed[1];
-                modulation-depth: root.modulation-depths[1];
-                modulation-offset: root.modulation-offsets[1];
-                modulation-route-count: root.modulation-route-counts[1];
-                changed(v) => { root.feedback-changed(v); }
-                modulation-depth-changed(v) => { root.modulation-depth-changed(1, v); }
-                modulation-edit-started => { root.modulation-edit-started(1); }
-                modulation-edit-finished => { root.modulation-edit-finished(1); }
-            }
-            ParameterKnob {
-                width: 85px;
-                diameter: 40px;
-                label: "Cross";
-                tooltip: "Feedback crossing to the other channel; full is ping-pong";
-                value <=> root.cross;
-                default-value: 0.0;
-                value-text: round(root.cross * 100) + "%";
-                modulation-armed: root.modulation-armed;
-                modulation-allowed: root.modulation-allowed[3];
-                modulation-depth: root.modulation-depths[3];
-                modulation-offset: root.modulation-offsets[3];
-                modulation-route-count: root.modulation-route-counts[3];
-                changed(v) => { root.cross-changed(v); }
-                modulation-depth-changed(v) => { root.modulation-depth-changed(3, v); }
-                modulation-edit-started => { root.modulation-edit-started(3); }
-                modulation-edit-finished => { root.modulation-edit-finished(3); }
-            }
-            ParameterKnob {
-                width: 85px;
-                diameter: 40px;
-                label: "Tone";
-                tooltip: "Damping of the repeats: dark to open";
-                value <=> root.tone;
-                default-value: 0.6;
-                value-text: round(root.tone * 100) + "%";
-                modulation-armed: root.modulation-armed;
-                modulation-allowed: root.modulation-allowed[4];
-                modulation-depth: root.modulation-depths[4];
-                modulation-offset: root.modulation-offsets[4];
-                modulation-route-count: root.modulation-route-counts[4];
-                changed(v) => { root.tone-changed(v); }
-                modulation-depth-changed(v) => { root.modulation-depth-changed(4, v); }
-                modulation-edit-started => { root.modulation-edit-started(4); }
-                modulation-edit-finished => { root.modulation-edit-finished(4); }
-            }
-            // Delay's own repeat blend is intentionally kept alongside the
-            // generic host Wet/dry control for the rare but useful nested mix.
-            ParameterKnob {
-                width: 85px;
-                diameter: 40px;
-                label: "Mix";
-                tooltip: "Delay's internal dry/wet blend";
-                value <=> root.mix;
-                default-value: 0.35;
-                value-text: round(root.mix * 100) + "%";
-                modulation-armed: root.modulation-armed;
-                modulation-allowed: root.modulation-allowed[5];
-                modulation-depth: root.modulation-depths[5];
-                modulation-offset: root.modulation-offsets[5];
-                modulation-route-count: root.modulation-route-counts[5];
-                changed(v) => { root.mix-changed(v); }
-                modulation-depth-changed(v) => { root.modulation-depth-changed(5, v); }
-                modulation-edit-started => { root.modulation-edit-started(5); }
-                modulation-edit-finished => { root.modulation-edit-finished(5); }
-            }
+        DelayEchoDisplay {
+            x: 4px;
+            y: 4px;
+            width: parent.width - 8px;
+            height: parent.height - 18px;
+            time-ms: root.time-natural;
+            feedback: root.feedback-natural;
+            cross: root.cross;
         }
+        // Left channel's repeats rise from the line, the right's fall.
+        Text { x: 6px; y: 4px; text: "L"; color: Theme.text-faint; font-size: Theme.text-xs; }
+        Text { x: 6px; y: parent.height - 28px; text: "R"; color: Theme.text-faint; font-size: Theme.text-xs; }
+    }
+
+    time-knob := TimeDivisionKnob {
+        compact: true;
+        x: root.pad + root.inner * 0 / 5;
+        y: root.knob-y;
+        width: root.inner / 5;
+        height: root.height - root.knob-y - 4px;
+        diameter: 34px;
+        label: "Time";
+        tooltip: "Delay time";
+        value <=> root.time;
+        bpm: root.bpm;
+        tempo-sync <=> root.tempo-sync;
+        division <=> root.time-division;
+        default-value: 0.7815;
+        changed(v) => { root.time-changed(v); }
+        tempo-sync-changed(enabled) => { root.tempo-sync-changed(enabled); }
+        division-changed(index) => { root.time-division-changed(index); }
+        modulation-armed: root.modulation-armed;
+        modulation-allowed: root.modulation-allowed[0];
+        modulation-depth: root.modulation-depths[0];
+        modulation-offset: root.modulation-offsets[0];
+        modulation-route-count: root.modulation-route-counts[0];
+        modulation-depth-changed(v) => { root.modulation-depth-changed(0, v); }
+        modulation-edit-started => { root.modulation-edit-started(0); }
+        modulation-edit-finished => { root.modulation-edit-finished(0); }
+    }
+    ParameterKnob {
+        x: root.pad + root.inner * 1 / 5;
+        y: root.knob-y;
+        width: root.inner / 5;
+        height: root.height - root.knob-y - 4px;
+        diameter: 34px;
+        label: "Feedback";
+        tooltip: "How much of each repeat feeds the next";
+        value <=> root.feedback;
+        default-value: 0.3571;
+        value-text: round(root.feedback-natural * 100) + "%";
+        modulation-armed: root.modulation-armed;
+        modulation-allowed: root.modulation-allowed[1];
+        modulation-depth: root.modulation-depths[1];
+        modulation-offset: root.modulation-offsets[1];
+        modulation-route-count: root.modulation-route-counts[1];
+        changed(v) => { root.feedback-changed(v); }
+        modulation-depth-changed(v) => { root.modulation-depth-changed(1, v); }
+        modulation-edit-started => { root.modulation-edit-started(1); }
+        modulation-edit-finished => { root.modulation-edit-finished(1); }
+    }
+    ParameterKnob {
+        x: root.pad + root.inner * 2 / 5;
+        y: root.knob-y;
+        width: root.inner / 5;
+        height: root.height - root.knob-y - 4px;
+        diameter: 34px;
+        label: "Ping-pong";
+        tooltip: "Feedback crossing to the other channel; full is ping-pong";
+        value <=> root.cross;
+        default-value: 0.0;
+        value-text: round(root.cross * 100) + "%";
+        modulation-armed: root.modulation-armed;
+        modulation-allowed: root.modulation-allowed[3];
+        modulation-depth: root.modulation-depths[3];
+        modulation-offset: root.modulation-offsets[3];
+        modulation-route-count: root.modulation-route-counts[3];
+        changed(v) => { root.cross-changed(v); }
+        modulation-depth-changed(v) => { root.modulation-depth-changed(3, v); }
+        modulation-edit-started => { root.modulation-edit-started(3); }
+        modulation-edit-finished => { root.modulation-edit-finished(3); }
+    }
+    ParameterKnob {
+        x: root.pad + root.inner * 3 / 5;
+        y: root.knob-y;
+        width: root.inner / 5;
+        height: root.height - root.knob-y - 4px;
+        diameter: 34px;
+        label: "Tone";
+        tooltip: "Damping of the repeats: dark to open";
+        value <=> root.tone;
+        default-value: 0.6;
+        value-text: round(root.tone * 100) + "%";
+        modulation-armed: root.modulation-armed;
+        modulation-allowed: root.modulation-allowed[4];
+        modulation-depth: root.modulation-depths[4];
+        modulation-offset: root.modulation-offsets[4];
+        modulation-route-count: root.modulation-route-counts[4];
+        changed(v) => { root.tone-changed(v); }
+        modulation-depth-changed(v) => { root.modulation-depth-changed(4, v); }
+        modulation-edit-started => { root.modulation-edit-started(4); }
+        modulation-edit-finished => { root.modulation-edit-finished(4); }
+    }
+    // Delay's own repeat blend is intentionally kept alongside the
+    // generic host Wet/dry control for the rare but useful nested mix.
+    ParameterKnob {
+        x: root.pad + root.inner * 4 / 5;
+        y: root.knob-y;
+        width: root.inner / 5;
+        height: root.height - root.knob-y - 4px;
+        diameter: 34px;
+        label: "Mix";
+        tooltip: "Delay's internal dry/wet blend";
+        value <=> root.mix;
+        default-value: 0.35;
+        value-text: round(root.mix * 100) + "%";
+        modulation-armed: root.modulation-armed;
+        modulation-allowed: root.modulation-allowed[5];
+        modulation-depth: root.modulation-depths[5];
+        modulation-offset: root.modulation-offsets[5];
+        modulation-route-count: root.modulation-route-counts[5];
+        changed(v) => { root.mix-changed(v); }
+        modulation-depth-changed(v) => { root.modulation-depth-changed(5, v); }
+        modulation-edit-started => { root.modulation-edit-started(5); }
+        modulation-edit-finished => { root.modulation-edit-finished(5); }
     }
 }

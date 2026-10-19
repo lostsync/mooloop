@@ -7,6 +7,12 @@ import { DynamicsCurveDisplay } from "device-displays.slint";
 // Comp device face. Gate, compressor, and limiter share one transfer-curve
 // display because they are the same kind of plot; only their controls
 // differ. Header and drag come from the shared EffectDeviceShell.
+//
+// Redrawn 2026-10-14 to the Filter's grid (Joam picked layout A): the curve
+// and a gain-reduction meter across the top, and the seven knobs in one row
+// of equal cells under them, in the order the curve is read -- its shape,
+// then its timing, then what leaves. Placed by hand: a full-size
+// knob inside a layout is a binding loop.
 export component CompressorDeviceFace inherits EffectDeviceShell {
     name: "Comp";
     kind: "FX";
@@ -35,164 +41,221 @@ export component CompressorDeviceFace inherits EffectDeviceShell {
     private property <float> knee-db: root.knee * 24;
     private property <float> makeup-db: root.makeup * 24;
 
-    VerticalLayout {
-        padding: 6px;
-        padding-top: DeviceRackMetrics.header-height + 6px;
-        spacing: 4px;
+    private property <length> pad: 8px;
+    private property <length> inner: root.width - 2 * root.pad;
+    private property <length> top: DeviceRackMetrics.header-height + 8px;
+    private property <length> plot-height: 148px;
+    private property <length> meter-width: 34px;
+    private property <length> knob-y: root.top + root.plot-height + 6px;
+    // The reduction the meter shows, 0..24 dB, falling from the top.
+    private property <float> reduction-db: clamp(-root.gain-reduction-db, 0, 24);
+
+    Rectangle {
+        x: root.pad;
+        y: root.top;
+        width: root.inner - root.meter-width - 6px;
+        height: root.plot-height;
+        background: Theme.panel;
+        border-radius: Theme.radius-sm;
+        DynamicsCurveDisplay {
+            x: 4px;
+            y: 4px;
+            width: parent.width - 8px;
+            height: parent.height - 8px;
+            mode: 1;
+            threshold-db: root.threshold-db;
+            ratio: root.ratio-value;
+            knee-db: root.knee-db;
+            extra-db: root.makeup-db;
+            detector-db: root.detector-db;
+            gain-reduction-db: root.gain-reduction-db;
+            threshold-dragged(db) => {
+                // Reported, not written: `threshold` is the model row's, and
+                // writing it would drop that binding (MOO-220).
+                root.threshold-changed(clamp((db + 60) / 60, 0, 1));
+            }
+        }
+    }
+
+    // Gain reduction, scaled in dB: what the curve is doing right now.
+    Rectangle {
+        x: root.pad + root.inner - root.meter-width;
+        y: root.top;
+        width: root.meter-width;
+        height: root.plot-height;
+        background: Theme.panel;
+        border-radius: Theme.radius-sm;
         Rectangle {
-            height: 104px;
-            background: Theme.panel;
-            border-radius: Theme.radius-sm;
-            DynamicsCurveDisplay {
-                x: 4px;
-                y: 4px;
-                width: parent.width - 8px;
-                height: parent.height - 8px;
-                mode: 1;
-                threshold-db: root.threshold-db;
-                ratio: root.ratio-value;
-                knee-db: root.knee-db;
-                extra-db: root.makeup-db;
-                detector-db: root.detector-db;
-                gain-reduction-db: root.gain-reduction-db;
-                threshold-dragged(db) => {
-                    // Reported, not written: `threshold` is the model row's, and
-                    // writing it would drop that binding (MOO-220).
-                    root.threshold-changed(clamp((db + 60) / 60, 0, 1));
-                }
-            }
+            x: 5px;
+            y: 6px;
+            width: 7px;
+            height: (parent.height - 22px) * root.reduction-db / 24;
+            background: Theme.warning;
         }
-        HorizontalLayout {
-            spacing: 0px;
-            ParameterKnob {
-                width: 61px;
-                diameter: 38px;
-                label: "Thresh";
-                tooltip: "Level compression starts at";
-                value <=> root.threshold;
-                default-value: 0.7;
-                value-text: GainMath.format-plain-db(root.threshold-db) + " dB";
-                modulation-armed: root.modulation-armed;
-                modulation-allowed: root.modulation-allowed[0];
-                modulation-depth: root.modulation-depths[0];
-                modulation-offset: root.modulation-offsets[0];
-                modulation-route-count: root.modulation-route-counts[0];
-                changed(v) => { root.threshold-changed(v); }
-                modulation-depth-changed(v) => { root.modulation-depth-changed(0, v); }
-                modulation-edit-started => { root.modulation-edit-started(0); }
-                modulation-edit-finished => { root.modulation-edit-finished(0); }
-            }
-            ParameterKnob {
-                width: 61px;
-                diameter: 38px;
-                label: "Ratio";
-                tooltip: "How hard the signal is held above the threshold";
-                value <=> root.ratio;
-                default-value: 0.4627;
-                value-text: round(root.ratio-value * 10) / 10 + ":1";
-                modulation-armed: root.modulation-armed;
-                modulation-allowed: root.modulation-allowed[1];
-                modulation-depth: root.modulation-depths[1];
-                modulation-offset: root.modulation-offsets[1];
-                modulation-route-count: root.modulation-route-counts[1];
-                changed(v) => { root.ratio-changed(v); }
-                modulation-depth-changed(v) => { root.modulation-depth-changed(1, v); }
-                modulation-edit-started => { root.modulation-edit-started(1); }
-                modulation-edit-finished => { root.modulation-edit-finished(1); }
-            }
-            ParameterKnob {
-                width: 61px;
-                diameter: 38px;
-                label: "Attack";
-                tooltip: "How fast the compressor responds";
-                value <=> root.attack;
-                default-value: 0.6388;
-                value-text: round(root.attack-ms * 100) / 100 + " ms";
-                modulation-armed: root.modulation-armed;
-                modulation-allowed: root.modulation-allowed[2];
-                modulation-depth: root.modulation-depths[2];
-                modulation-offset: root.modulation-offsets[2];
-                modulation-route-count: root.modulation-route-counts[2];
-                changed(v) => { root.attack-changed(v); }
-                modulation-depth-changed(v) => { root.modulation-depth-changed(2, v); }
-                modulation-edit-started => { root.modulation-edit-started(2); }
-                modulation-edit-finished => { root.modulation-edit-finished(2); }
-            }
-            ParameterKnob {
-                width: 61px;
-                diameter: 38px;
-                label: "Release";
-                tooltip: "How fast it lets go";
-                value <=> root.release;
-                default-value: 0.5304;
-                value-text: round(root.release-ms) + " ms";
-                modulation-armed: root.modulation-armed;
-                modulation-allowed: root.modulation-allowed[3];
-                modulation-depth: root.modulation-depths[3];
-                modulation-offset: root.modulation-offsets[3];
-                modulation-route-count: root.modulation-route-counts[3];
-                changed(v) => { root.release-changed(v); }
-                modulation-depth-changed(v) => { root.modulation-depth-changed(3, v); }
-                modulation-edit-started => { root.modulation-edit-started(3); }
-                modulation-edit-finished => { root.modulation-edit-finished(3); }
-            }
-            ParameterKnob {
-                width: 61px;
-                diameter: 38px;
-                label: "Knee";
-                tooltip: "Width of the soft transition at the threshold";
-                value <=> root.knee;
-                default-value: 0.25;
-                value-text: GainMath.format-plain-db(root.knee-db) + " dB";
-                modulation-armed: root.modulation-armed;
-                modulation-allowed: root.modulation-allowed[4];
-                modulation-depth: root.modulation-depths[4];
-                modulation-offset: root.modulation-offsets[4];
-                modulation-route-count: root.modulation-route-counts[4];
-                changed(v) => { root.knee-changed(v); }
-                modulation-depth-changed(v) => { root.modulation-depth-changed(4, v); }
-                modulation-edit-started => { root.modulation-edit-started(4); }
-                modulation-edit-finished => { root.modulation-edit-finished(4); }
-            }
-            ParameterKnob {
-                width: 61px;
-                diameter: 38px;
-                label: "Makeup";
-                tooltip: "Gain added after compression";
-                value <=> root.makeup;
-                default-value: 0.0;
-                value-text: GainMath.format-db(root.makeup-db);
-                modulation-armed: root.modulation-armed;
-                modulation-allowed: root.modulation-allowed[5];
-                modulation-depth: root.modulation-depths[5];
-                modulation-offset: root.modulation-offsets[5];
-                modulation-route-count: root.modulation-route-counts[5];
-                changed(v) => { root.makeup-changed(v); }
-                modulation-depth-changed(v) => { root.modulation-depth-changed(5, v); }
-                modulation-edit-started => { root.modulation-edit-started(5); }
-                modulation-edit-finished => { root.modulation-edit-finished(5); }
-            }
-            // Its own parallel balance, linear like the channel strip's
-            // `w/d mix` (MOO-142): the header's Wet is an equal-power
-            // blend, which runs a compressor and its own input 3 dB hot.
-            ParameterKnob {
-                width: 61px;
-                diameter: 38px;
-                label: "Mix";
-                tooltip: round(root.mix * 100) + "%";
-                value <=> root.mix;
-                default-value: 1.0;
-                value-text: round(root.mix * 100) + "%";
-                modulation-armed: root.modulation-armed;
-                modulation-allowed: root.modulation-allowed[6];
-                modulation-depth: root.modulation-depths[6];
-                modulation-offset: root.modulation-offsets[6];
-                modulation-route-count: root.modulation-route-counts[6];
-                changed(v) => { root.mix-changed(v); }
-                modulation-depth-changed(v) => { root.modulation-depth-changed(6, v); }
-                modulation-edit-started => { root.modulation-edit-started(6); }
-                modulation-edit-finished => { root.modulation-edit-finished(6); }
-            }
+        for mark in [0, 3, 6, 12, 24] : Text {
+            x: 16px;
+            y: 2px + (parent.height - 22px) * mark / 24;
+            text: mark;
+            color: Theme.text-faint;
+            font-size: Theme.text-xs;
         }
+        Text {
+            x: 4px;
+            y: parent.height - 13px;
+            text: "GR";
+            color: Theme.text-faint;
+            font-size: Theme.text-xs;
+        }
+    }
+
+    ParameterKnob {
+        x: root.pad + root.inner * 0 / 7;
+        y: root.knob-y;
+        width: root.inner / 7;
+        height: root.height - root.knob-y - 4px;
+        diameter: 30px;
+        label: "Thresh";
+        tooltip: "Level compression starts at";
+        value <=> root.threshold;
+        default-value: 0.7;
+        value-text: GainMath.format-plain-db(root.threshold-db) + " dB";
+        modulation-armed: root.modulation-armed;
+        modulation-allowed: root.modulation-allowed[0];
+        modulation-depth: root.modulation-depths[0];
+        modulation-offset: root.modulation-offsets[0];
+        modulation-route-count: root.modulation-route-counts[0];
+        changed(v) => { root.threshold-changed(v); }
+        modulation-depth-changed(v) => { root.modulation-depth-changed(0, v); }
+        modulation-edit-started => { root.modulation-edit-started(0); }
+        modulation-edit-finished => { root.modulation-edit-finished(0); }
+    }
+    ParameterKnob {
+        x: root.pad + root.inner * 1 / 7;
+        y: root.knob-y;
+        width: root.inner / 7;
+        height: root.height - root.knob-y - 4px;
+        diameter: 30px;
+        label: "Ratio";
+        tooltip: "How hard the signal is held above the threshold";
+        value <=> root.ratio;
+        default-value: 0.4627;
+        value-text: round(root.ratio-value * 10) / 10 + ":1";
+        modulation-armed: root.modulation-armed;
+        modulation-allowed: root.modulation-allowed[1];
+        modulation-depth: root.modulation-depths[1];
+        modulation-offset: root.modulation-offsets[1];
+        modulation-route-count: root.modulation-route-counts[1];
+        changed(v) => { root.ratio-changed(v); }
+        modulation-depth-changed(v) => { root.modulation-depth-changed(1, v); }
+        modulation-edit-started => { root.modulation-edit-started(1); }
+        modulation-edit-finished => { root.modulation-edit-finished(1); }
+    }
+    ParameterKnob {
+        x: root.pad + root.inner * 2 / 7;
+        y: root.knob-y;
+        width: root.inner / 7;
+        height: root.height - root.knob-y - 4px;
+        diameter: 30px;
+        label: "Knee";
+        tooltip: "Width of the soft transition at the threshold";
+        value <=> root.knee;
+        default-value: 0.25;
+        value-text: GainMath.format-plain-db(root.knee-db) + " dB";
+        modulation-armed: root.modulation-armed;
+        modulation-allowed: root.modulation-allowed[4];
+        modulation-depth: root.modulation-depths[4];
+        modulation-offset: root.modulation-offsets[4];
+        modulation-route-count: root.modulation-route-counts[4];
+        changed(v) => { root.knee-changed(v); }
+        modulation-depth-changed(v) => { root.modulation-depth-changed(4, v); }
+        modulation-edit-started => { root.modulation-edit-started(4); }
+        modulation-edit-finished => { root.modulation-edit-finished(4); }
+    }
+    ParameterKnob {
+        x: root.pad + root.inner * 3 / 7;
+        y: root.knob-y;
+        width: root.inner / 7;
+        height: root.height - root.knob-y - 4px;
+        diameter: 30px;
+        label: "Attack";
+        tooltip: "How fast the compressor responds";
+        value <=> root.attack;
+        default-value: 0.6388;
+        value-text: round(root.attack-ms * 100) / 100 + " ms";
+        modulation-armed: root.modulation-armed;
+        modulation-allowed: root.modulation-allowed[2];
+        modulation-depth: root.modulation-depths[2];
+        modulation-offset: root.modulation-offsets[2];
+        modulation-route-count: root.modulation-route-counts[2];
+        changed(v) => { root.attack-changed(v); }
+        modulation-depth-changed(v) => { root.modulation-depth-changed(2, v); }
+        modulation-edit-started => { root.modulation-edit-started(2); }
+        modulation-edit-finished => { root.modulation-edit-finished(2); }
+    }
+    ParameterKnob {
+        x: root.pad + root.inner * 4 / 7;
+        y: root.knob-y;
+        width: root.inner / 7;
+        height: root.height - root.knob-y - 4px;
+        diameter: 30px;
+        label: "Release";
+        tooltip: "How fast it lets go";
+        value <=> root.release;
+        default-value: 0.5304;
+        value-text: round(root.release-ms) + " ms";
+        modulation-armed: root.modulation-armed;
+        modulation-allowed: root.modulation-allowed[3];
+        modulation-depth: root.modulation-depths[3];
+        modulation-offset: root.modulation-offsets[3];
+        modulation-route-count: root.modulation-route-counts[3];
+        changed(v) => { root.release-changed(v); }
+        modulation-depth-changed(v) => { root.modulation-depth-changed(3, v); }
+        modulation-edit-started => { root.modulation-edit-started(3); }
+        modulation-edit-finished => { root.modulation-edit-finished(3); }
+    }
+    ParameterKnob {
+        x: root.pad + root.inner * 5 / 7;
+        y: root.knob-y;
+        width: root.inner / 7;
+        height: root.height - root.knob-y - 4px;
+        diameter: 30px;
+        label: "Makeup";
+        tooltip: "Gain added after compression";
+        value <=> root.makeup;
+        default-value: 0.0;
+        value-text: GainMath.format-db(root.makeup-db);
+        modulation-armed: root.modulation-armed;
+        modulation-allowed: root.modulation-allowed[5];
+        modulation-depth: root.modulation-depths[5];
+        modulation-offset: root.modulation-offsets[5];
+        modulation-route-count: root.modulation-route-counts[5];
+        changed(v) => { root.makeup-changed(v); }
+        modulation-depth-changed(v) => { root.modulation-depth-changed(5, v); }
+        modulation-edit-started => { root.modulation-edit-started(5); }
+        modulation-edit-finished => { root.modulation-edit-finished(5); }
+    }
+    // Its own parallel balance, linear like the channel strip's
+    // `w/d mix` (MOO-142): the header's Wet is an equal-power
+    // blend, which runs a compressor and its own input 3 dB hot.
+    ParameterKnob {
+        x: root.pad + root.inner * 6 / 7;
+        y: root.knob-y;
+        width: root.inner / 7;
+        height: root.height - root.knob-y - 4px;
+        diameter: 30px;
+        label: "Mix";
+        tooltip: round(root.mix * 100) + "%";
+        value <=> root.mix;
+        default-value: 1.0;
+        value-text: round(root.mix * 100) + "%";
+        modulation-armed: root.modulation-armed;
+        modulation-allowed: root.modulation-allowed[6];
+        modulation-depth: root.modulation-depths[6];
+        modulation-offset: root.modulation-offsets[6];
+        modulation-route-count: root.modulation-route-counts[6];
+        changed(v) => { root.mix-changed(v); }
+        modulation-depth-changed(v) => { root.modulation-depth-changed(6, v); }
+        modulation-edit-started => { root.modulation-edit-started(6); }
+        modulation-edit-finished => { root.modulation-edit-finished(6); }
     }
 }

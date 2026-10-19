@@ -2984,17 +2984,18 @@ pub fn effect_kind_index(kind: EffectKind) -> i32 {
 /// the width the application would give it rather than at a width of its own.
 pub fn effect_kind_face_width(kind: EffectKind) -> f32 {
     match kind {
-        EffectKind::Filter
-        | EffectKind::Drive
-        | EffectKind::Bitcrush
-        | EffectKind::Preamp
-        | EffectKind::Limiter => 220.0,
+        // Redesigned 2026-10-14: a type row, the response wide enough to
+        // aim at, and three equal knobs under it.
+        EffectKind::Filter => 280.0,
+        EffectKind::Drive | EffectKind::Bitcrush | EffectKind::Preamp | EffectKind::Limiter => 220.0,
         // Nine parameters and a waveform: the waveform earns its place here
         // in a way it does not on a synth, because the memory *is* the
         // instrument.
         EffectKind::Buffer => 444.0,
         EffectKind::Gate | EffectKind::Compressor | EffectKind::Plate => 444.0,
-        EffectKind::Delay => 668.0,
+        // Redrawn 2026-10-14 to the Filter's grid: five knobs under the
+        // repeats.
+        EffectKind::Delay => 420.0,
         EffectKind::Reverb => 668.0,
         // The master section's face, needle and all, at the master's width
         // (MOO-216): one component draws both.
