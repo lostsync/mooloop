@@ -6311,7 +6311,10 @@ impl UiState {
                     | ModulatorParams::Hold
                     | ModulatorParams::Table(_)
                     | ModulatorParams::Switch(_)
-                    | ModulatorParams::Gate
+                    | ModulatorParams::Gate(_)
+                    | ModulatorParams::Pick(_)
+                    | ModulatorParams::Unpack(_)
+                    | ModulatorParams::Merge(_)
                     | ModulatorParams::Unknown => {}
                 }
                 row

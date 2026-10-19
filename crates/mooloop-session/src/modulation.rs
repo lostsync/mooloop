@@ -584,6 +584,12 @@ impl Session {
             return None;
         }
         let params = mooloop_core::box_text::parse(text).unwrap_or(ModulatorParams::Unknown);
+        // A switch or a gate typed over a box on notes stays on notes, so
+        // its wires stay.
+        let params = match old.params.is_note_box() {
+            true => params.resorted(true).unwrap_or(params),
+            false => params,
+        };
         let unknown_text = if params == ModulatorParams::Unknown {
             text.to_string()
         } else {
@@ -1503,6 +1509,35 @@ mod tests {
         assert_eq!(session.modulation_armed.get(), None);
         assert_eq!(session.modulation.wire_into(Jack::new(select, 2)), None);
         assert_eq!(session.modulation.module(counter).unwrap().at, at(100));
+    }
+
+    /// A switch takes the sort of the first wire into its `in` (song patch
+    /// boxes step 04), dropping the wires out of it that no longer fit, and
+    /// keeps it when retyped.
+    #[test]
+    fn a_switch_takes_the_sort_of_its_first_wire_in() {
+        use mooloop_core::TagKind;
+        let mut session = Session::default();
+        let at = |x| CanvasPoint::new(x, 40);
+        let lfo = session.type_patch_box("lfo", at(0)).unwrap();
+        let chord = session.type_patch_box("chord", at(100)).unwrap();
+        let switch = session.type_patch_box("switch 2", at(200)).unwrap();
+        let slew = session.type_patch_box("slew", at(300)).unwrap();
+        session.rewire_patch(Jack::new(lfo, 0), Jack::new(switch, 0)).unwrap();
+        session.rewire_patch(Jack::new(switch, 1), Jack::new(slew, 0)).unwrap();
+        assert!(!session.modulation.module(switch).unwrap().params.is_note_box());
+
+        session.rewire_patch(Jack::new(chord, 0), Jack::new(switch, 0)).unwrap();
+        let params = session.modulation.module(switch).unwrap().params;
+        assert!(params.is_note_box(), "a note wire came in");
+        assert_eq!(session.modulation.wire_into(Jack::new(slew, 0)), None, "a note outlet cannot feed a slew");
+        let out = session.add_patch_tag(TagKind::NotesOut { channel: None }, at(400)).unwrap();
+        session.rewire_patch(Jack::new(switch, 1), Jack::new(out, 0)).unwrap();
+
+        assert_eq!(session.retype_patch_box(switch, "switch 3"), Some(switch));
+        assert!(session.modulation.module(switch).unwrap().params.is_note_box(), "still on notes");
+        assert!(session.modulation.wire_into(Jack::new(switch, 0)).is_some());
+        assert!(session.modulation.wire_into(Jack::new(out, 0)).is_some());
     }
 
     /// An outlet assigned to a box's knob (song patch step 05) makes a

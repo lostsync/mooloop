@@ -110,25 +110,40 @@ pub enum TagSource {
     Pattern,
 }
 
+/// The most note inlets a note box has: a merge's `a` to `h`.
+pub const MAX_NOTE_INLETS: usize = crate::modulation::NOTE_JACKS_MAX as usize;
+
+/// Where the notes into one note inlet come from (song patch boxes step 04).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NoteFeed {
+    /// A notes-in tag, by its index among the tags, and the seat it hears.
+    Tag { tag: u16, seat: u8 },
+    /// One outlet of a note box, by the box's place in
+    /// [`CompiledModulation::note_boxes`], always an earlier one.
+    Box { at: u16, port: u8 },
+}
+
 /// A note box the note pass runs (song patch step 08): a box reached from
-/// a channel's notes-in tag along note wires. Each has one note inlet, and
-/// an inlet takes one wire, so what reaches a box is a tree from one tag.
+/// a channel's notes-in tag along note wires. A merge has several note
+/// inlets and an unpack or a note switch several note outlets, so the boxes
+/// make a graph with no loops (a wire that would close one is refused),
+/// compiled so each box comes after every box it reads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CompiledNoteBox {
     pub id: ModSourceId,
     /// Its list position among the modules: its params and seed.
     pub module: u16,
-    /// The note box it reads, by its place in
-    /// [`CompiledModulation::note_boxes`], always an earlier one; `None`
-    /// for the notes-in tag at its root.
-    pub input: Option<u16>,
-    /// The notes-in tag at its root, by its index among the tags, and the
-    /// seat that tag hears.
+    /// What feeds each note inlet, by port; `None` for one with no wire, or
+    /// whose wire comes from nothing the notes reach.
+    pub inputs: [Option<NoteFeed>; MAX_NOTE_INLETS],
+    /// The notes-in tag its first input comes from in the end, by its index
+    /// among the tags, with that tag's channel and seat: where a link from
+    /// it says its notes start.
     pub root_tag: u16,
+    pub root_channel: ChannelId,
     pub root_seat: u8,
-    /// Every node from the root tag to this box, and the root's channel,
-    /// hashed: the same path across a change of set is the same box, so it
-    /// keeps the notes it is holding.
+    /// This box and everything feeding it, hashed: the same path across a
+    /// change of set is the same box, so it keeps the notes it is holding.
     pub path: u64,
 }
 
@@ -148,8 +163,9 @@ pub struct CompiledNoteLink {
     pub from_channel: ChannelId,
     pub from_seat: u8,
     /// The note box the link reads, by its place in
-    /// [`CompiledModulation::note_boxes`]; `None` straight from the tag.
-    pub via: Option<u16>,
+    /// [`CompiledModulation::note_boxes`], and which of its outlets; `None`
+    /// straight from the tag.
+    pub via: Option<(u16, u8)>,
     /// The path the notes take to the notes-out tag, hashed as
     /// [`CompiledNoteBox::path`] is.
     pub path: u64,
@@ -326,59 +342,141 @@ impl CompiledModulation {
                 .is_some_and(|outlet| outlet.sort == JackSort::Note)
                 && song.check_wire(wire.from, wire.to).is_ok()
         };
-        let mut notes: Vec<CompiledNoteLink> = Vec::new();
-        let mut note_boxes: Vec<CompiledNoteBox> = Vec::new();
-        for tag in song.tags.iter().take(tag_count) {
-            if !matches!(tag.kind, TagKind::NotesIn { .. }) {
-                continue;
-            }
-            let Some((from_tag, from_channel, from_seat)) = tag_seat(tag.id) else {
-                continue;
-            };
-            let first = note_boxes.len();
-            // Each node the notes reach, as (its id, the box it is, its path),
-            // walked breadth first from the tag.
-            let mut reached: Vec<(ModSourceId, Option<u16>, u64)> =
-                vec![(tag.id, None, path_step(0, tag.id, from_channel.0))];
-            let mut next = 0;
-            while let Some(&(node, via, path)) = reached.get(next) {
-                next += 1;
-                for wire in song.wires.iter().filter(|wire| wire.from.node == node).filter(note_wire) {
-                    if let Some(module) = position_of(wire.to.node) {
-                        let kind = modules[usize::from(module)].params.kind();
-                        if !kind.is_note_box() || note_boxes[first..].iter().any(|held| held.module == module) {
-                            continue;
-                        }
-                        let Ok(at) = u16::try_from(note_boxes.len()) else { continue };
-                        let path = path_step(path, wire.to.node, 0);
-                        note_boxes.push(CompiledNoteBox {
-                            id: wire.to.node,
-                            module,
-                            input: via,
-                            root_tag: from_tag,
-                            root_seat: from_seat,
-                            path,
-                        });
-                        reached.push((wire.to.node, Some(at), path));
-                    } else if matches!(song.tag(wire.to.node).map(|tag| tag.kind), Some(TagKind::NotesOut { .. })) {
-                        let Some((to_tag, to_channel, to_seat)) = tag_seat(wire.to.node) else {
-                            continue;
-                        };
-                        notes.push(CompiledNoteLink {
-                            from: tag.id,
-                            from_tag,
-                            from_channel,
-                            from_seat,
-                            via,
-                            path,
-                            to: wire.to.node,
-                            to_tag,
-                            to_channel,
-                            to_seat,
-                        });
-                    }
+        // The notes-in tags with a channel the song has, and the path each
+        // starts.
+        let roots: Vec<(ModSourceId, u16, ChannelId, u8, u64)> = song
+            .tags
+            .iter()
+            .take(tag_count)
+            .filter(|tag| matches!(tag.kind, TagKind::NotesIn { .. }))
+            .filter_map(|tag| {
+                let (at, channel, seat) = tag_seat(tag.id)?;
+                Some((tag.id, at, channel, seat, path_step(0, tag.id, channel.0)))
+            })
+            .collect();
+        // Every box the notes reach, walked from the roots.
+        let mut reached: Vec<u16> = Vec::new();
+        let mut frontier: Vec<ModSourceId> = roots.iter().map(|root| root.0).collect();
+        while let Some(node) = frontier.pop() {
+            for wire in song.wires.iter().filter(|wire| wire.from.node == node).filter(note_wire) {
+                let Some(module) = position_of(wire.to.node) else { continue };
+                if modules[usize::from(module)].params.is_note_box() && !reached.contains(&module) {
+                    reached.push(module);
+                    frontier.push(wire.to.node);
                 }
             }
+        }
+        reached.sort_unstable();
+        // Each box once every box feeding it is placed, the first ready in
+        // list order each time. Loops are refused, so every box is placed.
+        let mut note_boxes: Vec<CompiledNoteBox> = Vec::new();
+        let feeds_into = |module: u16| {
+            let id = modules[usize::from(module)].id;
+            song.wires.iter().filter(move |wire| wire.to.node == id).filter(note_wire)
+        };
+        while note_boxes.len() < reached.len() {
+            let placed = |id: ModSourceId| note_boxes.iter().position(|placed| placed.id == id);
+            let ready = reached.iter().copied().find(|&module| {
+                placed(modules[usize::from(module)].id).is_none()
+                    && feeds_into(module).all(|wire| {
+                        position_of(wire.from.node).is_none_or(|from| !reached.contains(&from))
+                            || placed(wire.from.node).is_some()
+                    })
+            });
+            let Some(module) = ready else { break };
+            if note_boxes.len() >= usize::from(u16::MAX) {
+                break;
+            }
+            let id = modules[usize::from(module)].id;
+            let mut inputs = [None; MAX_NOTE_INLETS];
+            let mut root = None;
+            let mut path = 0;
+            for wire in feeds_into(module) {
+                let port = usize::from(wire.to.port);
+                if port >= MAX_NOTE_INLETS || inputs[port].is_some() {
+                    continue;
+                }
+                let (feed, from_path, from_root) = if let Some(&(_, tag, channel, seat, tag_path)) =
+                    roots.iter().find(|root| root.0 == wire.from.node)
+                {
+                    (NoteFeed::Tag { tag, seat }, tag_path, (tag, channel, seat))
+                } else if let Some(from) = placed(wire.from.node) {
+                    let from_box = note_boxes[from];
+                    (
+                        NoteFeed::Box {
+                            at: from as u16,
+                            port: wire.from.port,
+                        },
+                        from_box.path,
+                        (from_box.root_tag, from_box.root_channel, from_box.root_seat),
+                    )
+                } else {
+                    continue;
+                };
+                inputs[port] = Some(feed);
+                path = path_step(path ^ from_path, id, u32::from(wire.to.port) << 8 | u32::from(wire.from.port));
+                if root.is_none_or(|(first, _): (usize, _)| port < first) {
+                    root = Some((port, from_root));
+                }
+            }
+            let Some((_, (root_tag, root_channel, root_seat))) = root else {
+                // Fed by nothing the notes reach after all: it is placed so
+                // the boxes after it are, and reads nothing.
+                reached.retain(|&held| held != module);
+                continue;
+            };
+            note_boxes.push(CompiledNoteBox {
+                id,
+                module,
+                inputs,
+                root_tag,
+                root_channel,
+                root_seat,
+                path,
+            });
+        }
+        // Each wire into a notes-out tag the song has, straight from a root
+        // or from a box's outlet.
+        let mut notes: Vec<CompiledNoteLink> = Vec::new();
+        for wire in song.wires.iter().filter(note_wire) {
+            if !matches!(song.tag(wire.to.node).map(|tag| tag.kind), Some(TagKind::NotesOut { .. })) {
+                continue;
+            }
+            let Some((to_tag, to_channel, to_seat)) = tag_seat(wire.to.node) else {
+                continue;
+            };
+            let (from, from_tag, from_channel, from_seat, via, path) =
+                if let Some(&(id, tag, channel, seat, path)) = roots.iter().find(|root| root.0 == wire.from.node) {
+                    (id, tag, channel, seat, None, path)
+                } else if let Some(at) = note_boxes.iter().position(|placed| placed.id == wire.from.node) {
+                    let from_box = note_boxes[at];
+                    let path = match wire.from.port {
+                        0 => from_box.path,
+                        port => path_step(from_box.path, from_box.id, u32::from(port)),
+                    };
+                    (
+                        song.tags[usize::from(from_box.root_tag)].id,
+                        from_box.root_tag,
+                        from_box.root_channel,
+                        from_box.root_seat,
+                        Some((at as u16, wire.from.port)),
+                        path,
+                    )
+                } else {
+                    continue;
+                };
+            notes.push(CompiledNoteLink {
+                from,
+                from_tag,
+                from_channel,
+                from_seat,
+                via,
+                path,
+                to: wire.to.node,
+                to_tag,
+                to_channel,
+                to_seat,
+            });
         }
         let gates: Vec<u16> = note_boxes
             .iter()

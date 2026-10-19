@@ -738,9 +738,12 @@ before any of them existed still loads:
     `in`; transpose and chance `notes`, then `semitones` or `probability`;
     chord, modal, scale and held `notes`; num `in`; hold `in`, `trigger`;
     table `index`, `value`, `write`; switch `in`, `which`; gate `in`,
-    `open`. Every box has one outlet, `out`, except a counter's `index`, a
-    note box's `notes`, a held box's `gate`, `pitch` and `velocity`, and a
-    switch's `a` to `h`, as many as it has. The held box is saved with
+    `open`; pick and unpack `notes`; merge `a` to `h`, as many as it has.
+    Every box has one outlet, `out`, except a counter's `index`, a note
+    box's `notes`, a held box's `gate`, `pitch` and `velocity`, and a
+    switch's and an unpack's `a` to `h`, as many as it has. A switch or a
+    gate saved with `notes = true` has note jacks for `in` and its
+    outlets. The held box is saved with
     `kind = "gate"`, its name before song patch boxes step 03; the gate box
     typed `gate` now is saved as `kind = "pass"`. An inlet tag has one outlet, a notes-in
     tag one `notes` outlet, and a notes-out tag one `notes` inlet. An inlet

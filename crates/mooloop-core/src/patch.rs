@@ -117,6 +117,22 @@ const SWITCH_OUT: &[Port] = &[
     control("h"),
 ];
 const GATE_IN: &[Port] = &[control("in"), control("open")];
+/// A switch and a gate that took a note wire into `in` (step 04).
+const NOTE_SWITCH_IN: &[Port] = &[note("in"), control("which")];
+const NOTE_GATE_IN: &[Port] = &[note("in"), control("open")];
+const NOTE_OUT: &[Port] = &[note("out")];
+/// An unpack's outlets, a note switch's, and a merge's inlets; each has the
+/// first as many as it is set to.
+const NOTE_LETTERS: &[Port] = &[
+    note("a"),
+    note("b"),
+    note("c"),
+    note("d"),
+    note("e"),
+    note("f"),
+    note("g"),
+    note("h"),
+];
 /// A held box's outlets: the gate, as a gate tag's (step 06), then the
 /// latest NoteOn's pitch and velocity.
 const HELD_OUT: &[Port] = &[control("gate"), control("pitch"), control("velocity")];
@@ -193,6 +209,18 @@ impl ModulatorKind {
                 inlets: GATE_IN,
                 outlets: OUT,
             },
+            Self::Pick => Ports {
+                inlets: NOTES,
+                outlets: NOTES,
+            },
+            Self::Unpack => Ports {
+                inlets: NOTES,
+                outlets: NOTE_LETTERS,
+            },
+            Self::Merge => Ports {
+                inlets: NOTE_LETTERS,
+                outlets: NOTES,
+            },
             Self::Unknown => Ports {
                 inlets: &[],
                 outlets: &[],
@@ -213,7 +241,8 @@ impl ModulatorKind {
 
 impl crate::modulation::ModulatorParams {
     /// This box's jacks as its params have them: a select has as many
-    /// inputs as it is set to, a switch as many outlets, and `clip`, the arithmetic box with two
+    /// inputs as it is set to, a switch and an unpack as many outlets, a
+    /// merge as many inlets, a switch or a gate on notes note jacks, and `clip`, the arithmetic box with two
     /// bounds rather than an operand, has no operand inlet. Every other kind
     /// has its kind's table.
     pub fn ports(&self) -> Ports {
@@ -224,9 +253,25 @@ impl crate::modulation::ModulatorParams {
                 inlets: &SELECT_IN[..1 + usize::from(select.inputs.clamp(2, 8))],
                 outlets: ports.outlets,
             },
+            ModulatorParams::Switch(switch) if switch.notes => Ports {
+                inlets: NOTE_SWITCH_IN,
+                outlets: &NOTE_LETTERS[..usize::from(switch.outputs.clamp(2, 8))],
+            },
             ModulatorParams::Switch(switch) => Ports {
                 inlets: ports.inlets,
                 outlets: &SWITCH_OUT[..usize::from(switch.outputs.clamp(2, 8))],
+            },
+            ModulatorParams::Gate(gate) if gate.notes => Ports {
+                inlets: NOTE_GATE_IN,
+                outlets: NOTE_OUT,
+            },
+            ModulatorParams::Unpack(unpack) => Ports {
+                inlets: ports.inlets,
+                outlets: &NOTE_LETTERS[..usize::from(unpack.outputs.clamp(2, 8))],
+            },
+            ModulatorParams::Merge(merge) => Ports {
+                inlets: &NOTE_LETTERS[..usize::from(merge.inputs.clamp(2, 8))],
+                outlets: ports.outlets,
             },
             ModulatorParams::Math(math) if math.op == ModMathOp::Clamp => Ports {
                 inlets: CLIP_IN,
@@ -537,10 +582,11 @@ impl SongModulation {
             .ports_of(from.node)
             .and_then(|ports| ports.outlet(from.port))
             .ok_or(WireRefusal::NoSuchJack)?;
-        let inlet = self
-            .ports_of(to.node)
-            .and_then(|ports| ports.inlet(to.port))
-            .ok_or(WireRefusal::NoSuchJack)?;
+        let inlet = match self.resorted_by(from, to) {
+            Some(params) => params.ports().inlet(to.port),
+            None => self.ports_of(to.node).and_then(|ports| ports.inlet(to.port)),
+        }
+        .ok_or(WireRefusal::NoSuchJack)?;
         if outlet.sort != inlet.sort {
             return Err(WireRefusal::WrongSort);
         }
@@ -577,6 +623,7 @@ impl SongModulation {
     /// allowed; how it runs is the engine's to say.
     pub fn connect(&mut self, from: Jack, to: Jack) -> Result<(), WireRefusal> {
         self.check_wire(from, to)?;
+        let resorted = self.resorted_by(from, to);
         self.wires.retain(|wire| wire.to != to);
         self.wires.push(Wire {
             from,
@@ -584,7 +631,29 @@ impl SongModulation {
             bend: None,
             late: false,
         });
+        if let Some(params) = resorted {
+            if let Some(module) = self.module_mut(to.node) {
+                module.params = params;
+            }
+            // Its outlets changed sort: the wires out of them go.
+            self.drop_dead_wires();
+        }
         Ok(())
+    }
+
+    /// What a switch or a gate becomes when a wire from `from` comes into
+    /// its `in` (song patch boxes step 04): it takes that wire's sort.
+    /// `None` when `to` is not such a box's `in`, or the sorts already
+    /// agree.
+    fn resorted_by(&self, from: Jack, to: Jack) -> Option<crate::modulation::ModulatorParams> {
+        // A wire already there is held to its box's sort as it stands, so
+        // a song's integrity check drops one that does not fit.
+        if to.port != 0 || self.wires.iter().any(|wire| wire.from == from && wire.to == to) {
+            return None;
+        }
+        let params = self.module(to.node)?.params;
+        let notes = self.ports_of(from.node)?.outlet(from.port)?.sort == JackSort::Note;
+        (params.is_note_box() != notes).then(|| params.resorted(notes)).flatten()
     }
 
     /// Remove every wire whose jacks a box no longer has: a select set to
@@ -1132,12 +1201,12 @@ mod tests {
         let (mut song, ids) = song_with(&[ModulatorKind::Switch, ModulatorKind::Math, ModulatorKind::Slew]);
         let (switch, math, slew) = (ids[0], ids[1], ids[2]);
         song.wires.clear();
-        song.module_mut(switch).unwrap().params = ModulatorParams::Switch(ModSwitchParams { outputs: 3 });
+        song.module_mut(switch).unwrap().params = ModulatorParams::Switch(ModSwitchParams { outputs: 3, notes: false });
         let names: Vec<_> = song.module(switch).unwrap().params.ports().outlets.iter().map(|port| port.name).collect();
         assert_eq!(names, ["a", "b", "c"]);
         song.connect(Jack::new(switch, 0), Jack::new(math, 0)).unwrap();
         song.connect(Jack::new(switch, 2), Jack::new(slew, 0)).unwrap();
-        song.module_mut(switch).unwrap().params = ModulatorParams::Switch(ModSwitchParams { outputs: 2 });
+        song.module_mut(switch).unwrap().params = ModulatorParams::Switch(ModSwitchParams { outputs: 2, notes: false });
         assert!(song.drop_dead_wires());
         let left: Vec<_> = song.wires.iter().map(|wire| wire.from).collect();
         assert_eq!(left, [Jack::new(switch, 0)]);
@@ -1221,7 +1290,7 @@ params = { kind = "lfo", rate_hz = "fast" }
     #[test]
     fn a_gate_box_saved_before_the_rename_opens_as_held() {
         use crate::box_text::spell;
-        use crate::modulation::ModulatorParams;
+        use crate::modulation::{ModGateParams, ModulatorParams};
         let saved = r#"
 next_source_id = 2
 
@@ -1236,11 +1305,11 @@ params = { kind = "gate" }
         assert_eq!(spell(&held.params, &held.text), "held");
 
         let (mut song, ids) = song_with(&[ModulatorKind::Lfo]);
-        song.module_mut(ids[0]).unwrap().params = ModulatorParams::Gate;
+        song.module_mut(ids[0]).unwrap().params = ModulatorParams::Gate(ModGateParams::default());
         let text = toml::to_string(&song).unwrap();
         assert!(text.contains(r#"kind = "pass""#), "{text}");
         let loaded: SongModulation = toml::from_str(&text).unwrap();
-        assert_eq!(loaded.module(ids[0]).unwrap().params, ModulatorParams::Gate);
+        assert_eq!(loaded.module(ids[0]).unwrap().params, ModulatorParams::Gate(ModGateParams::default()));
     }
 
     #[test]

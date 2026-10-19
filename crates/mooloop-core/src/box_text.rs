@@ -14,9 +14,9 @@
 use crate::harmony::{ChordQuality, Mode, MAX_CHORD_NOTES, PITCH_NAMES};
 use crate::modulation::{
     ModChanceParams, ModChordParams, ModModalParams, ModScaleParams, ModTransposeParams,
-    TRANSPOSE_MAX_SEMITONES, ModCounterParams, ModLfoParams, ModLfoWaveform, ModMathOp, ModMathParams, ModSelectParams, ModSwitchParams,
+    TRANSPOSE_MAX_SEMITONES, ModCounterParams, ModLfoParams, ModLfoWaveform, ModMathOp, ModMathParams, ModSelectParams, ModSwitchParams, ModGateParams, ModPickParams, ModUnpackParams, ModMergeParams,
     ModNumParams, ModSlewParams, ModStepParams, ModTimeDivision, ModulatorKind, ModulatorParams,
-    ModTableParams, NumFormat, COUNTER_MAX_STEPS, TABLE_MAX_VALUES, MOD_STEP_MAX_STEPS, NUM_LIMIT, SELECT_MAX_INPUTS, SWITCH_MAX_OUTPUTS,
+    ModTableParams, NumFormat, COUNTER_MAX_STEPS, TABLE_MAX_VALUES, MOD_STEP_MAX_STEPS, NUM_LIMIT, SELECT_MAX_INPUTS, SWITCH_MAX_OUTPUTS, PICK_MOST, NOTE_JACKS_MAX,
 };
 
 /// One name a box can be typed as, and the line the completion list shows
@@ -33,7 +33,7 @@ const fn word(name: &'static str, says: &'static str) -> Word {
 
 /// The boxes, the control boxes then the note boxes, as the completion
 /// list offers them.
-pub const VOCABULARY: [Word; 25] = [
+pub const VOCABULARY: [Word; 28] = [
     word("lfo", "Periodic movement. lfo tri 1/4"),
     word("env", "Attack, decay, sustain, release from a gate."),
     word("step", "A row of values, one per advance. step 8 uni"),
@@ -59,6 +59,9 @@ pub const VOCABULARY: [Word; 25] = [
     word("transpose", "Moves notes by semitones. transpose -12"),
     word("chance", "Lets each note through with a probability. chance 0.7"),
     word("held", "Notes to a gate, pitch and velocity."),
+    word("pick", "Keeps one note of each chord. pick low, pick 2, pick -1"),
+    word("unpack", "Each chord's notes on their own outlets, lowest first. unpack 4"),
+    word("merge", "n streams of notes into one. merge 2"),
 ];
 
 /// How an inversion is spelled after a chord's type: none for root
@@ -255,7 +258,14 @@ pub fn spell(params: &ModulatorParams, text: &str) -> String {
         ModulatorParams::Chance(chance) => format!("chance {}", format_number(chance.probability)),
         ModulatorParams::NoteGate => "held".into(),
         ModulatorParams::Switch(switch) => format!("switch {}", switch.outputs),
-        ModulatorParams::Gate => "gate".into(),
+        ModulatorParams::Gate(_) => "gate".into(),
+        ModulatorParams::Pick(pick) => match pick.which {
+            1 => "pick low".into(),
+            -1 => "pick high".into(),
+            which => format!("pick {which}"),
+        },
+        ModulatorParams::Unpack(unpack) => format!("unpack {}", unpack.outputs),
+        ModulatorParams::Merge(merge) => format!("merge {}", merge.inputs),
         ModulatorParams::Num(num) => {
             let mut spelled = String::from("num");
             if let Some(format) = NUM_FORMATS.iter().find(|(_, held)| *held == num.format) {
@@ -476,9 +486,34 @@ pub fn parse(text: &str) -> Option<ModulatorParams> {
         "switch" => {
             at_most(1)?;
             let outputs = count(args.first().copied(), 2, 2, SWITCH_MAX_OUTPUTS)?;
-            Some(ModulatorParams::Switch(ModSwitchParams { outputs }))
+            Some(ModulatorParams::Switch(ModSwitchParams { outputs, notes: false }))
         }
-        "gate" => at_most(0).map(|()| ModulatorParams::Gate),
+        "gate" => at_most(0).map(|()| ModulatorParams::Gate(ModGateParams::default())),
+        "pick" => {
+            at_most(1)?;
+            let which = match args.first().map(|arg| arg.to_ascii_lowercase()).as_deref() {
+                None | Some("low") => 1,
+                Some("high") => -1,
+                Some(arg) => {
+                    let most = f32::from(PICK_MOST);
+                    match number(arg)?.round().clamp(-most, most) as i8 {
+                        0 => return None,
+                        which => which,
+                    }
+                }
+            };
+            Some(ModulatorParams::Pick(ModPickParams { which }))
+        }
+        "unpack" => {
+            at_most(1)?;
+            let outputs = count(args.first().copied(), 4, 2, NOTE_JACKS_MAX)?;
+            Some(ModulatorParams::Unpack(ModUnpackParams { outputs }))
+        }
+        "merge" => {
+            at_most(1)?;
+            let inputs = count(args.first().copied(), 2, 2, NOTE_JACKS_MAX)?;
+            Some(ModulatorParams::Merge(ModMergeParams { inputs }))
+        }
         "num" => num(&args),
         "hold" => at_most(0).map(|()| ModulatorParams::Hold),
         "clip" => {
@@ -614,8 +649,30 @@ mod tests {
         assert_eq!(round_trip("switch 3"), "switch 3");
         assert_eq!(round_trip("switch 20"), "switch 8");
         assert_eq!(round_trip("gate"), "gate");
-        assert_eq!(parse("gate"), Some(ModulatorParams::Gate), "gate is the control gate now");
+        assert_eq!(
+            parse("gate"),
+            Some(ModulatorParams::Gate(crate::modulation::ModGateParams::default())),
+            "gate is the control gate now"
+        );
         for typed in ["gate 1", "switch 3 3"] {
+            assert_eq!(parse(typed), None, "{typed:?}");
+        }
+    }
+
+    #[test]
+    fn pick_unpack_and_merge_spell_as_typed() {
+        assert_eq!(round_trip("pick"), "pick low");
+        assert_eq!(round_trip("pick 1"), "pick low");
+        assert_eq!(round_trip("pick high"), "pick high");
+        assert_eq!(round_trip("pick -1"), "pick high");
+        assert_eq!(round_trip("pick 2"), "pick 2");
+        assert_eq!(round_trip("pick -3"), "pick -3");
+        assert_eq!(round_trip("pick 20"), "pick 8");
+        assert_eq!(round_trip("unpack"), "unpack 4");
+        assert_eq!(round_trip("unpack 3"), "unpack 3");
+        assert_eq!(round_trip("merge"), "merge 2");
+        assert_eq!(round_trip("merge 9"), "merge 8");
+        for typed in ["pick 0", "pick middle", "unpack 2 2", "merge x"] {
             assert_eq!(parse(typed), None, "{typed:?}");
         }
     }
@@ -636,7 +693,7 @@ mod tests {
         let offered: Vec<_> = completions("s").map(|word| word.name).collect();
         assert_eq!(offered, ["step", "select", "switch", "slew", "scale"]);
         let offered: Vec<_> = completions("m").map(|word| word.name).collect();
-        assert_eq!(offered, ["min", "max", "modal"]);
+        assert_eq!(offered, ["min", "max", "modal", "merge"]);
         assert_eq!(completions("").count(), VOCABULARY.len());
     }
 
