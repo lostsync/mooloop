@@ -6307,6 +6307,8 @@ impl UiState {
                     | ModulatorParams::Transpose(_)
                     | ModulatorParams::Chance(_)
                     | ModulatorParams::NoteGate
+                    | ModulatorParams::Num(_)
+                    | ModulatorParams::Hold
                     | ModulatorParams::Unknown => {}
                 }
                 row

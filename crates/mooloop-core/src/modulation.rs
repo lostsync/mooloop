@@ -878,6 +878,17 @@ pub const CHANCE_PARAM_PROBABILITY: u32 = 0;
 /// The furthest a transpose box moves a note, either way: four octaves.
 pub const TRANSPOSE_MAX_SEMITONES: i8 = 48;
 
+/// A num box's value, as a position `0..1` between its low and high
+/// (song patch boxes step 01), so its knob, and a route onto it, sweep the
+/// range it was typed with; then the range, and how it reads.
+pub const NUM_PARAM_POSITION: u32 = 0;
+pub const NUM_PARAM_LOW: u32 = 1;
+pub const NUM_PARAM_HIGH: u32 = 2;
+pub const NUM_PARAM_FORMAT: u32 = 3;
+
+/// The furthest a num box's range reaches, either way.
+pub const NUM_LIMIT: f32 = 1000.0;
+
 /// The longest count a counter takes (song patch step 04).
 pub const COUNTER_MAX_STEPS: u8 = 64;
 /// The most inputs a select takes: `a` to `h`.
@@ -1279,6 +1290,34 @@ pub const CHANCE_DESCRIPTORS: [ParamDescriptor; 1] = [ParamDescriptor {
     default: 0.5,
 }];
 
+/// A num box's bound, either end.
+const fn num_bound(id: u32, name: &'static str, default: f32) -> ParamDescriptor {
+    ParamDescriptor {
+        id,
+        name,
+        unit: "",
+        min: -NUM_LIMIT,
+        max: NUM_LIMIT,
+        curve: ParamCurve::Linear,
+        default,
+    }
+}
+
+pub const NUM_DESCRIPTORS: [ParamDescriptor; 4] = [
+    ParamDescriptor {
+        id: NUM_PARAM_POSITION,
+        name: "Value",
+        unit: "",
+        min: 0.0,
+        max: 1.0,
+        curve: ParamCurve::Linear,
+        default: 0.5,
+    },
+    num_bound(NUM_PARAM_LOW, "Low", -1.0),
+    num_bound(NUM_PARAM_HIGH, "High", 1.0),
+    choice(NUM_PARAM_FORMAT, "Format", NumFormat::ALL.len()),
+];
+
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct ModLfoParams {
@@ -1592,6 +1631,87 @@ impl Default for ModChanceParams {
     }
 }
 
+/// How a num box reads its value, and what it sends.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NumFormat {
+    /// As it is, to two decimals.
+    #[default]
+    Float,
+    /// Rounded to a whole number, sent rounded too.
+    Int,
+    /// As a pitch, `0..1` being note 0 to 127, the way a `held` box sends
+    /// one: `C3`.
+    Note,
+}
+
+impl NumFormat {
+    pub const ALL: [NumFormat; 3] = [NumFormat::Float, NumFormat::Int, NumFormat::Note];
+
+    pub fn to_index(self) -> usize {
+        Self::ALL.iter().position(|format| *format == self).unwrap_or_default()
+    }
+
+    pub fn from_index(index: i32) -> Self {
+        usize::try_from(index)
+            .ok()
+            .and_then(|index| Self::ALL.get(index).copied())
+            .unwrap_or_default()
+    }
+}
+
+/// Shows the value passing through it, or, with nothing wired in, sends the
+/// value set on it (song patch boxes step 01).
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct ModNumParams {
+    /// Where the value sits between `low` and `high`, `0..1`.
+    pub position: f32,
+    pub low: f32,
+    pub high: f32,
+    pub format: NumFormat,
+}
+
+impl Default for ModNumParams {
+    fn default() -> Self {
+        Self {
+            position: 0.5,
+            low: -1.0,
+            high: 1.0,
+            format: NumFormat::Float,
+        }
+    }
+}
+
+impl ModNumParams {
+    /// The value it sends with nothing wired in.
+    pub fn value(&self) -> f32 {
+        self.shape(self.low + self.position.clamp(0.0, 1.0) * (self.high - self.low))
+    }
+
+    /// `value` kept inside the range, and rounded for an int.
+    pub fn shape(&self, value: f32) -> f32 {
+        if !value.is_finite() {
+            return self.low.min(self.high).max(0.0).min(self.low.max(self.high));
+        }
+        let value = value.clamp(self.low.min(self.high), self.low.max(self.high));
+        match self.format {
+            NumFormat::Int => value.round(),
+            NumFormat::Float | NumFormat::Note => value,
+        }
+    }
+
+    /// The position that sends `value`, as near as the range allows.
+    pub fn position_of(&self, value: f32) -> f32 {
+        let span = self.high - self.low;
+        if span.abs() < f32::EPSILON {
+            0.0
+        } else {
+            ((value - self.low) / span).clamp(0.0, 1.0)
+        }
+    }
+}
+
 /// One modulator slot's configuration.
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case", tag = "kind")]
@@ -1615,6 +1735,10 @@ pub enum ModulatorParams {
     /// velocity.
     #[serde(rename = "gate")]
     NoteGate,
+    /// Shows a value, or sends one (song patch boxes step 01).
+    Num(ModNumParams),
+    /// Keeps its `in` as of its last trigger.
+    Hold,
     /// A box whose name this build does not know: typed, or saved by a
     /// later build. It keeps its text ([`SongModule::text`]), has no jacks,
     /// and puts out nothing.
@@ -1638,6 +1762,8 @@ impl ModulatorParams {
             Self::Transpose(_) => ModulatorKind::Transpose,
             Self::Chance(_) => ModulatorKind::Chance,
             Self::NoteGate => ModulatorKind::NoteGate,
+            Self::Num(_) => ModulatorKind::Num,
+            Self::Hold => ModulatorKind::Hold,
             Self::Unknown => ModulatorKind::Unknown,
         }
     }
@@ -1738,7 +1864,14 @@ impl ModulatorParams {
                 CHANCE_PARAM_PROBABILITY => Some(p.probability),
                 _ => None,
             },
-            Self::NoteGate | Self::Unknown => None,
+            Self::Num(p) => match id {
+                NUM_PARAM_POSITION => Some(p.position),
+                NUM_PARAM_LOW => Some(p.low),
+                NUM_PARAM_HIGH => Some(p.high),
+                NUM_PARAM_FORMAT => Some(p.format.to_index() as f32),
+                _ => None,
+            },
+            Self::NoteGate | Self::Hold | Self::Unknown => None,
         }
     }
 
@@ -1862,7 +1995,14 @@ impl ModulatorParams {
                     p.probability = value;
                 }
             }
-            Self::NoteGate | Self::Unknown => {}
+            Self::Num(p) => match id {
+                NUM_PARAM_POSITION => p.position = value,
+                NUM_PARAM_LOW => p.low = value,
+                NUM_PARAM_HIGH => p.high = value,
+                NUM_PARAM_FORMAT => p.format = NumFormat::from_index(index),
+                _ => {}
+            },
+            Self::NoteGate | Self::Hold | Self::Unknown => {}
         }
     }
 }
@@ -1885,6 +2025,8 @@ pub enum ModulatorKind {
     Chance,
     #[serde(rename = "gate")]
     NoteGate,
+    Num,
+    Hold,
     /// A box this build has no name for; never in [`Self::ALL`].
     Unknown,
 }
@@ -1893,7 +2035,7 @@ impl ModulatorKind {
     /// Every kind a box can be made as, in the order the shelf's kind
     /// tokens number them: new kinds are appended, so a token keeps naming
     /// the kind it did.
-    pub const ALL: [ModulatorKind; 14] = [
+    pub const ALL: [ModulatorKind; 16] = [
         ModulatorKind::Lfo,
         ModulatorKind::Envelope,
         ModulatorKind::Step,
@@ -1908,6 +2050,8 @@ impl ModulatorKind {
         ModulatorKind::Transpose,
         ModulatorKind::Chance,
         ModulatorKind::NoteGate,
+        ModulatorKind::Num,
+        ModulatorKind::Hold,
     ];
 
     /// Whether the kind works on notes: the engine's note pass runs it,
@@ -1935,6 +2079,8 @@ impl ModulatorKind {
             Self::Transpose => "Transpose",
             Self::Chance => "Chance",
             Self::NoteGate => "Gate",
+            Self::Num => "Number",
+            Self::Hold => "Hold",
             Self::Unknown => "Unknown",
         }
     }
@@ -1957,6 +2103,8 @@ impl ModulatorKind {
             Self::Transpose => "TRN",
             Self::Chance => "CHNC",
             Self::NoteGate => "GATE",
+            Self::Num => "NUM",
+            Self::Hold => "HOLD",
             Self::Unknown => "?",
         }
     }
@@ -1993,6 +2141,8 @@ impl ModulatorKind {
             Self::Transpose => ModulatorParams::Transpose(ModTransposeParams::default()),
             Self::Chance => ModulatorParams::Chance(ModChanceParams::default()),
             Self::NoteGate => ModulatorParams::NoteGate,
+            Self::Num => ModulatorParams::Num(ModNumParams::default()),
+            Self::Hold => ModulatorParams::Hold,
             Self::Unknown => ModulatorParams::Unknown,
         }
     }
@@ -2013,7 +2163,8 @@ impl ModulatorKind {
             Self::Scale => &SCALE_DESCRIPTORS,
             Self::Transpose => &TRANSPOSE_DESCRIPTORS,
             Self::Chance => &CHANCE_DESCRIPTORS,
-            Self::NoteGate | Self::Unknown => &[],
+            Self::Num => &NUM_DESCRIPTORS,
+            Self::NoteGate | Self::Hold | Self::Unknown => &[],
         }
     }
 
@@ -3055,6 +3206,8 @@ impl ModRack {
             | ModulatorParams::Transpose(_)
             | ModulatorParams::Chance(_)
             | ModulatorParams::NoteGate
+            | ModulatorParams::Num(_)
+            | ModulatorParams::Hold
             | ModulatorParams::Unknown => 1.0,
         }
     }
@@ -3226,6 +3379,8 @@ fn rack_input(
         | ModulatorParams::Transpose(_)
         | ModulatorParams::Chance(_)
         | ModulatorParams::NoteGate
+        | ModulatorParams::Num(_)
+        | ModulatorParams::Hold
         | ModulatorParams::Unknown => InputSource::None,
         // A seat with no identity: a preset's gate on its own channel's notes,
         // which means the channel it lands on.
@@ -3360,9 +3515,9 @@ impl<'de> serde::Deserialize<'de> for UnknownParams {
 }
 
 /// Every `kind` a module's params are saved under, as serde spells them.
-const KNOWN_KINDS: [&str; 15] = [
+const KNOWN_KINDS: [&str; 17] = [
     "lfo", "envelope", "step", "random", "math", "counter", "select", "slew", "chord", "modal", "scale",
-    "transpose", "chance", "gate", "unknown",
+    "transpose", "chance", "gate", "num", "hold", "unknown",
 ];
 
 fn is_zero(value: &u32) -> bool {

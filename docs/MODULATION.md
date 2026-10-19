@@ -162,12 +162,12 @@ parameter (`routes`). A channel holds none. Boxes and tags are named by a
 `ModSourceId` from one mint, so a wire names either the same way.
 
 **A box** is typed as text and spelled back from its settings
-(`mooloop_core::box_text`: `parse`, `spell`, and `VOCABULARY`, the twenty
+(`mooloop_core::box_text`: `parse`, `spell`, and `VOCABULARY`, the twenty-two
 names in the order the completion list offers them). A box keeps its
 settings as parameters (`ModulatorParams`), never as text, so `*   -.5`
 typed reads `* -0.5`, and a knob turned on its face changes what the box
 says. The control boxes are `lfo`, `env`, `step`, `random`, `counter`,
-`select` and `slew`, and the arithmetic boxes `+ - * / min max clip` (one
+`select`, `slew`, `num` and `hold`, and the arithmetic boxes `+ - * / min max clip` (one
 kind, Math, with an operator). The note boxes are `chord`, `modal`,
 `scale`, `transpose`, `chance` and `gate`; their pitch, chord and mode tables
 are `crates/mooloop-core/src/harmony.rs`. A name the vocabulary lacks makes
@@ -233,6 +233,16 @@ trigger inlet takes as a NoteOn.
 - A **counter** sends its count as `0..1` across its steps, so a `select`
   of as many inputs reads it directly; a select reads its **index** as
   `0..1` across its inputs. A **slew** follows its **in**.
+- A **num** box shows the value it sends, beside its spelling. With nothing
+  wired in it sends its own value, set by its knob or typed (`num 0.25`);
+  with a wire in, it passes the wire's value. Either way the value is kept
+  inside its range (`num 0 16`, `-1..1` untyped, `0..1` for `num note`) and
+  rounded for `num int`. Its knob is a position across the range, so a
+  route onto it sweeps the range. A num box may send past `-1..1` on its
+  wires (`num int 0 16` into a `/ 16`); **a route reads every source
+  inside `-1..1`**, so an assignment never sees more.
+- A **hold** box keeps its **in** as of its last **trigger**, 0 before the
+  first.
 - A **gate** box sends what a gate tag does from the notes that reach it,
   on its first outlet; its **pitch** and **velocity** outlets carry the
   latest NoteOn's, each `0..1`, and no events.

@@ -38,6 +38,9 @@ const FACE_PAD: f32 = 8.0;
 const EMPTY_FACE: f32 = 24.0;
 /// The fold arrow at the right of a box's spelling, which opens its face.
 pub(crate) const FOLD_WIDTH: f32 = 18.0;
+/// Room a num box keeps beside its spelling for the value it shows
+/// (`PatchNodeRow::readout`).
+pub(crate) const READOUT_WIDTH: f32 = 70.0;
 /// How far from a jack a press still takes it.
 const JACK_REACH: f32 = 8.0;
 /// How far from a wire a press still selects it.
@@ -332,7 +335,12 @@ pub(crate) fn lay_out(
             _ => 8,
         };
         let rows = params.len().div_ceil(columns.max(1));
-        let width = (26.0 + text_width(&spelling, MONO_CHAR) + FOLD_WIDTH)
+        let readout = if matches!(module.params, ModulatorParams::Num(_)) {
+            READOUT_WIDTH
+        } else {
+            0.0
+        };
+        let width = (26.0 + text_width(&spelling, MONO_CHAR) + FOLD_WIDTH + readout)
             .max(64.0)
             .max(jacks * 24.0)
             .max(columns as f32 * CELL_WIDTH + 2.0 * FACE_PAD);
@@ -1604,6 +1612,7 @@ impl UiState {
                     row.open = *open;
                     row.empty_face = *open && face.is_empty();
                     if let NodeKey::Node(id) = node.key {
+                        row.readout = self.readout(id).unwrap_or_default().into();
                         knobs.extend(face.iter().filter_map(|knob| self.face_knob_row(id, *knob)));
                     }
                 }
@@ -1775,6 +1784,7 @@ impl UiState {
         let flashing = &self.patch_canvas.flashing;
         flashing.set(false);
         self.refresh_refusals(window);
+        self.refresh_readouts(window);
         if window.global::<crate::DisplayPrefs>().get_cable_activity() == 0 {
             return;
         }
@@ -1804,6 +1814,39 @@ impl UiState {
             flashing.set(flashing.get() || row.flash > 0);
             if changed {
                 wires.set_row_data(index, row);
+            }
+        }
+    }
+
+    /// What num box `id` shows: the value it sent last, in its format.
+    /// `None` for any other node.
+    fn readout(&self, id: ModSourceId) -> Option<String> {
+        let ModulatorParams::Num(num) = self.session.modulation.module(id)?.params else {
+            return None;
+        };
+        let (value, _) = self.session.patch_node_activity(id);
+        Some(mooloop_core::box_text::num_readout(&num, value))
+    }
+
+    /// Each num box's value, where it moved.
+    fn refresh_readouts(&self, window: &MainWindow) {
+        let nodes = window.global::<crate::PatchView>().get_nodes();
+        for index in 0..nodes.row_count() {
+            let Some(mut row) = nodes.row_data(index) else {
+                continue;
+            };
+            if !row.is_box {
+                continue;
+            }
+            let Some(readout) = u32::try_from(row.node_id)
+                .ok()
+                .and_then(|id| self.readout(ModSourceId(id)))
+            else {
+                continue;
+            };
+            if row.readout != readout.as_str() {
+                row.readout = readout.into();
+                nodes.set_row_data(index, row);
             }
         }
     }

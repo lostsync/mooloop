@@ -7,10 +7,10 @@
 //! reads as the box's speed whichever way it is set. A box's name is not a
 //! knob: the op of `* 0.5` is retyped, not turned.
 
-use mooloop_core::box_text::{division_name, format_number, shape_name};
+use mooloop_core::box_text::{division_name, format_number, num_readout, shape_name};
 use mooloop_core::harmony::PITCH_NAMES;
 use mooloop_core::{
-    ModulatorParams, CHANCE_PARAM_PROBABILITY, CHORD_PARAM_INVERSION, CHORD_PARAM_QUALITY,
+    ModulatorParams, NumFormat, CHANCE_PARAM_PROBABILITY, NUM_PARAM_FORMAT, NUM_PARAM_POSITION, CHORD_PARAM_INVERSION, CHORD_PARAM_QUALITY,
     MODAL_PARAM_MODE, MODAL_PARAM_ROOT, MODAL_PARAM_SEVENTH, TRANSPOSE_PARAM_SEMITONES,
     COUNTER_PARAM_STEPS, ENV_PARAM_AMOUNT, ENV_PARAM_ATTACK_DIVISION,
     ENV_PARAM_ATTACK_S, ENV_PARAM_ATTACK_SYNC, ENV_PARAM_DECAY_DIVISION, ENV_PARAM_DECAY_S,
@@ -85,7 +85,8 @@ pub(crate) fn face_params(params: &ModulatorParams) -> Vec<u32> {
         ModulatorParams::Scale(_) => vec![MODAL_PARAM_ROOT, MODAL_PARAM_MODE],
         ModulatorParams::Transpose(_) => vec![TRANSPOSE_PARAM_SEMITONES],
         ModulatorParams::Chance(_) => vec![CHANCE_PARAM_PROBABILITY],
-        ModulatorParams::NoteGate | ModulatorParams::Unknown => Vec::new(),
+        ModulatorParams::Num(_) => vec![NUM_PARAM_POSITION, NUM_PARAM_FORMAT],
+        ModulatorParams::NoteGate | ModulatorParams::Hold | ModulatorParams::Unknown => Vec::new(),
     }
 }
 
@@ -115,6 +116,7 @@ pub(crate) fn label(params: &ModulatorParams, id: u32) -> String {
         (ModulatorParams::Chord(_), CHORD_PARAM_INVERSION) => "Inv",
         (ModulatorParams::Modal(_), MODAL_PARAM_SEVENTH) => "Size",
         (ModulatorParams::Transpose(_), TRANSPOSE_PARAM_SEMITONES) => "Semis",
+        (ModulatorParams::Num(_), NUM_PARAM_FORMAT) => "Shows",
         _ => return descriptor(params, id).map_or_else(String::new, |d| d.name.to_string()),
     };
     short.to_string()
@@ -176,6 +178,13 @@ pub(crate) fn readout(params: &ModulatorParams, id: u32) -> String {
         (ModulatorParams::Modal(modal), MODAL_PARAM_MODE) => modal.mode.name().into(),
         (ModulatorParams::Scale(scale), MODAL_PARAM_MODE) => scale.mode.name().into(),
         (ModulatorParams::Modal(modal), MODAL_PARAM_SEVENTH) => if modal.seventh { "7th" } else { "triad" }.into(),
+        // The value it sends, not where its knob sits.
+        (ModulatorParams::Num(num), NUM_PARAM_POSITION) => num_readout(num, num.value()),
+        (ModulatorParams::Num(num), NUM_PARAM_FORMAT) => match num.format {
+            NumFormat::Float => "float".into(),
+            NumFormat::Int => "int".into(),
+            NumFormat::Note => "note".into(),
+        },
         (ModulatorParams::Chance(chance), CHANCE_PARAM_PROBABILITY) => {
             format!("{}%", (chance.probability * 100.0).round())
         }
@@ -236,5 +245,15 @@ mod tests {
         assert_eq!(readout(&parse("chance 0.7").unwrap(), CHANCE_PARAM_PROBABILITY), "70%");
         assert_eq!(readout(&parse("transpose -12").unwrap(), TRANSPOSE_PARAM_SEMITONES), "-12st");
         assert!(face_params(&ModulatorParams::NoteGate).is_empty());
+    }
+
+    /// A num box's knob reads the value it sends, in its format.
+    #[test]
+    fn a_num_face_reads_its_value_not_its_knob() {
+        let num = parse("num int 0 16 5").unwrap();
+        assert_eq!(face_params(&num), [NUM_PARAM_POSITION, NUM_PARAM_FORMAT]);
+        assert_eq!(readout(&num, NUM_PARAM_POSITION), "5");
+        assert_eq!(readout(&num, NUM_PARAM_FORMAT), "int");
+        assert!(face_params(&ModulatorParams::Hold).is_empty());
     }
 }

@@ -19,4 +19,20 @@ Planned and agreed 2026-10-19. Each step is worked in order.
 
 ## What each step found
 
-Nothing yet.
+**01 (MOO-533).** `num` and `hold` are control boxes (`ModulatorParams::Num`,
+`ModulatorParams::Hold`), and a num box shows its value on the canvas
+(`PatchNodeRow::readout`, refreshed with cable activity). Where it differs
+from the step file:
+
+- **A num's value is a position across its range** (`ModNumParams::position`),
+  not a number, so its knob and a route onto it sweep the range typed
+  (`num int 0 16`). Typing one number sets the value (`num 0.25`); the
+  spelling keeps the format and range, not the value, which the readout
+  shows.
+- **Routes clamp their source to `-1..1`.** A num may send more on its wires
+  (so `num int 0 16` into `/ 16` works); an assignment reads every source
+  clamped, in the engine (`SongModulator::output`, the box-knob path in
+  `ModulatorSet::moved_knobs`) and in the UI's mirror
+  (`CompiledModulation::offset_for`).
+- The format is a stepped knob on the face (float, int, note); low and high
+  are typed only.
