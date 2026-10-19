@@ -18,7 +18,7 @@ import { DeviceRackMetrics, EffectDeviceShell } from "device-rack.slint";
 // (`layer-device.slint`); the title is still the row's `label` rather than a
 // word written here.
 export component ContainerDeviceFace inherits EffectDeviceShell {
-    kind: "FX / 1U";
+    kind: "FX";
     // Normalized 0..1, and already the natural range: a mix is a ratio.
     in-out property <float> mix;
     // Normalized fader travel (`ParamCurve::Fader`): 0.75 is unity.

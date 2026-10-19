@@ -38,7 +38,7 @@
 
 use mooloop_core::{DeviceKind, EffectKind};
 use mooloop_ui::{
-    device_kind_to_int, effect_kind_index, effect_kind_units, view, ChannelRow, EffectSlotRow,
+    device_kind_to_int, effect_kind_index, effect_kind_face_width, view, ChannelRow, EffectSlotRow,
     MainWindow, StepCell,
 };
 use slint::platform::{PointerEventButton, WindowEvent};
@@ -46,9 +46,9 @@ use slint::{ComponentHandle, LogicalPosition, LogicalSize, ModelRc, SharedString
 use std::cell::RefCell;
 use std::rc::Rc;
 
-/// The source device is three rack units wide, so the first effect starts
-/// after it and its join arrow.
-const SOURCE_WIDTH: f32 = 220.0 * 3.0 + 4.0 + 30.0 * 2.0;
+/// The sampler's face is 664px wide (`main.slint`), so the first effect
+/// starts after it, its rails and its join arrow.
+const SOURCE_WIDTH: f32 = 664.0 + 30.0 * 2.0;
 const RACK_X: f32 = 16.0;
 const RACK_Y: f32 = 384.0;
 const CELL: f32 = 220.0 + 30.0 * 2.0 + 20.0;
@@ -88,21 +88,21 @@ fn channels() -> ModelRc<ChannelRow> {
     }])))
 }
 
-/// A one-unit device. `effect_x` walks the rack in fixed `CELL` steps, so
-/// every row in this fixture has to be one unit wide for the coordinates to
+/// A narrow device. `effect_x` walks the rack in fixed `CELL` steps, so
+/// every row in this fixture has to be 220px wide for the coordinates to
 /// mean anything -- which is a fact about the kinds chosen, and is asserted
 /// rather than assumed.
 fn effect_slot(kind: EffectKind) -> EffectSlotRow {
     assert_eq!(
-        effect_kind_units(kind),
-        1,
-        "{} is wider than one rack unit, so effect_x would point at the \
+        effect_kind_face_width(kind),
+        220.0,
+        "{} is not 220px wide, so effect_x would point at the \
          wrong device",
         kind.label()
     );
     EffectSlotRow {
         kind: effect_kind_index(kind),
-        units: effect_kind_units(kind),
+        face_width: effect_kind_face_width(kind),
         preset_options: Vec::<SharedString>::new().as_slice().into(),
         preset_name: Default::default(),
         bypassed: false,

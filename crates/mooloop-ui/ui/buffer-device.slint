@@ -133,7 +133,7 @@ component HistoryView inherits Rectangle {
     }
 }
 
-// One retained-audio buffer insert, at two units.
+// One retained-audio buffer insert, 444px wide.
 //
 // **The device is a small realtime sampler lurking behind the live audio**,
 // not an effect with buffer-related controls. Audio is always flowing through
@@ -160,7 +160,7 @@ component HistoryView inherits Rectangle {
 // arc that never moves.
 export component BufferDeviceFace inherits EffectDeviceShell {
     name: "Buffer";
-    kind: "BUFFER / 2U";
+    kind: "BUFFER";
 
     // --- what the device is doing, published as display telemetry ---------
     in property <[float]> peaks;

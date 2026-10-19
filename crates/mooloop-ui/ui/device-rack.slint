@@ -5,8 +5,6 @@ import { ChannelMeter } from "meters.slint";
 import { Icon } from "icons.slint";
 
 export global DeviceRackMetrics {
-    out property <length> unit-width: 220px;
-    out property <length> half-gap: 4px;
     out property <length> face-height: 268px;
     // The strip every face paints below. 28px at every text size whose name
     // line fits in it with a pixel to spare, and grown with the text beyond
@@ -50,8 +48,8 @@ export global RackDrag {
     // Rack index of the row being dragged, or -1.
     in-out property <int> source: -1;
     // Rack index the pointer is currently over. Set by the row itself from
-    // its own bounds, so a four-unit face counts as four units wide -- the
-    // reorder used to divide the pointer's travel by a nominal one-unit
+    // its own bounds, so a wide face counts as wide as it is -- the
+    // reorder used to divide the pointer's travel by a nominal narrow
     // pitch, which meant a drag past a wide device landed short of it.
     in-out property <int> target: -1;
     // Pointer travel since the grab, applied to the dragged row's face.
@@ -858,8 +856,8 @@ export component EffectDeviceShell inherits Rectangle {
     // This publishes the grab into `RackDrag` and reads the landing back out
     // of it. It does not work the landing out itself, and that is the fix
     // rather than an indirection: it used to divide the pointer's travel by
-    // `unit-width + 20px`, a *nominal* one-unit pitch, so dragging across a
-    // four-unit EQ or a two-unit compressor landed short of it by the
+    // a *nominal* 240px pitch, so dragging across a wide EQ or
+    // compressor landed short of it by the
     // difference. The rack's rows now report which one the pointer is over
     // from their own bounds, which is right for any width.
     drag := TouchArea {
@@ -928,7 +926,7 @@ export component CollapsedDevice inherits Rectangle {
     in property <string> name;
     // What the strip draws: `name`, one entry per line.
     in property <[string]> letters: FoldLabel.letters(root.name);
-    // The kind and size ("FX / 2U"): not drawn, but named on hover and to a
+    // The kind ("FX"): not drawn, but named on hover and to a
     // screen reader.
     in property <string> kind;
     // The same kind icon the header draws, where the colour chip was.

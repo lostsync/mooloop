@@ -528,16 +528,6 @@ session. Moving tempo and swing onto `Session` is the one worth doing before
 any view rewrite. The full list is in
 `docs/plans/archive/egui-view-layer/00-status.md`.
 
-**A rack unit is two different widths.** An effect slot is `unit-width *
-units + half-gap * (units - 1) + rail-width * 2`; the source device is
-`unit-width * units + half-gap + rail-width * 2` (both in `main.slint`), with
-the gap term not multiplied. They agree only at two units: a three-unit source
-is 724px where a three-unit effect is 728px, and a four-unit source is 944px
-against 952px. Nothing is visibly misaligned. Which is wrong is a design call:
-the majority use `* (units - 1)`, but `JOURNAL.md` records the three-unit
-source face at its inner 664px as measured and deliberate, so correcting the
-source formula widens signed-off faces by 4px or 8px.
-
 **The desktop entry claims less than it could** (`packaging/mooloop.desktop`).
 
 - **`.mooloop` has no MIME type**, so double-clicking a song opens nothing and

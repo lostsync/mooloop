@@ -9,7 +9,7 @@ import { DynamicsCurveDisplay } from "device-displays.slint";
 // differ. Header and drag come from the shared EffectDeviceShell.
 export component LimiterDeviceFace inherits EffectDeviceShell {
     name: "Limiter";
-    kind: "FX / 1U";
+    kind: "FX";
     in-out property <float> ceiling;  // normalized 0..1 (-24..0 dB)
     in-out property <float> release;  // normalized 0..1 (1..500 ms)
     in-out property <float> gain;     // normalized 0..1 (0..24 dB)

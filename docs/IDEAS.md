@@ -155,20 +155,6 @@ same morning list and which deliberately does not touch the playlist.
 
 ---
 
-Rack units. Adam, 2026-09-28, looking at the Bus Comp's new voicing chip
-(MOO-295): *"dont worry about it too much tbh because i think im going to undo
-this who 1u/2u/3u thing so we can just let things be whatever size they want.
-it is not serving any purpose. arbitrary restriction at this point."*
-
-This is about faces being whole rack units wide (`DeviceRackMetrics.unit-width`,
-the `/ 3U` in a header's kind tag). **It became a decision on 2026-09-30**, on
-MOO-462: *"we are dropping that whole convention but havent started the work
-yet. i just dont want you to work making it fit into this U space thing that we
-arent going to use."* It is tracked as MOO-468, unscheduled, and no new face
-should be fitted to units in the meantime.
-
----
-
 ## Node-based patching in the device rack
 
 Folded in from `IDEAS.md` on 2026-09-14, which was a 108-line document

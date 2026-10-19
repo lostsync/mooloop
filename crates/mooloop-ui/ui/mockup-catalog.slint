@@ -337,14 +337,15 @@ export global MockupCatalog {
         },
     ];
 
-    // Rack geometry for a device kind, so the tool can only ever produce a
-    // width the real rack would lay out. Half a unit is a unit split down the
-    // middle, gap included, which is how DeviceJoin divides one.
+    // A sketching grid for a device kind: steps of 220px with 4px between,
+    // the widths the rack's faces had when it counted them in units. The
+    // rack no longer does; this only keeps a mockup's devices in step with
+    // one another. Half a step is a step split down the middle, gap
+    // included.
     public pure function unit-width(units: int, half: bool) -> length {
         half
-            ? DeviceRackMetrics.unit-width / 2 - DeviceRackMetrics.half-gap / 2
-            : DeviceRackMetrics.unit-width * units
-                + DeviceRackMetrics.half-gap * (units - 1)
+            ? 220px / 2 - 4px / 2
+            : 220px * units + 4px * (units - 1)
     }
 }
 
@@ -513,26 +514,26 @@ export component MixerHeaderSheet inherits Window {
         padding: 12px;
         spacing: 4px;
         alignment: start;
-        DeviceHeader { name: "Drums strip"; kind: "STRIP / 2U"; role: "STRIP"; icon: Icons.strip; }
-        DeviceHeader { name: "Drum bus"; kind: "BUS / 2U"; role: "BUS"; icon: Icons.bus; }
-        DeviceHeader { name: "Fader"; kind: "OUT / 1U"; role: "OUT"; icon: Icons.output; }
+        DeviceHeader { name: "Drums strip"; kind: "STRIP"; role: "STRIP"; icon: Icons.strip; }
+        DeviceHeader { name: "Drum bus"; kind: "BUS"; role: "BUS"; icon: Icons.bus; }
+        DeviceHeader { name: "Fader"; kind: "OUT"; role: "OUT"; icon: Icons.output; }
         DeviceHeader {
             name: "Master";
-            kind: "BUS / 4U";
+            kind: "BUS";
             role: "BUS";
             icon: Icons.bus;
             device-color: Theme.warning;
         }
         DeviceHeader {
             name: "Bus Comp";
-            kind: "MASTER / 3U";
+            kind: "MASTER";
             role: "COMP";
             icon: Icons.effect-kinds[16];
             device-color: Theme.warning;
         }
         DeviceHeader {
             name: "Drums strip, muted";
-            kind: "STRIP / 2U";
+            kind: "STRIP";
             role: "STRIP";
             icon: Icons.strip;
             enabled: false;
@@ -937,7 +938,7 @@ export component MockupSpecimen inherits Rectangle {
     // looked at.
     if root.kind == 64: CollapsedDevice {
         name: root.label == "" ? "Delay" : root.label;
-        kind: "FX / 3U";
+        kind: "FX";
         icon: Icons.effect-kinds[3];
         bypassed: root.value > 0.5;
         wet-dry: 1.0;

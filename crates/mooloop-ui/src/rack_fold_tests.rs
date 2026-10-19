@@ -126,7 +126,7 @@ fn a_folded_strip_stacks_its_name_top_to_bottom() {
     }
     let strip = strip_controls(&window).pop().expect("the Bus Comp is folded");
     assert!(
-        strip.label.starts_with("Bus Comp, FX / ") && strip.label.ends_with("U, collapsed"),
+        strip.label == "Bus Comp, FX, collapsed",
         "the kind moved to the accessible label: {}",
         strip.label
     );

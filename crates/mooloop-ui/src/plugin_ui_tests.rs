@@ -899,7 +899,7 @@ fn a_big_plugin_shows_eight_and_the_sidebar_pins_the_rest() {
     assert_eq!(pinned, [1_000, 1_001, 1_002, 1_003, 1_004, 1_005, 1_006, 1_007, 1_014]);
     assert!(h.window.get_plugin_param_rows().row_data(0).expect("a row").pinned);
     // Nine controls on a six-across face: two rows, and one page.
-    assert_eq!(h.state.borrow().effect_slot_model.row_data(0).expect("a row").units, 2);
+    assert_eq!(h.state.borrow().effect_slot_model.row_data(0).expect("a row").face_width, 444.0);
 
     // A second press takes it off again.
     h.window.invoke_plugin_param_pin_toggled(14);
