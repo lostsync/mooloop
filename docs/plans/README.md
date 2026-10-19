@@ -14,6 +14,10 @@ reopening it. A plan's own `00-status.md` says how it got where it is.
 
 ## Active
 
+- `song-patch-boxes/` (planned 2026-10-19, for 0.1.7) — more boxes for the
+  song patch: `num`, `hold`, `table`, `switch`, `gate`, `pick`, `unpack`,
+  `merge`, `note`, `wait`, `arp`, and Step drawn as bars. No list wire: a
+  note wire is the list. Today's `gate` box becomes `held`.
 - `plugin-hosting/` (added 2026-09-16) — CLAP effects and instruments now,
   then VST3, then AU if ever. No format type leaves `mooloop-plugin-host`.
 - `icon-pass/` (planned 2026-09-26) — one registry, `icons.slint`, and one
