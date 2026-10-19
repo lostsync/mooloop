@@ -21,7 +21,8 @@ Each step is blocked by the one before it, except that 09 needs only 06.
 Step 02 carries MOO-170's owed measurement. Step 03 carries song
 modulation's owed *Open* item on route dots revealing the pane.
 
-Planned 2026-10-06.
+Planned 2026-10-06. **Done 2026-10-19**: every step merged, the contract
+rewritten (step 10), and the plan archived.
 
 ## What each step found
 
@@ -351,6 +352,28 @@ from the seat as the file wrote it. Where it differs from the step file:
 - **An old preset's rack is not converted on load** but where it lands,
   by `lift_rack`, the path a 0.1.6 song takes; the factory patches are
   converted when they are built (`SongModulation::from_preset_rack`).
+
+**10 (MOO-529).** The documents describe the patch that landed.
+`MODULATION.md` has a section of its own on the song's patch (boxes, jacks,
+tags, the compiled order, what a control wire carries, loops and late reads,
+note wires and their release rules, assignments as routes, presets), and its
+pane, scope and acceptance criteria follow. `docs/current/modulation.md`,
+`UI_DESIGN.md` (the canvas, its gestures, faces, wires and cable activity),
+`PROJECT_FORMAT.md` (every inlet binding, `late`, the unknown box, every
+kind's jacks, a route's `at`), `TERMINOLOGY.md`, `SCOPE.md`, `FOCUS.md`,
+`PRODUCT.md`, `ACTIONS.md`, `IDEAS.md`, `ENHANCEMENTS.md` and two
+`LISTENING.md` items that described the module grid followed. Where it
+differs from the step file:
+
+- **The canvas added no action.** Its Delete, Backspace and Escape are the
+  canvas's own keys while it has focus, as a text field's are; `ACTIONS.md`
+  says so rather than listing them.
+- **"Note-triggered effects" keeps its request.** The patch answers
+  anything a parameter can do on a note; an insert that acts on a note (a
+  flush, a capture, a playhead jump) still needs the note stream, the same
+  device change patch 5 needs.
+- **What this plan left out is in `IDEAS.md`**, under *What the song patch
+  left out*, with the September items not decided.
 
 ## Adam's rulings
 

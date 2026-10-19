@@ -1,5 +1,5 @@
 //! What a box on the patch canvas says, and what typing one makes
-//! (`docs/plans/song-patch/04-typing-a-box.md`).
+//! (`docs/plans/archive/song-patch/04-typing-a-box.md`).
 //!
 //! A box keeps its settings as parameters, never as text: [`spell`] writes
 //! the text back from them, so `*   -.5` typed reads `* -0.5` once made, and
@@ -7,7 +7,7 @@
 //! other way, and [`VOCABULARY`] is every name it knows, in the order the
 //! completion list offers them.
 //!
-//! The note boxes (`docs/plans/song-patch/08-note-boxes.md`) read and spell
+//! The note boxes (`docs/plans/archive/song-patch/08-note-boxes.md`) read and spell
 //! their chord types, roots and modes from [`crate::harmony`], the one place
 //! those names live.
 

@@ -1,4 +1,4 @@
-//! What an open box's face shows (`docs/plans/song-patch/05-faces-bends-and-cable-activity.md`):
+//! What an open box's face shows (`docs/plans/archive/song-patch/05-faces-bends-and-cable-activity.md`):
 //! which of its settings get a knob, in what order, under what label, and
 //! how each reads. Free of Slint, so the canvas lays faces out as plain data.
 //!

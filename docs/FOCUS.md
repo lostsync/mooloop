@@ -16,17 +16,20 @@ purpose. History goes in `JOURNAL.md`, the state of each issue is in Linear,
 - **One push per release** (labels renumbered 2026-10-05): 0.1.7 modulator,
   0.1.8 UI/UX, 0.1.9 devices, 0.1.10 content, 0.1.11 finalizing (RC/beta).
   A release is whatever carries its label in Linear.
-- **0.1.7** is the modulator push. Its first stage was song modulation (Adam, 2026-10-05: *"let's start by moving
-  what we have and making it work document-wide"*), done 2026-10-06 and
-  archived at `plans/archive/song-modulation/`; what it left open is in its
-  `00-status.md`. Steps 03 to 05 of
-  `plans/icon-pass/` moved to 0.1.8. Before tagging, dispatch `release.yml` on `main`
-  (`OPERATIONS.md`, *Releases And Tags*).
-- **Next: the song patch** (`plans/song-patch/`, planned 2026-10-06 on
-  Adam's go after he tried song modulation: *"you can go ahead and do the
-  plan"*). The Modulation pane becomes a patching canvas, in ten steps.
-  It is the rest of 0.1.7 (Adam, 2026-10-06), so 0.1.7 is tagged when it
-  lands, not before.
+- **0.1.7, the modulator push, is built and ready to tag.** Its first stage
+  was song modulation (Adam, 2026-10-05: *"let's start by moving what we
+  have and making it work document-wide"*), done 2026-10-06
+  (`plans/archive/song-modulation/`). Its second was the song patch: the
+  Modulation pane is one patching canvas for the song, with control and
+  note wires, song inlet tags, note boxes and patch presets, done
+  2026-10-19 (`plans/archive/song-patch/`; `MODULATION.md` is the
+  contract). Adam kept the patch in 0.1.7 (2026-10-06), so the tag waited
+  for it. Before tagging, dispatch `release.yml` on `main` (`OPERATIONS.md`,
+  *Releases And Tags*). What both plans left open is in their
+  `00-status.md`; what the patch plan left out is in `IDEAS.md`.
+- **Next: 0.1.8, UI/UX.** Steps 03 to 05 of `plans/icon-pass/` moved there.
+  The device face redesign (effects first, then instruments, in batches)
+  started 2026-10-14.
 - **Waiting on Adam:** the listening queue in [LISTENING.md](LISTENING.md),
   and MOO-456's look. The `Question` label in Linear is the complete list of
   open questions.
@@ -81,7 +84,8 @@ branch.
   architecture reaches its range. That's the only bar until there's a
   deliberate content push.
 - **Playlist clip manipulation, richer missing-sample relinking, a metronome
-  (a take's count-in is still a silent bar), and the graph editor.**
+  (a take's count-in is still a silent bar).** The graph editor this line
+  once named is built, as the song patch.
 
 Everything else in 0.2.0 is in `SCOPE.md` and in Linear (Rendering, Polish
 backlog, Song automation, Sampler V2). None of it is deferred. It gets

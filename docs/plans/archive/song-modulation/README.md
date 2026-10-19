@@ -64,7 +64,7 @@ it"** (`FOCUS.md`, `SCOPE.md` §4). He raised it.
 
 Adam's *Song Patch* prototype: one song-wide patching canvas in its own
 pane. The proposal, with the prototype link and the points Adam agreed, is
-in `docs/plans/song-patch/README.md`; it was moved there when this plan was
+in `docs/plans/archive/song-patch/README.md`; it was moved there when this plan was
 archived. None of it is built by this plan.
 
 What this plan must not foreclose: module-to-module inputs by

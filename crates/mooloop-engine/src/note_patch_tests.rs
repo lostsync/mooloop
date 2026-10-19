@@ -1,4 +1,4 @@
-//! Notes through the song's patch (`docs/plans/song-patch/07-notes-through-the-patch.md`):
+//! Notes through the song's patch (`docs/plans/archive/song-patch/07-notes-through-the-patch.md`):
 //! Keys' notes wired from its Notes in tag to another channel's Notes out
 //! tag reach that channel at the offsets they reach Keys, copied or taken,
 //! and no note the patch played is left sounding by anything that releases
@@ -279,7 +279,7 @@ fn a_link_to_a_channel_the_song_lacks_is_left_out() {
     assert!(plan.notes.is_empty());
 }
 
-// Note boxes (`docs/plans/song-patch/08-note-boxes.md`).
+// Note boxes (`docs/plans/archive/song-patch/08-note-boxes.md`).
 
 /// [`song`] with `boxes` wired one after another between the tags: Keys'
 /// notes through each in turn to the other channel. Returns the boxes' ids.

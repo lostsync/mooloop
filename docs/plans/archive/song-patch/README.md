@@ -1,5 +1,8 @@
 # Song patch
 
+**Done 2026-10-19 and archived.** `MODULATION.md` is the contract the
+patch left; `00-status.md` has where each step differed from its plan.
+
 The Modulation pane becomes one patching canvas for the whole song. Boxes
 are typed as text (`lfo`, `* -0.5`, `select 6`, `chord min7`), joined by
 two kinds of wire: control wires that carry a value every control tick, and

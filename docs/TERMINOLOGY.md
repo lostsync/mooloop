@@ -71,6 +71,7 @@ should do in the middle of a feature. Today:
 | `compile_bus_graph`, `CompiledBusGraph` | the track graph |
 | `bus` on a channel (its destination) | the channel's track |
 | `ModulationShelf`, `modulation-shelf.slint` | the Modulation pane |
+| `SongModule`, `SongModulation::modules`, "module" | a **box** on the patch |
 
 `MASTER_BUS` is the one that can stay: the master *is* a bus in the ordinary
 sense, and every desk calls it that.
@@ -100,22 +101,53 @@ As the Modulation pane uses them. Modulation belongs to the song, not to a
 channel (Adam, 2026-10-05: *"channels wont have modulators"*), so none of
 these is a property of a channel or a device.
 
-**Module** — one modulator in the song's set: an LFO, Envelope, Step, Random
-or Math. It is named by a durable id (`ModSourceId`), never by its place in
-the grid, and keeps a home seat, the channel it was made on, for its default
-name and for channel presets. In code, `SongModule`. A generator's published
-outlet is a *source* like a module, and is assigned the same way, but it is
-not a module: it has no editor, because the device that publishes it owns it.
+**Patch** — the song's modulation: its boxes, tags, wires and assignments,
+drawn on one canvas in the Modulation pane. In code, `SongModulation`.
 
-**Route** — one connection from a source (a module, a generator outlet, or a
-channel's mod wheel or aftertouch) to one parameter anywhere in the song,
-with a depth and a polarity. It adds an offset around the parameter's base
-and never replaces it. The pane lists a source's routes by chain, device and
-parameter. In code, `ModRoute`.
+**Box** — one thing on the canvas that does something, typed as text: an
+`lfo`, an `env`, a `* -0.5`, a `chord min7`. It is named by a durable id
+(`ModSourceId`), never by its place in the list or on the canvas. In code,
+`SongModule`; *module* is the older word for the same thing, and the code
+still uses it.
 
-**Input** — what drives a module, picked on its surface: nothing, one
-channel's notes, or (for Math) another module. In code, `InputSource`. The
-pane labels it by what it does to the kind: RESET for an LFO, GATE for an
-Envelope, CLOCK for a Step or Random, INPUT for Math. An input is not a
-route: the input says what drives a module, and its routes say where its
-output goes.
+**Jack** — one inlet or outlet of a box or tag, named on the canvas
+(`rate`, `gate`, `out`). Each is control or note (`JackSort`). In code,
+`Jack` (a node and a port) and `Port` (its name and sort).
+
+**Inlet** and **outlet** — the jacks a box reads and the jacks it sends on.
+An inlet takes one wire. Not to be confused with a generator's *published
+outlet* (a device's declared control signal, `mooloop_core::outlet`), which
+reaches the patch through an inlet tag; where both are near, say "the
+generator's outlet".
+
+**Wire** — one connection from an outlet to an inlet of the same sort. A
+**control wire** carries a value every control tick, with the tick's
+events; a **note wire** carries notes, each NoteOff following its NoteOn.
+In code, `Wire`.
+
+**Tag** — a box with no face at the patch's edge, bound to something in the
+song or left empty (`[ ]`): an **inlet** tag (a channel's gate, outlet or
+keyboard, or the transport), a **notes in** tag, or a **notes out** tag. In
+code, `SongTag` and `TagKind`.
+
+**Take** and **copy** — what a notes-in tag does with its channel's notes.
+It copies them by default, so the channel still plays its own part and the
+patch hears it too; switched to take, only the patch's output reaches the
+channel.
+
+**Assignment** — a route as the canvas draws it: a tag wired from a box's
+outlet, naming the parameter, device and depth it drives (`Cutoff  ML-M1 9
++40%`). Made by arming the outlet and dragging the knob, never by drawing a
+wire. An assignment a preset brought in that names no parameter yet is
+**unbound** (`LooseRoute`).
+
+**Route** — one connection from a source (a box or a tag) to one parameter
+anywhere in the song, a box's own knobs included, with a depth and a
+polarity. It adds an offset around the parameter's base and never replaces
+it. The pane lists a source's routes by chain, device and parameter. In
+code, `ModRoute`.
+
+**Patch preset** — a piece of the patch saved from a canvas selection, its
+tags empty and its assignments unbound, landed where the canvas is
+right-clicked. A channel preset carries the piece of the patch that plays on
+its channel the same way.

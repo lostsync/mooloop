@@ -3147,7 +3147,7 @@ struct RackSeat {
 
 /// One module in the song's modulation set: what a rack slot was, plus the
 /// identity and name a song-wide list needs, and its place on the patch
-/// canvas (`docs/plans/song-patch/`). What its inlets listen to is the
+/// canvas (`docs/plans/archive/song-patch/`). What its inlets listen to is the
 /// song's wires ([`SongModulation::wires`]), not a field here.
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct SongModule {
@@ -3256,7 +3256,7 @@ fn rack_input(
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct SongModulation {
     /// The boxes, in the order the engine ticks them until step 02 of
-    /// `docs/plans/song-patch/` compiles the graph's order.
+    /// `docs/plans/archive/song-patch/` compiles the graph's order.
     pub modules: Vec<SongModule>,
     /// The tags: the song's sources and channels on the canvas, as boxes
     /// with no face. Their ids come from the same counter as the modules'.

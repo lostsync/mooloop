@@ -1,4 +1,4 @@
-//! Notes through the song's patch (`docs/plans/song-patch/07-notes-through-the-patch.md`,
+//! Notes through the song's patch (`docs/plans/archive/song-patch/07-notes-through-the-patch.md`,
 //! `08-note-boxes.md`).
 //!
 //! A note wire from a channel's **Notes in** tag to a channel's **Notes out**

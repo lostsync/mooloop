@@ -1,4 +1,4 @@
-//! Patches you can keep (`docs/plans/song-patch/09-patches-you-can-keep.md`):
+//! Patches you can keep (`docs/plans/archive/song-patch/09-patches-you-can-keep.md`):
 //! the session's half of a patch preset. Lifting a canvas selection writes
 //! what each tag and assignment was bound to as text; landing one puts the
 //! boxes where the canvas was clicked; an unbound assignment is bound by the

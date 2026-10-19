@@ -174,8 +174,9 @@ Mooloop is not trying to be:
 - A replacement for REAPER or a general linear recording DAW.
 - A clone of FruityLoops, Reason, Maschine, Bitwig, or any one reference UI.
 - A modular patching environment as broad as Max/MSP.
-- A mandatory graph editor or an exposed patch-cord view for ordinary
-  modulation work.
+- A graph editor you must wire to do ordinary modulation work. The song's
+  modulation is drawn as a patch (`MODULATION.md`), but assigning a source
+  to a knob stays a drag on the knob, and the audio rack stays a chain.
 - A collection of unrelated effects and synths added to satisfy a checklist.
 - A machine that calls random timing jitter "humanization."
 
