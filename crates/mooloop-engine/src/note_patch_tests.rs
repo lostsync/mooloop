@@ -746,3 +746,62 @@ fn the_many_jack_boxes_allocate_nothing() {
     let after = (crate::COUNTING.allocations(), crate::COUNTING.frees());
     assert_eq!(after, before, "the callback allocated or freed with many-jack note boxes in the patch");
 }
+
+// wait (`docs/plans/song-patch-boxes/05-wait.md`).
+
+fn wait_of(typed: &str) -> ModulatorParams {
+    mooloop_core::box_text::parse(typed).unwrap()
+}
+
+/// A wait plays each note, NoteOff and all, the set time later, live and
+/// in a bounce alike.
+#[test]
+fn a_wait_plays_its_notes_the_set_time_later() {
+    let (straight, _) = song_through(&[(0, 2), (4, 2)], true, &[]);
+    let (waited, _) = song_through(&[(0, 2), (4, 2)], true, &[wait_of("wait 1/8")]);
+    let (before, _) = heard_over(&straight, BAR_BLOCKS, false);
+    // An eighth at 120 BPM is a quarter of a second.
+    let later = SAMPLE_RATE as usize / 4;
+    let shifted: Vec<_> = before.iter().map(|&(frame, on, note)| (frame + later, on, note)).collect();
+    for looping in [false, true] {
+        let (heard, sounding) = heard_over(&waited, BAR_BLOCKS, looping);
+        assert_eq!(heard, shifted, "looping {looping}");
+        assert!(sounding.0.is_empty());
+    }
+    let (heard, _) = heard_over(&song_through(&[(0, 2)], true, &[wait_of("wait 10ms")]).0, BAR_BLOCKS, false);
+    assert_eq!(heard.first().map(|event| event.0), Some(SAMPLE_RATE as usize / 100));
+}
+
+/// Stopping, seeking or panicking while a wait holds notes back drops
+/// them, and releases what it already played.
+#[test]
+fn nothing_hangs_when_the_transport_moves_mid_wait() {
+    // Keys holds 60 for eight steps; the wait holds it back an eighth (two
+    // steps).
+    let (project, _) = song_through(&[(0, 8)], false, &[wait_of("wait 1/8")]);
+    let commands = [
+        EngineCommand::Stop,
+        EngineCommand::Seek { tick: f64::from(12 * TICKS_PER_STEP) },
+        EngineCommand::Panic,
+    ];
+    for command in commands {
+        for (blocks, played) in [(STEP_BLOCKS, false), (3 * STEP_BLOCKS, true)] {
+            let mut render = RenderState::from_project(SAMPLE_RATE, &project, &[]);
+            render.play();
+            let mut sounding = Sounding::default();
+            run(&mut render, blocks, false, &mut sounding);
+            assert_eq!(sounding.0.len(), usize::from(played), "{command:?} after {blocks} blocks");
+            render.apply_command(command);
+            for _ in 0..4 * STEP_BLOCKS {
+                render.process_once_block(BLOCK);
+                let events = render.events_of(1);
+                sounding.hear(&events);
+                assert!(
+                    !events.iter().any(|event| matches!(event.event, Event::NoteOn { .. })),
+                    "{command:?}: a held-back note played after"
+                );
+            }
+            assert!(sounding.0.is_empty(), "{command:?}: {:?}", sounding.0);
+        }
+    }
+}

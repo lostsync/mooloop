@@ -83,3 +83,15 @@ file:
   late**, as a transpose's semitones are, so a note at the very first block
   after play sees them as they stood before.
 
+**05 (MOO-537).** `wait` (`ModulatorParams::Wait`): a note lane in the note
+pass (`WaitQueue`, 128 events for 64 tracked notes, on a frame clock the pass
+keeps) and a control lane in the set (`ModulatorSet::rings`, one 2048-reading
+ring per wait). Where it differs from the step file:
+
+- **Beats are typed as the division that long** (`wait 2b` is `wait 1/2`);
+  the settings are an LFO's: a time in ms, or a division when synced. A
+  beat count with no division (`wait 5b`) is refused.
+- **The control ring is decimated**, a reading every few control ticks so 8
+  seconds fits at any sample rate, and read between readings.
+- The delay is taken at the tempo when each note arrives.
+

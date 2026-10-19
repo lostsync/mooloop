@@ -22,7 +22,7 @@ use mooloop_core::{
     MAX_CHANNELS,
 };
 use mooloop_core::modulation::{MAX_GENERATOR_OUTLETS, PERFORMANCE_SOURCES};
-use crate::note_patch::{BoxInputs, NotePass};
+use crate::note_patch::{BoxInputs, NoteClock, NotePass};
 use mooloop_dsp::{
     EventList, ModuleSpec, ModulatorSet, NoteGateEvents, SongInputs, SpecInlet, TransportTick,
     CONTROL_RATE_FRAMES, MAX_CONTROL_TICKS_PER_BLOCK,
@@ -158,13 +158,13 @@ impl SongModulator {
         live: usize,
         panicked: bool,
         playing: bool,
-        frames: usize,
+        clock: NoteClock,
     ) {
         let inputs = BoxInputs {
             modules: &self.plan.modules,
             set: &self.set,
             playing,
-            frames,
+            clock,
         };
         self.notes.process(events, live, panicked, inputs);
     }
