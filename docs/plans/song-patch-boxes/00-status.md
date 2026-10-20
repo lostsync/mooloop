@@ -110,3 +110,18 @@ the step file:
   a level trigger (a `held` box's gate) ends the note as it falls.
 - Unwired, pitch is middle C and velocity 100.
 
+**07 (MOO-539).** `arp` (`ModulatorParams::Arp`: mode, division, octaves,
+gate). The note pass keeps each arp's chord (`ArpState`) and steps it on the
+transport's grid inside the block, from the block's spans in beats
+(`NoteClock::beats`), or on its `advance` as the set logged it last block
+(`ModulatorSet::note_strikes`, as a note box's trigger). Where it differs
+from the step file:
+
+- **A wired `advance` replaces its own clock**, a block late as every
+  control inlet a note box reads; `reset` works either way.
+- **The gate is a share of the rate's step** even when `advance` clocks it,
+  and the next step always ends the note before it.
+- **A note and a step at one offset: the note is in the chord first**, so a
+  chord played on the beat sounds on that beat's step and a chord let go on
+  it does not.
+

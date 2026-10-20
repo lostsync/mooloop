@@ -124,6 +124,8 @@ const NOTE_OUT: &[Port] = &[note("out")];
 /// A wait's two lanes: notes, and a control signal.
 const WAIT_IN: &[Port] = &[note("notes"), control("in")];
 const WAIT_OUT: &[Port] = &[note("notes"), control("out")];
+/// An arp: the chord, and what clocks it in place of its own clock.
+const ARP_IN: &[Port] = &[note("notes"), control("advance"), control("reset")];
 /// A note box: what to play, how hard, and when.
 const NOTE_MAKER_IN: &[Port] = &[control("pitch"), control("velocity"), control("trigger")];
 /// An unpack's outlets, a note switch's, and a merge's inlets; each has the
@@ -232,6 +234,10 @@ impl ModulatorKind {
             },
             Self::Note => Ports {
                 inlets: NOTE_MAKER_IN,
+                outlets: NOTES,
+            },
+            Self::Arp => Ports {
+                inlets: ARP_IN,
                 outlets: NOTES,
             },
             Self::Unknown => Ports {
@@ -1265,11 +1271,11 @@ mod tests {
         use crate::modulation::ModulatorParams;
         let (mut song, ids) = song_with(&[ModulatorKind::Lfo]);
         let unknown = song.add_module(ModulatorParams::Unknown, InputSource::None, "Kick 1");
-        song.module_mut(unknown).unwrap().text = "arp up 2".into();
+        song.module_mut(unknown).unwrap().text = "strum up 2".into();
         let saved = toml::to_string(&song).unwrap();
         let loaded: SongModulation = toml::from_str(&saved).unwrap();
         assert_eq!(loaded, song);
-        assert_eq!(loaded.module(unknown).unwrap().text, "arp up 2");
+        assert_eq!(loaded.module(unknown).unwrap().text, "strum up 2");
         assert_eq!(loaded.module(ids[0]).unwrap().text, "", "a known box saves no text");
     }
 
@@ -1282,7 +1288,7 @@ next_source_id = 3
 [[modules]]
 id = 1
 at = { x = 10, y = 10 }
-params = { kind = "arp", order = "up", octaves = 2 }
+params = { kind = "strum", order = "up", octaves = 2 }
 
 [[modules]]
 id = 2
@@ -1291,8 +1297,8 @@ text = "euclid 5 8"
 params = { kind = "euclid", pulses = 5, steps = 8 }
 "#;
         let loaded: SongModulation = toml::from_str(later).unwrap();
-        let arp = loaded.module(ModSourceId(1)).unwrap();
-        assert_eq!((arp.params, arp.text.as_str()), (ModulatorParams::Unknown, "arp"));
+        let strum = loaded.module(ModSourceId(1)).unwrap();
+        assert_eq!((strum.params, strum.text.as_str()), (ModulatorParams::Unknown, "strum"));
         let euclid = loaded.module(ModSourceId(2)).unwrap();
         assert_eq!((euclid.params, euclid.text.as_str()), (ModulatorParams::Unknown, "euclid 5 8"));
 

@@ -1445,12 +1445,12 @@ mod tests {
             Some(ModSourceRef::Id(times))
         );
 
-        let chord = session
-            .type_patch_box("arp up", CanvasPoint::new(40, 120))
+        let strum = session
+            .type_patch_box("strum up", CanvasPoint::new(40, 120))
             .unwrap();
-        let module = session.modulation.module(chord).unwrap();
+        let module = session.modulation.module(strum).unwrap();
         assert_eq!(module.params, ModulatorParams::Unknown);
-        assert_eq!(spell(&module.params, &module.text), "arp up");
+        assert_eq!(spell(&module.params, &module.text), "strum up");
     }
 
     /// Retyping within a kind keeps the box and drops only the wires into

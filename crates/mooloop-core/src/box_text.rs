@@ -14,7 +14,7 @@
 use crate::harmony::{ChordQuality, Mode, MAX_CHORD_NOTES, PITCH_NAMES};
 use crate::modulation::{
     ModChanceParams, ModChordParams, ModModalParams, ModScaleParams, ModTransposeParams,
-    TRANSPOSE_MAX_SEMITONES, ModCounterParams, ModLfoParams, ModLfoWaveform, ModMathOp, ModMathParams, ModSelectParams, ModSwitchParams, ModGateParams, ModPickParams, ModUnpackParams, ModMergeParams, ModWaitParams,
+    TRANSPOSE_MAX_SEMITONES, ModCounterParams, ModLfoParams, ModLfoWaveform, ModMathOp, ModMathParams, ModSelectParams, ModSwitchParams, ModGateParams, ModPickParams, ModUnpackParams, ModMergeParams, ModWaitParams, ModArpMode, ModArpParams, ARP_MAX_OCTAVES,
     ModNumParams, ModSlewParams, ModStepParams, ModTimeDivision, ModulatorKind, ModulatorParams,
     ModTableParams, NumFormat, COUNTER_MAX_STEPS, TABLE_MAX_VALUES, MOD_STEP_MAX_STEPS, NUM_LIMIT, SELECT_MAX_INPUTS, SWITCH_MAX_OUTPUTS, PICK_MOST, NOTE_JACKS_MAX,
 };
@@ -33,7 +33,7 @@ const fn word(name: &'static str, says: &'static str) -> Word {
 
 /// The boxes, the control boxes then the note boxes, as the completion
 /// list offers them.
-pub const VOCABULARY: [Word; 30] = [
+pub const VOCABULARY: [Word; 31] = [
     word("lfo", "Periodic movement. lfo tri 1/4"),
     word("env", "Attack, decay, sustain, release from a gate."),
     word("step", "A row of values, one per advance. step 8 uni"),
@@ -64,6 +64,7 @@ pub const VOCABULARY: [Word; 30] = [
     word("merge", "n streams of notes into one. merge 2"),
     word("wait", "Delays notes and a control signal. wait 1/8, wait 250ms, wait 2b"),
     word("note", "Plays its pitch on each trigger, till the next or the trigger falls."),
+    word("arp", "Plays the chord it holds a note at a time. arp up 1/16, arp updown 1/8 2"),
 ];
 
 /// How an inversion is spelled after a chord's type: none for root
@@ -287,6 +288,13 @@ pub fn spell(params: &ModulatorParams, text: &str) -> String {
         }
         ModulatorParams::Hold => "hold".into(),
         ModulatorParams::Note => "note".into(),
+        ModulatorParams::Arp(arp) => {
+            let mut spelled = format!("arp {} {}", arp.mode.name(), division_name(arp.division));
+            if arp.octaves > 1 {
+                spelled.push_str(&format!(" {}", arp.octaves));
+            }
+            spelled
+        }
         ModulatorParams::Unknown => text.trim().to_string(),
     }
 }
@@ -543,6 +551,26 @@ pub fn parse(text: &str) -> Option<ModulatorParams> {
         "num" => num(&args),
         "hold" => at_most(0).map(|()| ModulatorParams::Hold),
         "note" => at_most(0).map(|()| ModulatorParams::Note),
+        // A mode, a division and an octave count, in any order.
+        "arp" => {
+            at_most(3)?;
+            let mut arp = ModArpParams::default();
+            for arg in &args {
+                let arg = arg.to_ascii_lowercase();
+                if let Some(mode) = ModArpMode::ALL.iter().find(|mode| mode.name() == arg) {
+                    arp.mode = *mode;
+                } else if let Some((_, division)) = DIVISIONS.iter().find(|(name, _)| *name == arg) {
+                    arp.division = *division;
+                } else {
+                    let octaves = number(&arg)?;
+                    if octaves.fract() != 0.0 || !(1.0..=f32::from(ARP_MAX_OCTAVES)).contains(&octaves) {
+                        return None;
+                    }
+                    arp.octaves = octaves as u8;
+                }
+            }
+            Some(ModulatorParams::Arp(arp))
+        }
         "clip" => {
             at_most(2)?;
             let low = args.first().map_or(Some(-1.0), |arg| number(arg))?;
@@ -607,6 +635,10 @@ mod tests {
         assert_eq!(round_trip("random"), "random");
         assert_eq!(round_trip("hold"), "hold");
         assert_eq!(round_trip("note"), "note");
+        assert_eq!(round_trip("arp"), "arp up 1/16");
+        assert_eq!(round_trip("arp 2 1/8 updown"), "arp updown 1/8 2");
+        assert_eq!(parse("arp 5"), None, "four octaves at most");
+        assert_eq!(parse("arp sideways"), None);
         assert_eq!(round_trip("step 8 uni"), "step uni");
         assert_eq!(round_trip("step bi 4"), "step 4");
         assert_eq!(round_trip("step uni 12"), "step 12 uni");
@@ -721,10 +753,10 @@ mod tests {
 
     #[test]
     fn what_parse_cannot_read_is_left_to_an_unknown_box() {
-        for typed in ["", "arp up", "lfo wobbly", "* two", "counter 4 4", "env 3"] {
+        for typed in ["", "strum up", "lfo wobbly", "* two", "counter 4 4", "env 3"] {
             assert_eq!(parse(typed), None, "{typed:?}");
         }
-        assert_eq!(spell(&ModulatorParams::Unknown, " arp up "), "arp up");
+        assert_eq!(spell(&ModulatorParams::Unknown, " strum up "), "strum up");
     }
 
     #[test]

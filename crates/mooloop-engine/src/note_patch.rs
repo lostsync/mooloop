@@ -42,9 +42,10 @@
 
 use mooloop_core::harmony::{self, Pitches, MAX_CHORD_NOTES};
 use mooloop_core::{
-    CompiledModulation, CompiledModule, CompiledNoteBox, CompiledNoteLink, ModSourceId, ModulatorParams, NoteFeed,
-    MAX_CHANNELS,
+    CompiledModulation, CompiledModule, CompiledNoteBox, CompiledNoteLink, ModArpMode, ModArpParams, ModSourceId,
+    ModulatorParams, NoteFeed, ARP_MAX_OCTAVES, MAX_CHANNELS,
 };
+use crate::transport::MAX_BLOCK_SPANS;
 use mooloop_dsp::{
     Event, EventList, ModulatorSet, NoteGateTick, TimedEvent, CONTROL_RATE_FRAMES, MAX_CONTROL_TICKS_PER_BLOCK,
 };
@@ -236,8 +237,108 @@ impl WaitQueue {
     }
 }
 
-/// What one note box is holding, a chance box's generator, and a wait
-/// box's queue.
+/// The most steps an arp takes in one block.
+const ARP_STEPS: usize = 32;
+
+/// One note of the chord an arp holds: its pitch and velocity, the id it
+/// came in under, and when it came, for `played` order.
+#[derive(Debug, Clone, Copy, Default)]
+struct ArpNote {
+    note: u8,
+    velocity: u8,
+    input: u64,
+    order: u32,
+}
+
+/// An arp box's chord, the step it plays next, and when the note it is
+/// playing ends, in frames on the pass's clock (song patch boxes step 07).
+#[derive(Debug, Clone, Copy)]
+struct ArpState {
+    notes: [ArpNote; MAX_LINK_NOTES],
+    len: usize,
+    next_order: u32,
+    step: u32,
+    off_due: Option<u64>,
+}
+
+impl Default for ArpState {
+    fn default() -> Self {
+        Self {
+            notes: [ArpNote::default(); MAX_LINK_NOTES],
+            len: 0,
+            next_order: 0,
+            step: 0,
+            off_due: None,
+        }
+    }
+}
+
+impl ArpState {
+    /// Take in one event into its `notes` inlet. A chord started from
+    /// nothing starts from its first step.
+    fn hear(&mut self, event: Event) {
+        match event {
+            Event::NoteOn { id, note, velocity } => {
+                if self.len == MAX_LINK_NOTES {
+                    return;
+                }
+                if self.len == 0 {
+                    self.step = 0;
+                }
+                self.notes[self.len] = ArpNote {
+                    note,
+                    velocity,
+                    input: id,
+                    order: self.next_order,
+                };
+                self.next_order = self.next_order.wrapping_add(1);
+                self.len += 1;
+            }
+            Event::NoteOff { id, .. } => {
+                if let Some(at) = self.notes[..self.len].iter().position(|held| held.input == id) {
+                    self.notes.copy_within(at + 1..self.len, at);
+                    self.len -= 1;
+                }
+            }
+            Event::Choke => self.len = 0,
+            _ => {}
+        }
+    }
+
+    /// The note `step` plays, and its velocity: the chord in the mode's
+    /// order across `octaves`, `unit` choosing for `random`. A note pushed
+    /// past 127 plays in its own octave.
+    fn note_at(&self, params: ModArpParams, step: u32, unit: f32) -> Option<(u8, u8)> {
+        if self.len == 0 {
+            return None;
+        }
+        let mut sorted = self.notes;
+        let sorted = &mut sorted[..self.len];
+        match params.mode {
+            ModArpMode::Played => sorted.sort_unstable_by_key(|held| held.order),
+            _ => sorted.sort_unstable_by_key(|held| (held.note, held.order)),
+        }
+        let count = sorted.len();
+        let total = count * usize::from(params.octaves.clamp(1, ARP_MAX_OCTAVES));
+        let step = step as usize;
+        let at = match params.mode {
+            ModArpMode::Up | ModArpMode::Played => step % total,
+            ModArpMode::Down => total - 1 - step % total,
+            ModArpMode::UpDown if total == 1 => 0,
+            ModArpMode::UpDown => {
+                let along = step % (2 * total - 2);
+                if along < total { along } else { 2 * total - 2 - along }
+            }
+            ModArpMode::Random => ((unit * total as f32) as usize).min(total - 1),
+        };
+        let held = sorted[at % count];
+        let raised = usize::from(held.note) + 12 * (at / count);
+        Some((u8::try_from(raised).ok().filter(|&note| note <= 127).unwrap_or(held.note), held.velocity))
+    }
+}
+
+/// What one note box is holding, a chance box's generator, a wait box's
+/// queue and an arp's chord.
 #[derive(Debug, Clone, Copy)]
 struct BoxTable {
     held: [BoxHeld; MAX_LINK_NOTES],
@@ -246,6 +347,7 @@ struct BoxTable {
     sounding_len: usize,
     rng: u32,
     waiting: WaitQueue,
+    arp: ArpState,
 }
 
 impl BoxTable {
@@ -257,6 +359,7 @@ impl BoxTable {
             sounding_len: 0,
             rng: seeded(seed),
             waiting: WaitQueue::default(),
+            arp: ArpState::default(),
         }
     }
 
@@ -301,6 +404,20 @@ pub(crate) struct NoteClock {
     /// Whether the transport seeked or folded the loop into this block: a
     /// wait box lets go of what it held back.
     pub(crate) jumped: bool,
+    /// Where the block runs in the song, span by span, while it plays: an
+    /// arp's own clock steps on the grid inside them. None stopped.
+    pub(crate) beats: [BeatSpan; MAX_BLOCK_SPANS],
+    pub(crate) spans: usize,
+}
+
+/// One stretch of a block in song time: the frame it starts at and how
+/// many it covers, and the beats it runs from and to.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct BeatSpan {
+    pub(crate) frame: usize,
+    pub(crate) frames: usize,
+    pub(crate) from: f64,
+    pub(crate) to: f64,
 }
 
 impl Default for NoteClock {
@@ -310,6 +427,8 @@ impl Default for NoteClock {
             sample_rate: 48_000,
             bpm: 120.0,
             jumped: false,
+            beats: [BeatSpan::default(); MAX_BLOCK_SPANS],
+            spans: 0,
         }
     }
 }
@@ -772,6 +891,11 @@ impl NotePass {
             if matches!(params, ModulatorParams::Gate(_)) && control < OPEN_LEVEL {
                 self.end_all(at, 0);
             }
+            if let ModulatorParams::Arp(arp) = params {
+                self.run_arp(at, start, arp, inputs, let_go);
+                self.flow_at[at] = (start, self.flow.len() as u32);
+                continue;
+            }
             if matches!(params, ModulatorParams::Note) {
                 self.run_note(at, start, inputs, let_go);
                 self.flow_at[at] = (start, self.flow.len() as u32);
@@ -882,6 +1006,96 @@ impl NotePass {
             if strike.on {
                 self.play(at, start, offset, 0, 0, 0, Pitches::one(i16::from(strike.note)), strike.velocity);
             }
+        }
+    }
+
+    /// Arp box `at` takes in its chord and steps through it: on its own
+    /// clock, the transport's grid at its division inside the block, or on
+    /// its `advance` as it fired last block. A step ends the note before
+    /// it, and each note ends after its share of a step. Letting go ends
+    /// what it plays and starts it again from its first step.
+    fn run_arp(&mut self, at: usize, start: u32, params: ModArpParams, inputs: BoxInputs, let_go: bool) {
+        let clock = inputs.clock;
+        if let_go {
+            self.box_tables[at].arp.off_due = None;
+            self.box_tables[at].arp.step = 0;
+            self.end_all(at, 0);
+        }
+        let last = clock.frames.max(1) - 1;
+        // Each step this block, at its offset; `true` for a reset.
+        let mut steps = [(0u32, false); ARP_STEPS];
+        let mut count = 0;
+        let mut push = |offset: usize, reset: bool| {
+            if count < ARP_STEPS {
+                steps[count] = (offset.min(last) as u32, reset);
+                count += 1;
+            }
+        };
+        let module = usize::from(self.boxes[at].module);
+        let advanced = inputs.modules.get(module).is_some_and(|module| module.inlets[1].is_some());
+        for strike in inputs.set.note_strikes(module) {
+            if advanced || !strike.on {
+                push(usize::from(strike.tick) * CONTROL_RATE_FRAMES, !strike.on);
+            }
+        }
+        let beats = f64::from(params.division.beats());
+        if !advanced && inputs.playing {
+            // A grid point belongs to the span it falls in, its start
+            // included and its end not, a hair early so a point on a
+            // span's edge is counted once across two blocks.
+            const HAIR: f64 = 1.0e-9;
+            for span in &clock.beats[..clock.spans.min(MAX_BLOCK_SPANS)] {
+                let length = span.to - span.from;
+                let mut point = ((span.from - HAIR) / beats).ceil() * beats;
+                while point < span.to - HAIR && length > 0.0 {
+                    let along = ((point - span.from) / length).max(0.0);
+                    push(span.frame + (along * span.frames as f64).round() as usize, false);
+                    point += beats;
+                }
+            }
+        }
+        steps[..count].sort_unstable_by_key(|&(offset, reset)| (offset, !reset));
+        let step_frames = beats * 60.0 / clock.bpm.max(1.0) * f64::from(clock.sample_rate);
+        let gate_frames = (f64::from(params.gate.clamp(0.05, 1.0)) * step_frames).max(1.0) as u64;
+        let mut heard = 0;
+        for &(offset, reset) in &steps[..count] {
+            // The chord as it stands at the step: a note on the step is
+            // in it.
+            while heard < self.scratch.len() && self.scratch[heard].0.offset <= offset {
+                self.box_tables[at].arp.hear(self.scratch[heard].0.event);
+                heard += 1;
+            }
+            self.arp_end_due(at, offset as usize);
+            if reset {
+                self.box_tables[at].arp.step = 0;
+                continue;
+            }
+            self.box_tables[at].arp.off_due = None;
+            self.end_all(at, offset);
+            let table = &mut self.box_tables[at];
+            let unit = if params.mode == ModArpMode::Random { table.next_unit() } else { 0.0 };
+            let Some((note, velocity)) = table.arp.note_at(params, table.arp.step, unit) else {
+                continue;
+            };
+            table.arp.step = table.arp.step.wrapping_add(1);
+            table.arp.off_due = Some(self.now + u64::from(offset) + gate_frames);
+            self.play(at, start, offset, 0, 0, 0, Pitches::one(i16::from(note)), velocity);
+        }
+        for index in heard..self.scratch.len() {
+            self.box_tables[at].arp.hear(self.scratch[index].0.event);
+        }
+        self.arp_end_due(at, last);
+    }
+
+    /// Arp box `at` ends the note it plays if that note is due to end by
+    /// `offset`, at the offset it was due.
+    fn arp_end_due(&mut self, at: usize, offset: usize) {
+        let Some(due) = self.box_tables[at].arp.off_due else {
+            return;
+        };
+        if due <= self.now + offset as u64 {
+            self.box_tables[at].arp.off_due = None;
+            self.end_all(at, due.saturating_sub(self.now) as u32);
         }
     }
 

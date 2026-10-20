@@ -162,14 +162,14 @@ parameter (`routes`). A channel holds none. Boxes and tags are named by a
 `ModSourceId` from one mint, so a wire names either the same way.
 
 **A box** is typed as text and spelled back from its settings
-(`mooloop_core::box_text`: `parse`, `spell`, and `VOCABULARY`, the thirty
+(`mooloop_core::box_text`: `parse`, `spell`, and `VOCABULARY`, the thirty-one
 names in the order the completion list offers them). A box keeps its
 settings as parameters (`ModulatorParams`), never as text, so `*   -.5`
 typed reads `* -0.5`, and a knob turned on its face changes what the box
 says. The control boxes are `lfo`, `env`, `step`, `random`, `counter`,
 `select`, `switch`, `gate`, `slew`, `num`, `hold` and `table`, and the arithmetic boxes `+ - * / min max clip` (one
 kind, Math, with an operator). The note boxes are `chord`, `modal`,
-`scale`, `transpose`, `chance`, `held`, `pick`, `unpack` and `merge`
+`scale`, `transpose`, `chance`, `held`, `pick`, `unpack`, `merge` and `arp`
 (and a `switch` or a `gate` on notes), `note` makes notes from control,
 and `wait` has a lane of each; their pitch, chord and mode tables
 are `crates/mooloop-core/src/harmony.rs`. A name the vocabulary lacks makes
@@ -346,6 +346,18 @@ reach it.
   plays what they struck a block later, at the tick each struck. Stopping, a
   seek, a loop fold and a panic release what it plays. With `unpack`,
   `held`, a `counter` and a `select` it builds an arp from parts.
+- **`arp`** (`arp up 1/16`, `arp updown 1/8 2`: a mode, a rate and an
+  octave count, in any order) holds the chord reaching it and plays it a
+  note at a time: `up`, `down`, `updown` (not repeating its ends),
+  `played` (in the order the notes came) or `random` (drawn from the box's
+  seed, starting again with the transport, so a bounce plays what playback
+  did), across 1 to 4 octaves. Its own clock steps on the transport's grid
+  at its rate inside the block, so its notes land on the grid; wired, its
+  `advance` steps it instead, a block late, and `reset` starts it from its
+  first step. Each note lasts its `gate` share of a step (half unwired) and
+  ends at the next step at the latest; a chord starting from nothing starts
+  from the first step. Stopping, a seek, a loop fold and a panic release
+  what it plays. Its knobs are mode, rate, octaves and gate.
 - The boxes make a graph with no loops, compiled so each box runs after
   every box feeding it (`CompiledNoteBox::inputs`, `NoteFeed`); a box keeps
   its notes across an edit while it and everything feeding it are the same

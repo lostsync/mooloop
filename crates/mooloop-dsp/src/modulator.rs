@@ -802,6 +802,14 @@ enum Source {
         tick: u8,
         sounding: bool,
     },
+    /// An arp box: the ticks its `advance` (a strike on) and its `reset`
+    /// (a strike off) fired this block, for the note pass to step it by in
+    /// the next, and the tick it is on.
+    Arp {
+        strikes: [NoteStrike; NOTE_STRIKES],
+        len: u8,
+        tick: u8,
+    },
     /// A box this build does not know. It puts out nothing.
     Silent,
 }
@@ -898,6 +906,11 @@ impl ModuleSpec {
                 len: 0,
                 tick: 0,
                 sounding: false,
+            },
+            ModulatorParams::Arp(_) => Source::Arp {
+                strikes: [NoteStrike::default(); NOTE_STRIKES],
+                len: 0,
+                tick: 0,
             },
             ModulatorParams::Unknown => Source::Silent,
         }
@@ -1216,18 +1229,18 @@ impl ModulatorSet {
     /// block's, which the note pass has played.
     pub fn begin_block(&mut self) {
         for module in &mut self.modules {
-            if let Source::Note { len, tick, .. } = &mut module.source {
+            if let Source::Note { len, tick, .. } | Source::Arp { len, tick, .. } = &mut module.source {
                 *len = 0;
                 *tick = 0;
             }
         }
     }
 
-    /// What note box `at`'s trigger struck in the last block, in tick
-    /// order; nothing for every other box.
+    /// What note box `at`'s trigger struck in the last block, or arp box
+    /// `at`'s advance and reset, in tick order; nothing for every other box.
     pub fn note_strikes(&self, at: usize) -> &[NoteStrike] {
         match self.modules.get(at).map(|module| &module.source) {
-            Some(Source::Note { strikes, len, .. }) => &strikes[..usize::from(*len)],
+            Some(Source::Note { strikes, len, .. } | Source::Arp { strikes, len, .. }) => &strikes[..usize::from(*len)],
             _ => &[],
         }
     }
@@ -1333,6 +1346,7 @@ impl ModulatorSet {
             | (ModulatorParams::Switch(ModSwitchParams { notes: true, .. }), Source::Notes(_))
             | (ModulatorParams::Gate(ModGateParams { notes: true }), Source::Notes(_))
             | (ModulatorParams::Note, Source::Note { .. })
+            | (ModulatorParams::Arp(_), Source::Arp { .. })
             | (ModulatorParams::Unknown, Source::Silent) => {}
             _ => module.source = module.spec.build(),
         }
@@ -1801,6 +1815,23 @@ impl ModulatorSet {
                     }
                     0.0
                 }
+                Source::Arp { strikes, len, tick } => {
+                    let at = *tick;
+                    *tick = tick.saturating_add(1);
+                    // A reset lands before an advance in the same tick, as
+                    // a counter's does.
+                    for (port, on) in [(2, false), (1, true)] {
+                        if fired[port] && usize::from(*len) < NOTE_STRIKES {
+                            strikes[usize::from(*len)] = NoteStrike {
+                                tick: at,
+                                on,
+                                ..NoteStrike::default()
+                            };
+                            *len += 1;
+                        }
+                    }
+                    0.0
+                }
                 Source::Silent => 0.0,
             };
             self.outputs[node] = value;
@@ -1836,6 +1867,7 @@ impl ModulatorSet {
                 | Source::Gate
                 | Source::Wait { .. }
                 | Source::Note { .. }
+                | Source::Arp { .. }
                 | Source::Silent => {}
             }
         }
@@ -2887,6 +2919,24 @@ mod tests {
             assert!(set.note_strikes(1).is_empty());
             set.tick(48_000, 32, 120.0, None, &note_on());
             assert_eq!(set.note_strikes(1), [NoteStrike { tick: 0, ..on }]);
+        }
+
+        /// An arp box logs the ticks its `advance` and `reset` fired, a
+        /// reset first.
+        #[test]
+        fn an_arp_box_logs_its_advances_and_resets() {
+            use super::super::NoteStrike;
+            // Node 1 is the gate tag, into both.
+            let arp = ModulatorParams::Arp(mooloop_core::ModArpParams::default());
+            let mut set = set(vec![box_of(arp, &[(1, 1), (2, 1)])], 1);
+            set.begin_block();
+            set.tick(48_000, 32, 120.0, None, &NO_GATES);
+            set.tick(48_000, 32, 120.0, None, &note_on());
+            let reset = NoteStrike {
+                tick: 1,
+                ..NoteStrike::default()
+            };
+            assert_eq!(set.note_strikes(0), [reset, NoteStrike { on: true, ..reset }]);
         }
 
         /// A Beat tag into a trigger fires as each beat starts, not again
