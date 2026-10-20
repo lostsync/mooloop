@@ -865,6 +865,14 @@ pub const SELECT_PARAM_INPUTS: u32 = 0;
 pub const SLEW_PARAM_TIME_S: u32 = 0;
 /// How many outlets a switch chooses among (song patch boxes step 03).
 pub const SWITCH_PARAM_OUTPUTS: u32 = 0;
+/// Which note of each chord a pick box keeps (song patch boxes step 04), as
+/// a position with no gap: 0 the lowest, up from there, -1 the highest,
+/// down from there ([`ModPickParams::which`] counts from 1 and -1).
+pub const PICK_PARAM_WHICH: u32 = 0;
+/// How many outlets an unpack box spreads a chord across.
+pub const UNPACK_PARAM_OUTPUTS: u32 = 0;
+/// How many note inlets a merge box takes.
+pub const MERGE_PARAM_INPUTS: u32 = 0;
 
 /// A chord box's quality ([`crate::harmony::ChordQuality`]) and inversion
 /// (song patch step 08).
@@ -900,6 +908,10 @@ pub const COUNTER_MAX_STEPS: u8 = 64;
 pub const SELECT_MAX_INPUTS: u8 = 8;
 /// The most outlets a switch has: `a` to `h`.
 pub const SWITCH_MAX_OUTPUTS: u8 = 8;
+/// The furthest from either end of a chord a pick box reaches.
+pub const PICK_MOST: i8 = 8;
+/// The most note jacks an unpack or merge box has: `a` to `h`.
+pub const NOTE_JACKS_MAX: u8 = 8;
 
 /// A boolean as a descriptor: two positions, off by default.
 const fn toggle(id: u32, name: &'static str) -> ParamDescriptor {
@@ -1296,6 +1308,36 @@ pub const SWITCH_DESCRIPTORS: [ParamDescriptor; 1] = [ParamDescriptor {
     default: 2.0,
 }];
 
+pub const PICK_DESCRIPTORS: [ParamDescriptor; 1] = [ParamDescriptor {
+    id: PICK_PARAM_WHICH,
+    name: "Which",
+    unit: "",
+    min: -(PICK_MOST as f32),
+    max: PICK_MOST as f32 - 1.0,
+    curve: ParamCurve::Stepped(2 * PICK_MOST as u16),
+    default: 0.0,
+}];
+
+pub const UNPACK_DESCRIPTORS: [ParamDescriptor; 1] = [ParamDescriptor {
+    id: UNPACK_PARAM_OUTPUTS,
+    name: "Outputs",
+    unit: "",
+    min: 2.0,
+    max: NOTE_JACKS_MAX as f32,
+    curve: ParamCurve::Stepped(NOTE_JACKS_MAX as u16 - 1),
+    default: 4.0,
+}];
+
+pub const MERGE_DESCRIPTORS: [ParamDescriptor; 1] = [ParamDescriptor {
+    id: MERGE_PARAM_INPUTS,
+    name: "Inputs",
+    unit: "",
+    min: 2.0,
+    max: NOTE_JACKS_MAX as f32,
+    curve: ParamCurve::Stepped(NOTE_JACKS_MAX as u16 - 1),
+    default: 2.0,
+}];
+
 pub const SLEW_DESCRIPTORS: [ParamDescriptor; 1] = [ParamDescriptor {
     id: SLEW_PARAM_TIME_S,
     name: "Time",
@@ -1669,16 +1711,71 @@ impl Default for ModSelectParams {
 }
 
 /// Sends its `in` to one of `outputs` outlets, picked by its `which` inlet
-/// read as `0..1` across them; the others hold 0.
+/// read as `0..1` across them; the others hold 0. With `notes`, its `in`
+/// and outlets are note jacks: it takes the sort of the first wire into
+/// `in` (song patch boxes step 04).
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct ModSwitchParams {
     pub outputs: u8,
+    pub notes: bool,
 }
 
 impl Default for ModSwitchParams {
     fn default() -> Self {
-        Self { outputs: 2 }
+        Self {
+            outputs: 2,
+            notes: false,
+        }
+    }
+}
+
+/// Passes its `in` while its `open` is high; with `notes`, its `in` and
+/// `out` are note jacks, as a switch's are.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct ModGateParams {
+    pub notes: bool,
+}
+
+/// Keeps one note of each chord, the notes starting together: `which`
+/// counts from the bottom from 1 and from the top from -1.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct ModPickParams {
+    pub which: i8,
+}
+
+impl Default for ModPickParams {
+    fn default() -> Self {
+        Self { which: 1 }
+    }
+}
+
+/// Spreads each chord across `outputs` outlets, its lowest note on the
+/// first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct ModUnpackParams {
+    pub outputs: u8,
+}
+
+impl Default for ModUnpackParams {
+    fn default() -> Self {
+        Self { outputs: 4 }
+    }
+}
+
+/// `inputs` streams of notes into one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct ModMergeParams {
+    pub inputs: u8,
+}
+
+impl Default for ModMergeParams {
+    fn default() -> Self {
+        Self { inputs: 2 }
     }
 }
 
@@ -1863,7 +1960,13 @@ pub enum ModulatorParams {
     /// Passes its `in` while its `open` is high. Typed `gate`; saved as
     /// `pass`, since `gate` names the held box in songs already saved.
     #[serde(rename = "pass")]
-    Gate,
+    Gate(ModGateParams),
+    /// Notes in, one note of each chord out.
+    Pick(ModPickParams),
+    /// Notes in, each chord's notes on their own outlets.
+    Unpack(ModUnpackParams),
+    /// Several note inlets, one note outlet.
+    Merge(ModMergeParams),
     /// A box whose name this build does not know: typed, or saved by a
     /// later build. It keeps its text ([`SongModule::text`]), has no jacks,
     /// and puts out nothing.
@@ -1891,7 +1994,10 @@ impl ModulatorParams {
             Self::Hold => ModulatorKind::Hold,
             Self::Table(_) => ModulatorKind::Table,
             Self::Switch(_) => ModulatorKind::Switch,
-            Self::Gate => ModulatorKind::Gate,
+            Self::Gate(_) => ModulatorKind::Gate,
+            Self::Pick(_) => ModulatorKind::Pick,
+            Self::Unpack(_) => ModulatorKind::Unpack,
+            Self::Merge(_) => ModulatorKind::Merge,
             Self::Unknown => ModulatorKind::Unknown,
         }
     }
@@ -1969,6 +2075,18 @@ impl ModulatorParams {
                 SWITCH_PARAM_OUTPUTS => Some(f32::from(p.outputs)),
                 _ => None,
             },
+            Self::Pick(p) => match id {
+                PICK_PARAM_WHICH => Some(f32::from(if p.which > 0 { p.which - 1 } else { p.which })),
+                _ => None,
+            },
+            Self::Unpack(p) => match id {
+                UNPACK_PARAM_OUTPUTS => Some(f32::from(p.outputs)),
+                _ => None,
+            },
+            Self::Merge(p) => match id {
+                MERGE_PARAM_INPUTS => Some(f32::from(p.inputs)),
+                _ => None,
+            },
             Self::Slew(p) => match id {
                 SLEW_PARAM_TIME_S => Some(p.time_seconds),
                 _ => None,
@@ -2008,7 +2126,7 @@ impl ModulatorParams {
                 TABLE_PARAM_LENGTH => Some(f32::from(p.length)),
                 _ => Some(p.values[table_value_index(id)?]),
             },
-            Self::NoteGate | Self::Hold | Self::Gate | Self::Unknown => None,
+            Self::NoteGate | Self::Hold | Self::Gate(_) | Self::Unknown => None,
         }
     }
 
@@ -2104,6 +2222,23 @@ impl ModulatorParams {
                     p.outputs = index.clamp(2, i32::from(SWITCH_MAX_OUTPUTS)) as u8;
                 }
             }
+            Self::Pick(p) => {
+                if id == PICK_PARAM_WHICH {
+                    let most = i32::from(PICK_MOST);
+                    let position = index.clamp(-most, most - 1);
+                    p.which = if position >= 0 { position + 1 } else { position } as i8;
+                }
+            }
+            Self::Unpack(p) => {
+                if id == UNPACK_PARAM_OUTPUTS {
+                    p.outputs = index.clamp(2, i32::from(NOTE_JACKS_MAX)) as u8;
+                }
+            }
+            Self::Merge(p) => {
+                if id == MERGE_PARAM_INPUTS {
+                    p.inputs = index.clamp(2, i32::from(NOTE_JACKS_MAX)) as u8;
+                }
+            }
             Self::Slew(p) => {
                 if id == SLEW_PARAM_TIME_S {
                     p.time_seconds = value;
@@ -2153,7 +2288,27 @@ impl ModulatorParams {
                     }
                 }
             },
-            Self::NoteGate | Self::Hold | Self::Gate | Self::Unknown => {}
+            Self::NoteGate | Self::Hold | Self::Gate(_) | Self::Unknown => {}
+        }
+    }
+
+    /// Whether the box works on notes: its kind does, or it is a switch or
+    /// a gate that took a note wire into its `in`.
+    pub fn is_note_box(&self) -> bool {
+        match self {
+            Self::Switch(switch) => switch.notes,
+            Self::Gate(gate) => gate.notes,
+            _ => self.kind().is_note_box(),
+        }
+    }
+
+    /// A switch or a gate turned to the other sort of jack, keeping its
+    /// settings; `None` for every other box.
+    pub fn resorted(&self, notes: bool) -> Option<Self> {
+        match *self {
+            Self::Switch(switch) => Some(Self::Switch(ModSwitchParams { notes, ..switch })),
+            Self::Gate(_) => Some(Self::Gate(ModGateParams { notes })),
+            _ => None,
         }
     }
 }
@@ -2182,6 +2337,9 @@ pub enum ModulatorKind {
     Switch,
     #[serde(rename = "pass")]
     Gate,
+    Pick,
+    Unpack,
+    Merge,
     /// A box this build has no name for; never in [`Self::ALL`].
     Unknown,
 }
@@ -2190,7 +2348,7 @@ impl ModulatorKind {
     /// Every kind a box can be made as, in the order the shelf's kind
     /// tokens number them: new kinds are appended, so a token keeps naming
     /// the kind it did.
-    pub const ALL: [ModulatorKind; 19] = [
+    pub const ALL: [ModulatorKind; 22] = [
         ModulatorKind::Lfo,
         ModulatorKind::Envelope,
         ModulatorKind::Step,
@@ -2210,14 +2368,26 @@ impl ModulatorKind {
         ModulatorKind::Table,
         ModulatorKind::Switch,
         ModulatorKind::Gate,
+        ModulatorKind::Pick,
+        ModulatorKind::Unpack,
+        ModulatorKind::Merge,
     ];
 
     /// Whether the kind works on notes: the engine's note pass runs it,
-    /// not the control tick.
+    /// not the control tick. A switch or a gate may too, by its params
+    /// ([`ModulatorParams::is_note_box`]).
     pub const fn is_note_box(self) -> bool {
         matches!(
             self,
-            Self::Chord | Self::Modal | Self::Scale | Self::Transpose | Self::Chance | Self::NoteGate
+            Self::Chord
+                | Self::Modal
+                | Self::Scale
+                | Self::Transpose
+                | Self::Chance
+                | Self::NoteGate
+                | Self::Pick
+                | Self::Unpack
+                | Self::Merge
         )
     }
 
@@ -2242,6 +2412,9 @@ impl ModulatorKind {
             Self::Table => "Table",
             Self::Switch => "Switch",
             Self::Gate => "Gate",
+            Self::Pick => "Pick",
+            Self::Unpack => "Unpack",
+            Self::Merge => "Merge",
             Self::Unknown => "Unknown",
         }
     }
@@ -2269,6 +2442,9 @@ impl ModulatorKind {
             Self::Table => "TBL",
             Self::Switch => "SW",
             Self::Gate => "GATE",
+            Self::Pick => "PICK",
+            Self::Unpack => "UNPK",
+            Self::Merge => "MRG",
             Self::Unknown => "?",
         }
     }
@@ -2309,7 +2485,10 @@ impl ModulatorKind {
             Self::Hold => ModulatorParams::Hold,
             Self::Table => ModulatorParams::Table(ModTableParams::default()),
             Self::Switch => ModulatorParams::Switch(ModSwitchParams::default()),
-            Self::Gate => ModulatorParams::Gate,
+            Self::Gate => ModulatorParams::Gate(ModGateParams::default()),
+            Self::Pick => ModulatorParams::Pick(ModPickParams::default()),
+            Self::Unpack => ModulatorParams::Unpack(ModUnpackParams::default()),
+            Self::Merge => ModulatorParams::Merge(ModMergeParams::default()),
             Self::Unknown => ModulatorParams::Unknown,
         }
     }
@@ -2333,6 +2512,9 @@ impl ModulatorKind {
             Self::Num => &NUM_DESCRIPTORS,
             Self::Table => &TABLE_DESCRIPTORS,
             Self::Switch => &SWITCH_DESCRIPTORS,
+            Self::Pick => &PICK_DESCRIPTORS,
+            Self::Unpack => &UNPACK_DESCRIPTORS,
+            Self::Merge => &MERGE_DESCRIPTORS,
             Self::NoteGate | Self::Hold | Self::Gate | Self::Unknown => &[],
         }
     }
@@ -3379,7 +3561,10 @@ impl ModRack {
             | ModulatorParams::Hold
             | ModulatorParams::Table(_)
             | ModulatorParams::Switch(_)
-            | ModulatorParams::Gate
+            | ModulatorParams::Gate(_)
+            | ModulatorParams::Pick(_)
+            | ModulatorParams::Unpack(_)
+            | ModulatorParams::Merge(_)
             | ModulatorParams::Unknown => 1.0,
         }
     }
@@ -3555,7 +3740,10 @@ fn rack_input(
         | ModulatorParams::Hold
         | ModulatorParams::Table(_)
         | ModulatorParams::Switch(_)
-        | ModulatorParams::Gate
+        | ModulatorParams::Gate(_)
+        | ModulatorParams::Pick(_)
+        | ModulatorParams::Unpack(_)
+        | ModulatorParams::Merge(_)
         | ModulatorParams::Unknown => InputSource::None,
         // A seat with no identity: a preset's gate on its own channel's notes,
         // which means the channel it lands on.
@@ -3690,9 +3878,10 @@ impl<'de> serde::Deserialize<'de> for UnknownParams {
 }
 
 /// Every `kind` a module's params are saved under, as serde spells them.
-const KNOWN_KINDS: [&str; 20] = [
+const KNOWN_KINDS: [&str; 23] = [
     "lfo", "envelope", "step", "random", "math", "counter", "select", "slew", "chord", "modal", "scale",
-    "transpose", "chance", "gate", "num", "hold", "table", "switch", "pass", "unknown",
+    "transpose", "chance", "gate", "num", "hold", "table", "switch", "pass", "pick", "unpack",
+    "merge", "unknown",
 ];
 
 fn is_zero(value: &u32) -> bool {

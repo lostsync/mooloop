@@ -42,7 +42,7 @@
 
 use mooloop_core::harmony::{self, Pitches, MAX_CHORD_NOTES};
 use mooloop_core::{
-    CompiledModulation, CompiledModule, CompiledNoteBox, CompiledNoteLink, ModSourceId, ModulatorParams,
+    CompiledModulation, CompiledModule, CompiledNoteBox, CompiledNoteLink, ModSourceId, ModulatorParams, NoteFeed,
     MAX_CHANNELS,
 };
 use mooloop_dsp::{
@@ -108,22 +108,29 @@ impl LinkTable {
     }
 }
 
-/// One note a box heard and the pitches it played for it.
+/// One note a box heard, on which inlet, and the pitches it played for it
+/// on which outlet.
 #[derive(Debug, Clone, Copy, Default)]
 struct BoxHeld {
     input: u64,
+    inlet: u8,
+    outlet: u8,
     pitches: [u8; MAX_CHORD_NOTES],
     len: u8,
 }
 
-/// One pitch a box has sounding, the id it plays it under, and how many of
-/// the notes it heard share it.
+/// One pitch a box has sounding on one outlet, the id it plays it under,
+/// and how many of the notes it heard share it.
 #[derive(Debug, Clone, Copy, Default)]
 struct Sounding {
     note: u8,
+    outlet: u8,
     id: u64,
     refs: u8,
 }
+
+/// The level at which a note gate's `open` lets notes through.
+const OPEN_LEVEL: f32 = 0.5;
 
 /// What one note box is holding, and a chance box's generator.
 #[derive(Debug, Clone, Copy)]
@@ -211,9 +218,14 @@ pub(crate) struct NotePass {
     sources: Vec<u8>,
     heard: Vec<TimedEvent>,
     heard_at: Vec<(u32, u32)>,
-    /// What each box wrote this block, and where in `flow`.
+    /// What each box wrote this block, on which of its outlets, and where in
+    /// `flow`.
     flow: Vec<TimedEvent>,
+    flow_port: Vec<u8>,
     flow_at: Vec<(u32, u32)>,
+    /// What reaches the box running now, from all its inlets in offset
+    /// order: the event, its inlet, and its place among them.
+    scratch: Vec<(TimedEvent, u8, u16)>,
     owed: Vec<Owed>,
     choke_owed: Box<[bool]>,
     next_id: u64,
@@ -239,20 +251,28 @@ impl NotePass {
     pub(crate) fn new(plan: &CompiledModulation) -> Self {
         let links = plan.notes.clone();
         let boxes = plan.note_boxes.clone();
-        let mut sources: Vec<u8> = links
-            .iter()
-            .map(|link| link.from_seat)
-            .chain(boxes.iter().map(|note_box| note_box.root_seat))
-            .collect();
-        sources.sort_unstable();
-        sources.dedup();
+        // The notes-in tags read straight: by a link, or by a box's inlet.
         let mut in_tags: Vec<(u16, u8)> = links
             .iter()
+            .filter(|link| link.via.is_none())
             .map(|link| (link.from_tag, link.from_seat))
-            .chain(boxes.iter().map(|note_box| (note_box.root_tag, note_box.root_seat)))
+            .chain(boxes.iter().flat_map(|note_box| {
+                note_box.inputs.iter().filter_map(|feed| match *feed {
+                    Some(NoteFeed::Tag { tag, seat }) => Some((tag, seat)),
+                    _ => None,
+                })
+            }))
             .collect();
         in_tags.sort_unstable();
         in_tags.dedup();
+        let mut sources: Vec<u8> = in_tags.iter().map(|&(_, seat)| seat).collect();
+        sources.sort_unstable();
+        sources.dedup();
+        let widest = boxes
+            .iter()
+            .map(|note_box| note_box.inputs.iter().flatten().count())
+            .max()
+            .unwrap_or(0);
         let mut taken = vec![false; MAX_CHANNELS].into_boxed_slice();
         for &seat in &plan.taken {
             taken[usize::from(seat)] = true;
@@ -282,7 +302,9 @@ impl NotePass {
             heard_at: vec![(0, 0); sources.len()],
             sources,
             flow: Vec::with_capacity(boxes.len() * BOX_EVENTS),
+            flow_port: Vec::with_capacity(boxes.len() * BOX_EVENTS),
             flow_at: vec![(0, 0); boxes.len()],
+            scratch: Vec::with_capacity(widest * BOX_EVENTS),
             boxes,
             owed: Vec::with_capacity(MAX_OWED),
             choke_owed: vec![false; MAX_CHANNELS].into_boxed_slice(),
@@ -455,14 +477,20 @@ impl NotePass {
         self.run_boxes(inputs);
         for at in 0..self.links.len() {
             let link = self.links[at];
-            let Some((start, end)) = self.stream(link.from_seat, link.via) else {
+            let feed = match link.via {
+                None => NoteFeed::Tag {
+                    tag: link.from_tag,
+                    seat: link.from_seat,
+                },
+                Some((at, port)) => NoteFeed::Box { at, port },
+            };
+            let Some((start, end)) = self.stream(feed) else {
                 continue;
             };
             let to = usize::from(link.to_seat);
             for index in start as usize..end as usize {
-                let heard = match link.via {
-                    None => self.heard[index],
-                    Some(_) => self.flow[index],
+                let Some(heard) = self.heard_at_index(feed, index) else {
+                    continue;
                 };
                 match heard.event {
                     Event::NoteOn { id, note, velocity } => {
@@ -515,21 +543,59 @@ impl NotePass {
         }
     }
 
-    /// Where the notes a link or box reads are this block: in `heard` for
-    /// its tag's seat, or in `flow` for the box `via`.
-    fn stream(&self, seat: u8, via: Option<u16>) -> Option<(u32, u32)> {
-        match via {
-            None => {
+    /// Where the notes a feed carries are this block: in `heard` for a
+    /// tag's seat, or in `flow` for a box, among its other outlets' notes
+    /// ([`Self::heard_at_index`]).
+    fn stream(&self, feed: NoteFeed) -> Option<(u32, u32)> {
+        match feed {
+            NoteFeed::Tag { seat, .. } => {
                 let source = self.sources.iter().position(|&held| held == seat)?;
                 Some(self.heard_at[source])
             }
-            Some(at) => self.flow_at.get(usize::from(at)).copied(),
+            NoteFeed::Box { at, .. } => self.flow_at.get(usize::from(at)).copied(),
         }
+    }
+
+    /// The event at `index` of a feed's [`Self::stream`], or `None` for one
+    /// another outlet of its box wrote.
+    fn heard_at_index(&self, feed: NoteFeed, index: usize) -> Option<TimedEvent> {
+        match feed {
+            NoteFeed::Tag { .. } => self.heard.get(index).copied(),
+            NoteFeed::Box { port, .. } => {
+                (self.flow_port.get(index) == Some(&port)).then(|| self.flow[index])
+            }
+        }
+    }
+
+    /// The NoteOn at `scratch[index]`'s place in its chord, the NoteOns
+    /// starting at its offset, counted from the lowest; and how many there
+    /// are.
+    fn chord_rank(&self, index: usize) -> (usize, usize) {
+        let (this, inlet, order) = self.scratch[index];
+        let Event::NoteOn { note, .. } = this.event else {
+            return (0, 1);
+        };
+        let key = (note, inlet, order);
+        let mut rank = 0;
+        let mut size = 0;
+        for &(heard, inlet, order) in &self.scratch {
+            if heard.offset != this.offset {
+                continue;
+            }
+            if let Event::NoteOn { note, .. } = heard.event {
+                size += 1;
+                if (note, inlet, order) < key {
+                    rank += 1;
+                }
+            }
+        }
+        (rank, size)
     }
 
     /// Run every note box over what reached it, in the compiled order.
     fn run_boxes(&mut self, inputs: BoxInputs) {
         self.flow.clear();
+        self.flow_port.clear();
         let ticks = inputs.frames.div_ceil(CONTROL_RATE_FRAMES).clamp(1, MAX_CONTROL_TICKS_PER_BLOCK);
         for row in self.gate_ticks.chunks_mut(self.gates.max(1)).take(ticks) {
             row.fill(NoteGateTick::default());
@@ -537,20 +603,40 @@ impl NotePass {
         for at in 0..self.boxes.len() {
             let note_box = self.boxes[at];
             let start = self.flow.len() as u32;
-            let Some((from, to)) = self.stream(note_box.root_seat, note_box.input) else {
-                self.flow_at[at] = (start, start);
-                continue;
-            };
+            // Everything into its inlets, in offset order; ties keep their
+            // inlet's order, then the order each came in.
+            self.scratch.clear();
+            let mut fed = 0;
+            for (inlet, feed) in note_box.inputs.iter().enumerate() {
+                let Some(feed) = *feed else { continue };
+                let Some((from, to)) = self.stream(feed) else { continue };
+                fed += 1;
+                for index in from as usize..to as usize {
+                    let Some(heard) = self.heard_at_index(feed, index) else {
+                        continue;
+                    };
+                    if self.scratch.len() < self.scratch.capacity() {
+                        let order = self.scratch.len() as u16;
+                        self.scratch.push((heard, inlet as u8, order));
+                    }
+                }
+            }
+            if fed > 1 {
+                self.scratch.sort_unstable_by_key(|&(heard, inlet, order)| (heard.offset, inlet, order));
+            }
             let params = inputs
                 .modules
                 .get(usize::from(note_box.module))
                 .map_or(ModulatorParams::Unknown, |module| module.params);
             let control = inputs.set.note_control(usize::from(note_box.module));
-            for index in from as usize..to as usize {
-                let heard = match note_box.input {
-                    None => self.heard[index],
-                    Some(_) => self.flow[index],
-                };
+            // A gate closing lets go of what it let through.
+            if matches!(params, ModulatorParams::Gate(_)) && control < OPEN_LEVEL {
+                while let Some(held) = self.box_tables[at].held[..self.box_tables[at].held_len].last().copied() {
+                    self.end(at, 0, held.inlet, held.input);
+                }
+            }
+            for index in 0..self.scratch.len() {
+                let (heard, inlet, _) = self.scratch[index];
                 if let Some(slot) = self.gate_slots[at] {
                     let tick = (heard.offset as usize / CONTROL_RATE_FRAMES).min(ticks - 1);
                     let gate = &mut self.gate_ticks[tick * self.gates + usize::from(slot)];
@@ -567,19 +653,61 @@ impl NotePass {
                 }
                 match heard.event {
                     Event::NoteOn { id, note, velocity } => {
-                        let table = &mut self.box_tables[at];
-                        let Some(pitches) = box_pitches(params, control, note, table) else {
-                            continue;
+                        let one = Pitches::one(i16::from(note));
+                        let (outlet, pitches) = match params {
+                            ModulatorParams::Pick(pick) => {
+                                let (rank, size) = self.chord_rank(index);
+                                let wanted = match pick.which {
+                                    which if which > 0 => usize::from(which.unsigned_abs()) - 1,
+                                    which => match size.checked_sub(usize::from(which.unsigned_abs())) {
+                                        Some(wanted) => wanted,
+                                        None => continue,
+                                    },
+                                };
+                                if rank != wanted {
+                                    continue;
+                                }
+                                (0, one)
+                            }
+                            ModulatorParams::Unpack(unpack) => {
+                                let (rank, _) = self.chord_rank(index);
+                                if rank >= usize::from(unpack.outputs.clamp(2, 8)) {
+                                    continue;
+                                }
+                                (rank as u8, one)
+                            }
+                            ModulatorParams::Merge(_) => (0, one),
+                            ModulatorParams::Switch(switch) => {
+                                let last = f32::from(switch.outputs.clamp(2, 8) - 1);
+                                ((control.clamp(0.0, 1.0) * last).round() as u8, one)
+                            }
+                            ModulatorParams::Gate(_) => {
+                                if control < OPEN_LEVEL {
+                                    continue;
+                                }
+                                (0, one)
+                            }
+                            _ => {
+                                let table = &mut self.box_tables[at];
+                                let Some(pitches) = box_pitches(params, control, note, table) else {
+                                    continue;
+                                };
+                                (0, pitches)
+                            }
                         };
-                        self.play(at, start, heard.offset, id, pitches, velocity);
+                        self.play(at, start, heard.offset, inlet, id, outlet, pitches, velocity);
                     }
-                    Event::NoteOff { id, .. } => self.end(at, heard.offset, id),
-                    Event::Choke => {
-                        while let Some(held) = self.box_tables[at].held[..self.box_tables[at].held_len].last() {
-                            let input = held.input;
-                            self.end(at, heard.offset, input);
-                        }
-                    }
+                    Event::NoteOff { id, .. } => self.end(at, heard.offset, inlet, id),
+                    // A Choke into one inlet lets go of what came in there.
+                    Event::Choke => loop {
+                        let table = &self.box_tables[at];
+                        let Some(held) = table.held[..table.held_len].iter().rev().find(|held| held.inlet == inlet)
+                        else {
+                            break;
+                        };
+                        let input = held.input;
+                        self.end(at, heard.offset, inlet, input);
+                    },
                     _ => {}
                 }
             }
@@ -587,11 +715,23 @@ impl NotePass {
         }
     }
 
-    /// Box `at` plays `pitches` for the note `input` it heard, at `offset`.
-    /// A pitch it has sounding already is shared, not played again. Refused
-    /// whole when the box holds all it can, or has no room left this block
-    /// for these and a release of everything it would then hold.
-    fn play(&mut self, at: usize, start: u32, offset: u32, input: u64, pitches: Pitches, velocity: u8) {
+    /// Box `at` plays `pitches` on `outlet` for the note `input` it heard on
+    /// `inlet`, at `offset`. A pitch it has sounding on that outlet already
+    /// is shared, not played again. Refused whole when the box holds all it
+    /// can, or has no room left this block for these and a release of
+    /// everything it would then hold.
+    #[allow(clippy::too_many_arguments)]
+    fn play(
+        &mut self,
+        at: usize,
+        start: u32,
+        offset: u32,
+        inlet: u8,
+        input: u64,
+        outlet: u8,
+        pitches: Pitches,
+        velocity: u8,
+    ) {
         let table = &mut self.box_tables[at];
         // In range and each pitch once: a note pushed past either end is
         // dropped, and its NoteOff with it.
@@ -608,9 +748,10 @@ impl NotePass {
         if len == 0 || table.held_len == MAX_LINK_NOTES {
             return;
         }
+        let sounds = |held: &Sounding, note: u8| held.note == note && held.outlet == outlet;
         let new = notes[..len]
             .iter()
-            .filter(|&&note| !table.sounding[..table.sounding_len].iter().any(|held| held.note == note))
+            .filter(|&&note| !table.sounding[..table.sounding_len].iter().any(|held| sounds(held, note)))
             .count();
         let written = self.flow.len() - start as usize;
         if table.sounding_len + new > MAX_LINK_NOTES || written + new + table.sounding_len + new > BOX_EVENTS {
@@ -618,6 +759,8 @@ impl NotePass {
         }
         let mut held = BoxHeld {
             input,
+            inlet,
+            outlet,
             pitches: [0; MAX_CHORD_NOTES],
             len: len as u8,
         };
@@ -625,33 +768,46 @@ impl NotePass {
         table.held[table.held_len] = held;
         table.held_len += 1;
         for &note in &notes[..len] {
-            if let Some(sounding) = table.sounding[..table.sounding_len].iter_mut().find(|held| held.note == note) {
+            if let Some(sounding) = table.sounding[..table.sounding_len].iter_mut().find(|held| sounds(held, note)) {
                 sounding.refs = sounding.refs.saturating_add(1);
                 continue;
             }
             let id = self.next_box_id;
             self.next_box_id = self.next_box_id.wrapping_add(1);
-            table.sounding[table.sounding_len] = Sounding { note, id, refs: 1 };
+            table.sounding[table.sounding_len] = Sounding {
+                note,
+                outlet,
+                id,
+                refs: 1,
+            };
             table.sounding_len += 1;
             self.flow.push(TimedEvent {
                 offset,
                 event: Event::NoteOn { id, note, velocity },
             });
+            self.flow_port.push(outlet);
         }
     }
 
-    /// Box `at` lets go of the note `input` it heard, at `offset`: each of
-    /// its pitches no other note still shares is released.
-    fn end(&mut self, at: usize, offset: u32, input: u64) {
+    /// Box `at` lets go of the note `input` it heard on `inlet`, at
+    /// `offset`: each of its pitches no other note still shares is
+    /// released.
+    fn end(&mut self, at: usize, offset: u32, inlet: u8, input: u64) {
         let table = &mut self.box_tables[at];
-        let Some(index) = table.held[..table.held_len].iter().position(|held| held.input == input) else {
+        let Some(index) = table.held[..table.held_len]
+            .iter()
+            .position(|held| held.input == input && held.inlet == inlet)
+        else {
             return;
         };
         let held = table.held[index];
         table.held[index] = table.held[table.held_len - 1];
         table.held_len -= 1;
         for &note in &held.pitches[..usize::from(held.len)] {
-            let Some(index) = table.sounding[..table.sounding_len].iter().position(|held| held.note == note) else {
+            let Some(index) = table.sounding[..table.sounding_len]
+                .iter()
+                .position(|sounding| sounding.note == note && sounding.outlet == held.outlet)
+            else {
                 continue;
             };
             let sounding = &mut table.sounding[index];
@@ -668,6 +824,7 @@ impl NotePass {
                     offset,
                     event: Event::NoteOff { id, note },
                 });
+                self.flow_port.push(held.outlet);
             }
         }
     }

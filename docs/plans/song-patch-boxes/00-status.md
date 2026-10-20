@@ -66,3 +66,20 @@ differs from the step file:
   wired into `open` it is closed.
 - A switch sends values only, not events, on whichever outlet it picks; a
   route from a switch reads outlet `a`.
+
+**04 (MOO-536).** `pick`, `unpack n` and `merge n` (`ModulatorParams::Pick`,
+`Unpack`, `Merge`), and `switch` and `gate` on notes. The note pass now runs
+a graph of boxes rather than a tree from each tag: each box has up to eight
+note inlets (`CompiledNoteBox::inputs`, a `NoteFeed` each) and writes its
+notes tagged with the outlet they leave by. Where it differs from the step
+file:
+
+- **A switch's or a gate's sort is a param** (`notes`), set when a wire of
+  the other sort comes into `in` (`SongModulation::connect`) and kept when
+  the box is retyped. Wires out of it that no longer fit go.
+- **`pick` is counted from 1 and -1** (`pick 2`, `pick -2`), its knob a
+  gapless position (0 the lowest, -1 the highest).
+- **A note switch's `which` and a note gate's `open` are read a block
+  late**, as a transpose's semitones are, so a note at the very first block
+  after play sees them as they stood before.
+

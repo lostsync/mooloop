@@ -22,7 +22,7 @@ use mooloop_core::{
     MOD_STEP_MAX_STEPS, ModMathOp, ParamCurve, ParamDescriptor, RANDOM_PARAM_BIPOLAR,
     RANDOM_PARAM_DRUNK, RANDOM_PARAM_PROBABILITY, RANDOM_PARAM_QUANTIZE, RANDOM_PARAM_RATE_DIVISION,
     RANDOM_PARAM_RATE_HZ, RANDOM_PARAM_TEMPO_SYNC, RANDOM_PARAM_TRIGGER, RANDOM_PARAM_WALK,
-    SELECT_PARAM_INPUTS, SWITCH_PARAM_OUTPUTS, SLEW_PARAM_TIME_S, STEP_PARAM_DIVISION, STEP_PARAM_GLIDE,
+    SELECT_PARAM_INPUTS, SWITCH_PARAM_OUTPUTS, PICK_PARAM_WHICH, UNPACK_PARAM_OUTPUTS, MERGE_PARAM_INPUTS, SLEW_PARAM_TIME_S, STEP_PARAM_DIVISION, STEP_PARAM_GLIDE,
     STEP_PARAM_LENGTH, STEP_PARAM_TRIGGER, STEP_PARAM_UNIPOLAR, STEP_PARAM_VALUE_BASE,
     TABLE_PARAM_LENGTH, TABLE_PARAM_VALUE_BASE,
 };
@@ -107,6 +107,9 @@ pub(crate) fn face_params(params: &ModulatorParams) -> Vec<u32> {
         ModulatorParams::Counter(_) => vec![COUNTER_PARAM_STEPS],
         ModulatorParams::Select(_) => vec![SELECT_PARAM_INPUTS],
         ModulatorParams::Switch(_) => vec![SWITCH_PARAM_OUTPUTS],
+        ModulatorParams::Pick(_) => vec![PICK_PARAM_WHICH],
+        ModulatorParams::Unpack(_) => vec![UNPACK_PARAM_OUTPUTS],
+        ModulatorParams::Merge(_) => vec![MERGE_PARAM_INPUTS],
         ModulatorParams::Slew(_) => vec![SLEW_PARAM_TIME_S],
         // The note boxes' arguments, as stepped knobs that read as typed
         // (song patch step 08).
@@ -116,7 +119,7 @@ pub(crate) fn face_params(params: &ModulatorParams) -> Vec<u32> {
         ModulatorParams::Transpose(_) => vec![TRANSPOSE_PARAM_SEMITONES],
         ModulatorParams::Chance(_) => vec![CHANCE_PARAM_PROBABILITY],
         ModulatorParams::Num(_) => vec![NUM_PARAM_POSITION, NUM_PARAM_FORMAT],
-        ModulatorParams::NoteGate | ModulatorParams::Hold | ModulatorParams::Gate | ModulatorParams::Unknown => {
+        ModulatorParams::NoteGate | ModulatorParams::Hold | ModulatorParams::Gate(_) | ModulatorParams::Unknown => {
             Vec::new()
         }
     }
@@ -219,6 +222,12 @@ pub(crate) fn readout(params: &ModulatorParams, id: u32) -> String {
             NumFormat::Int => "int".into(),
             NumFormat::Note => "note".into(),
         },
+        // As typed, not the knob's gapless position.
+        (ModulatorParams::Pick(pick), PICK_PARAM_WHICH) => match pick.which {
+            1 => "low".into(),
+            -1 => "high".into(),
+            which => which.to_string(),
+        },
         (ModulatorParams::Chance(chance), CHANCE_PARAM_PROBABILITY) => {
             format!("{}%", (chance.probability * 100.0).round())
         }
@@ -278,6 +287,8 @@ mod tests {
         assert_eq!(readout(&modal, MODAL_PARAM_SEVENTH), "7th");
         assert_eq!(readout(&parse("chance 0.7").unwrap(), CHANCE_PARAM_PROBABILITY), "70%");
         assert_eq!(readout(&parse("transpose -12").unwrap(), TRANSPOSE_PARAM_SEMITONES), "-12st");
+        assert_eq!(readout(&parse("pick").unwrap(), PICK_PARAM_WHICH), "low");
+        assert_eq!(readout(&parse("pick -2").unwrap(), PICK_PARAM_WHICH), "-2");
         assert!(face_params(&ModulatorParams::NoteGate).is_empty());
     }
 

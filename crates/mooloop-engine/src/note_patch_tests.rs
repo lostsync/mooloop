@@ -570,3 +570,179 @@ fn the_note_boxes_allocate_nothing() {
     let after = (crate::COUNTING.allocations(), crate::COUNTING.frees());
     assert_eq!(after, before, "the callback allocated or freed with note boxes in the patch");
 }
+
+// Note boxes with many jacks (`docs/plans/song-patch-boxes/04-pick-unpack-merge.md`).
+
+/// A box of `params` added to `project`'s patch.
+fn add(project: &mut Project, params: ModulatorParams) -> ModSourceId {
+    project.modulation.add_module(params, InputSource::None, "Keys")
+}
+
+fn wire(project: &mut Project, from: (ModSourceId, u8), to: (ModSourceId, u8)) {
+    project.modulation.connect(Jack::new(from.0, from.1), Jack::new(to.0, to.1)).unwrap();
+}
+
+/// A box sending `value` with nothing wired in.
+fn constant(project: &mut Project, value: f32) -> ModSourceId {
+    add(
+        project,
+        ModulatorParams::Math(mooloop_core::ModMathParams {
+            op: mooloop_core::ModMathOp::Add,
+            operand: value,
+            ..Default::default()
+        }),
+    )
+}
+
+/// Keys' notes into a major chord, and the chord into the other channel
+/// through `then`, which returns the jack the other channel hears.
+fn through_chord(then: impl FnOnce(&mut Project, ModSourceId) -> (ModSourceId, u8)) -> Project {
+    chords_on(&[(0, 2), (4, 2)], then)
+}
+
+/// [`through_chord`] with Keys playing `steps`.
+fn chords_on(steps: &[(u32, u32)], then: impl FnOnce(&mut Project, ModSourceId) -> (ModSourceId, u8)) -> Project {
+    let (mut project, ids) = song_through(steps, true, &[ModulatorParams::Chord(ModChordParams::default())]);
+    project.modulation.wires.retain(|wire| wire.to.node != NOTES_OUT);
+    let out = then(&mut project, ids[0]);
+    wire(&mut project, out, (NOTES_OUT, 0));
+    project
+}
+
+/// The step's patch: a chord, and its lowest note an octave down under it,
+/// met at one notes-out by a merge.
+#[test]
+fn pick_low_transposed_and_merged_plays_a_left_hand_under_the_chord() {
+    let project = through_chord(|project, chord| {
+        let pick = add(project, ModulatorParams::Pick(mooloop_core::ModPickParams { which: 1 }));
+        let down = add(project, ModulatorParams::Transpose(ModTransposeParams { semitones: -12 }));
+        let merge = add(project, ModulatorParams::Merge(mooloop_core::ModMergeParams { inputs: 2 }));
+        wire(project, (chord, 0), (pick, 0));
+        wire(project, (pick, 0), (down, 0));
+        wire(project, (chord, 0), (merge, 0));
+        wire(project, (down, 0), (merge, 1));
+        (merge, 0)
+    });
+    let (heard, sounding) = heard_over(&project, BAR_BLOCKS, false);
+    // C major on 60, then C# major on 61, each with its root an octave down.
+    let mut on = pitches(&heard, true);
+    on.sort_unstable();
+    assert_eq!(on, [48, 49, 60, 61, 64, 65, 67, 68]);
+    assert_eq!(pitches(&heard, false).len(), 8);
+    assert!(sounding.0.is_empty());
+}
+
+#[test]
+fn pick_keeps_the_note_it_names_from_either_end() {
+    for (which, expected) in [(1, [60, 61]), (-1, [67, 68]), (2, [64, 65]), (-2, [64, 65]), (3, [67, 68])] {
+        let project = through_chord(|project, chord| {
+            let pick = add(project, ModulatorParams::Pick(mooloop_core::ModPickParams { which }));
+            wire(project, (chord, 0), (pick, 0));
+            (pick, 0)
+        });
+        let (heard, sounding) = heard_over(&project, BAR_BLOCKS, false);
+        assert_eq!(pitches(&heard, true), expected, "pick {which}");
+        assert_eq!(pitches(&heard, false), expected, "pick {which}");
+        assert!(sounding.0.is_empty());
+    }
+    // Past the chord's size there is nothing to keep.
+    let project = through_chord(|project, chord| {
+        let pick = add(project, ModulatorParams::Pick(mooloop_core::ModPickParams { which: 4 }));
+        wire(project, (chord, 0), (pick, 0));
+        (pick, 0)
+    });
+    assert!(heard_over(&project, BAR_BLOCKS, false).0.is_empty());
+}
+
+#[test]
+fn unpack_puts_each_note_of_a_chord_on_its_own_outlet() {
+    for (port, expected) in [(0, [60, 61]), (1, [64, 65]), (2, [67, 68])] {
+        let project = through_chord(|project, chord| {
+            let unpack = add(project, ModulatorParams::Unpack(mooloop_core::ModUnpackParams { outputs: 3 }));
+            wire(project, (chord, 0), (unpack, 0));
+            (unpack, port)
+        });
+        let (heard, sounding) = heard_over(&project, BAR_BLOCKS, false);
+        assert_eq!(pitches(&heard, true), expected, "outlet {port}");
+        assert_eq!(pitches(&heard, false), expected, "outlet {port}");
+        assert!(sounding.0.is_empty());
+    }
+}
+
+/// A switch or a gate takes a note wire into its `in` and works on notes.
+/// Its control inlet is read a block late, as a transpose's is, so the
+/// notes start a step in.
+#[test]
+fn a_switch_on_notes_sends_them_to_the_outlet_which_picks() {
+    for (which, expected) in [(1.0, vec![60, 64, 67, 61, 65, 68]), (0.0, vec![])] {
+        let project = chords_on(&[(1, 2), (5, 2)], |project, chord| {
+            let switch = add(project, ModulatorParams::Switch(mooloop_core::ModSwitchParams::default()));
+            wire(project, (chord, 0), (switch, 0));
+            assert!(project.modulation.module(switch).unwrap().params.is_note_box(), "it took the note wire's sort");
+            let picks = constant(project, which);
+            wire(project, (picks, 0), (switch, 1));
+            (switch, 1)
+        });
+        let (heard, sounding) = heard_over(&project, BAR_BLOCKS, false);
+        assert_eq!(pitches(&heard, true), expected, "which {which}");
+        assert_eq!(pitches(&heard, false), expected, "which {which}");
+        assert!(sounding.0.is_empty());
+    }
+}
+
+#[test]
+fn a_gate_on_notes_passes_them_while_open_and_closing_releases_them() {
+    // Keys holds one note for eight steps from step 1: 60, then the chord
+    // on it.
+    let gated = |open: f32| {
+        let (mut project, ids) =
+            song_through(&[(1, 8)], true, &[ModulatorParams::Chord(ModChordParams::default())]);
+        project.modulation.wires.retain(|wire| wire.to.node != NOTES_OUT);
+        let gate = add(&mut project, ModulatorParams::Gate(mooloop_core::ModGateParams::default()));
+        wire(&mut project, (ids[0], 0), (gate, 0));
+        let level = constant(&mut project, open);
+        wire(&mut project, (level, 0), (gate, 1));
+        wire(&mut project, (gate, 0), (NOTES_OUT, 0));
+        project
+    };
+    let (heard, _) = heard_over(&gated(0.0), BAR_BLOCKS, false);
+    assert!(heard.is_empty(), "closed: {heard:?}");
+
+    let open = gated(1.0);
+    let mut render = RenderState::from_project(SAMPLE_RATE, &open, &[]);
+    render.play();
+    let mut sounding = Sounding::default();
+    run(&mut render, STEP_BLOCKS + 2, false, &mut sounding);
+    assert_eq!(sounding.0.len(), 3, "open, the chord sounds");
+    let set = SongModulator::of_project(&gated(0.0));
+    let _ = render.apply_structural(StructuralCommand::SetModulation { set });
+    run(&mut render, 3, false, &mut sounding);
+    assert!(sounding.0.is_empty(), "closing let go mid-note: {:?}", sounding.0);
+}
+
+/// The many-jack boxes allocate nothing either.
+#[test]
+fn the_many_jack_boxes_allocate_nothing() {
+    let project = through_chord(|project, chord| {
+        let unpack = add(project, ModulatorParams::Unpack(mooloop_core::ModUnpackParams { outputs: 3 }));
+        let pick = add(project, ModulatorParams::Pick(mooloop_core::ModPickParams { which: -1 }));
+        let merge = add(project, ModulatorParams::Merge(mooloop_core::ModMergeParams { inputs: 3 }));
+        wire(project, (chord, 0), (unpack, 0));
+        wire(project, (chord, 0), (pick, 0));
+        wire(project, (unpack, 0), (merge, 0));
+        wire(project, (unpack, 2), (merge, 1));
+        wire(project, (pick, 0), (merge, 2));
+        (merge, 0)
+    });
+    let mut render = RenderState::from_project(SAMPLE_RATE, &project, &[]);
+    render.play();
+    render.process_once_block(BLOCK);
+    let before = (crate::COUNTING.allocations(), crate::COUNTING.frees());
+    for _ in 0..6 * STEP_BLOCKS {
+        render.process_once_block(BLOCK);
+    }
+    render.apply_command(EngineCommand::Panic);
+    render.process_once_block(BLOCK);
+    let after = (crate::COUNTING.allocations(), crate::COUNTING.frees());
+    assert_eq!(after, before, "the callback allocated or freed with many-jack note boxes in the patch");
+}

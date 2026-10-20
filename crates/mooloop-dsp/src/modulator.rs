@@ -7,7 +7,7 @@
 
 use mooloop_core::{
     CompiledKnob, ModDestinationDescriptor, ModEnvelopeParams, ModLfoParams, ModPolarity, ModLfoWaveform, ModMathOp, ModMathParams, ModRandomParams,
-    ModRandomTrigger, ModStepParams, ModStepTrigger, ModulatorParams, TagSource, MAX_CHANNELS,
+    ModRandomTrigger, ModGateParams, ModSwitchParams, ModStepParams, ModStepTrigger, ModulatorParams, TagSource, MAX_CHANNELS,
     MAX_INLETS, MOD_STEP_MAX_STEPS,
 };
 use mooloop_core::modulation::{MAX_GENERATOR_OUTLETS, PERFORMANCE_SOURCES};
@@ -834,7 +834,14 @@ impl ModuleSpec {
             | ModulatorParams::Modal(_)
             | ModulatorParams::Scale(_)
             | ModulatorParams::Transpose(_)
-            | ModulatorParams::Chance(_) => Source::Notes(0.0),
+            | ModulatorParams::Chance(_)
+            | ModulatorParams::Pick(_)
+            | ModulatorParams::Unpack(_)
+            | ModulatorParams::Merge(_) => Source::Notes(0.0),
+            // On notes, a switch's `which` and a gate's `open` are read as a
+            // transpose's semitones are.
+            ModulatorParams::Switch(params) if params.notes => Source::Notes(0.0),
+            ModulatorParams::Gate(params) if params.notes => Source::Notes(0.0),
             ModulatorParams::NoteGate => Source::NoteGate {
                 held: 0,
                 pitch: 0.0,
@@ -848,7 +855,7 @@ impl ModuleSpec {
                 slot: 0,
             },
             ModulatorParams::Switch(params) => Source::Switch(params.outputs),
-            ModulatorParams::Gate => Source::Gate,
+            ModulatorParams::Gate(_) => Source::Gate,
             ModulatorParams::Unknown => Source::Silent,
         }
     }
@@ -1213,7 +1220,7 @@ impl ModulatorSet {
                 counter.index %= next.steps.max(2);
             }
             (ModulatorParams::Select(next), Source::Select(inputs)) => *inputs = next.inputs,
-            (ModulatorParams::Switch(next), Source::Switch(outputs)) => *outputs = next.outputs,
+            (ModulatorParams::Switch(next), Source::Switch(outputs)) if !next.notes => *outputs = next.outputs,
             (ModulatorParams::Slew(next), Source::Slew(slew)) => slew.time_seconds = next.time_seconds,
             (ModulatorParams::Num(next), Source::Num(num)) => *num = next,
             // A value drawn anew replaces what a wire wrote there; the rest
@@ -1231,12 +1238,17 @@ impl ModulatorSet {
                 | ModulatorParams::Modal(_)
                 | ModulatorParams::Scale(_)
                 | ModulatorParams::Transpose(_)
-                | ModulatorParams::Chance(_),
+                | ModulatorParams::Chance(_)
+                | ModulatorParams::Pick(_)
+                | ModulatorParams::Unpack(_)
+                | ModulatorParams::Merge(_),
                 Source::Notes(_),
             )
             | (ModulatorParams::NoteGate, Source::NoteGate { .. })
             | (ModulatorParams::Hold, Source::Hold(_))
-            | (ModulatorParams::Gate, Source::Gate)
+            | (ModulatorParams::Gate(ModGateParams { notes: false }), Source::Gate)
+            | (ModulatorParams::Switch(ModSwitchParams { notes: true, .. }), Source::Notes(_))
+            | (ModulatorParams::Gate(ModGateParams { notes: true }), Source::Notes(_))
             | (ModulatorParams::Unknown, Source::Silent) => {}
             _ => module.source = module.spec.build(),
         }
@@ -2716,7 +2728,7 @@ mod tests {
                 ..ModMathParams::default()
             });
             for (which, expected) in [(0.0, [0.7, 0.0, 0.0]), (0.5, [0.0, 0.7, 0.0]), (1.0, [0.0, 0.0, 0.7])] {
-                let switch = ModulatorParams::Switch(mooloop_core::ModSwitchParams { outputs: 3 });
+                let switch = ModulatorParams::Switch(mooloop_core::ModSwitchParams { outputs: 3, notes: false });
                 let mut specs = vec![constant(0.7), constant(which), box_of(switch, &[(0, 0), (1, 1)])];
                 for port in 0..3 {
                     let mut reader = box_of(through, &[(0, 2)]);
@@ -2736,8 +2748,8 @@ mod tests {
             let counter = ModulatorParams::Counter(ModCounterParams { steps: 8 });
             for (open, counted) in [(Some(1.0), 1.0 / 7.0), (Some(0.2), 0.0), (None, 0.0)] {
                 let gate = match open {
-                    Some(_) => box_of(ModulatorParams::Gate, &[(0, 3), (1, 0)]),
-                    None => box_of(ModulatorParams::Gate, &[(0, 3)]),
+                    Some(_) => box_of(ModulatorParams::Gate(Default::default()), &[(0, 3), (1, 0)]),
+                    None => box_of(ModulatorParams::Gate(Default::default()), &[(0, 3)]),
                 };
                 let mut set = set(vec![constant(open.unwrap_or(0.0)), gate, box_of(counter, &[(0, 1)])], 1);
                 set.tick(48_000, 32, 120.0, None, &note_on());
