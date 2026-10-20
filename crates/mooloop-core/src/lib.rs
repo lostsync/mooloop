@@ -33,6 +33,7 @@ pub mod mlp8;
 pub mod outlet;
 pub mod patch;
 pub mod patch_preset;
+pub mod patch_factory;
 pub use patch_preset::PRESET_CHANNEL;
 pub mod box_text;
 pub mod pattern;

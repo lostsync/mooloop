@@ -14,10 +14,6 @@ reopening it. A plan's own `00-status.md` says how it got where it is.
 
 ## Active
 
-- `song-patch-boxes/` (planned 2026-10-19, for 0.1.7) — more boxes for the
-  song patch: `num`, `hold`, `table`, `switch`, `gate`, `pick`, `unpack`,
-  `merge`, `note`, `wait`, `arp`, and Step drawn as bars. No list wire: a
-  note wire is the list. Today's `gate` box becomes `held`.
 - `plugin-hosting/` (added 2026-09-16) — CLAP effects and instruments now,
   then VST3, then AU if ever. No format type leaves `mooloop-plugin-host`.
 - `icon-pass/` (planned 2026-09-26) — one registry, `icons.slint`, and one
@@ -49,6 +45,12 @@ tempting change was rejected:
   takes the keys, instruments and effects are listed apart, and plugins filter
   by format, category and a favourites star. Its README says what each plugin
   format reports about a plugin's kind; VST3 categories wait on VST3 hosting.
+- `song-patch-boxes/` (planned and done 2026-10-19..20, for 0.1.7) — more
+  boxes for the song patch: `num`, `hold`, `table`, `switch`, `gate`,
+  `pick`, `unpack`, `merge`, `note`, `wait`, `arp`, and Step drawn as bars,
+  with two shipped patch presets. No list wire: a note wire is the list.
+  The old `gate` box is `held`. `00-status.md` says where each step
+  differed from its plan.
 - `song-patch/` (planned 2026-10-06, done 2026-10-19, for 0.1.7) — the
   Modulation pane is one patching canvas for the song: typed boxes, control
   and note wires, and the song's sources and destinations as tags.

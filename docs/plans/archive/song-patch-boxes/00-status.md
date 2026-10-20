@@ -15,7 +15,8 @@ tagging).
 | 07 · arp | MOO-539 |
 | 08 · The contract and two example patches | MOO-540 |
 
-Planned and agreed 2026-10-19. Each step is worked in order.
+Planned and agreed 2026-10-19. Each step was worked in order; all eight
+were done by 2026-10-20 and the plan archived.
 
 ## What each step found
 
@@ -124,4 +125,14 @@ from the step file:
 - **A note and a step at one offset: the note is in the chord first**, so a
   chord played on the beat sounds on that beat's step and a chord let go on
   it does not.
+
+**08 (MOO-540).** `MODULATION.md` describes every box the plan added. The
+left hand patch and the arp from parts ship as patch presets
+(`mooloop_core::patch_factory`, seeded by `mooloop_project::seed_patch_bank`
+into the patch presets' directory at start, once). Where it differs from
+the step file:
+
+- **Their tags land empty**, hinted Notes in, Notes out and Beat, as any
+  patch preset's do: a preset names nothing of the song it lands in, a
+  transport tag included.
 

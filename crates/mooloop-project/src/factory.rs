@@ -18,13 +18,13 @@ use std::path::Path;
 
 use mooloop_core::mlm1_factory::{self, FactoryPatch};
 use mooloop_core::{
-    ds01_factory, effect_factory, mlp8_factory, ChannelSetup, ChannelSource, Ds01State, EffectKind,
+    ds01_factory, effect_factory, mlp8_factory, patch_factory, ChannelSetup, ChannelSource, Ds01State, EffectKind,
     MlP8State,
 };
 
 use crate::{
     sanitize_preset_name, save_channel_preset, save_effect_preset, save_effect_run_preset,
-    save_generator_preset, AssetMode, Error, PresetInfo,
+    save_generator_preset, save_patch_preset, AssetMode, Error, PresetInfo,
 };
 
 /// Written once the bank has been seeded. Its presence — not the presence of
@@ -310,6 +310,50 @@ fn preset_info(patch: &FactoryPatch) -> PresetInfo {
     }
 }
 
+/// Bundle extension for a patch preset, matching what the save dialog
+/// writes.
+const PATCH_BUNDLE_EXTENSION: &str = "mooloop-patch";
+
+/// Written once the patch bank has been seeded into the patch presets'
+/// directory.
+const PATCH_MARKER_FILE: &str = ".factory-v1";
+
+/// Seeds the shipped patch presets ([`patch_factory::patches`]) into `dir`,
+/// the patch presets' directory, on the terms of [`seed_effect_bank`]:
+/// once, marker-guarded, never over a preset of the same name, the marker
+/// last.
+///
+/// Returns how many bundles were written.
+pub fn seed_patch_bank(dir: &Path) -> Result<usize, Error> {
+    let marker = dir.join(PATCH_MARKER_FILE);
+    if marker.exists() {
+        return Ok(0);
+    }
+    fs::create_dir_all(dir)?;
+
+    let mut written = 0;
+    for patch in patch_factory::patches() {
+        let stem = sanitize_preset_name(patch.name);
+        let path = dir.join(format!("{stem}.{PATCH_BUNDLE_EXTENSION}"));
+        if path.exists() {
+            continue;
+        }
+        save_patch_preset(
+            &path,
+            &patch.fragment,
+            PresetInfo {
+                name: patch.name.to_string(),
+                category: patch.category.to_string(),
+                tags: patch.tags.iter().map(|tag| (*tag).to_string()).collect(),
+            },
+        )?;
+        written += 1;
+    }
+
+    fs::write(&marker, b"")?;
+    Ok(written)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -360,6 +404,32 @@ mod tests {
                 patch.name
             );
             assert!(setup.preset_modulation.is_none(), "{} saved a rack", patch.name);
+        }
+    }
+
+    /// The patch bank lands as patch presets the browser lists and reads
+    /// back as the fragments shipped, and seeds once.
+    #[test]
+    fn the_patch_bank_lists_and_loads_back_unchanged() {
+        let temp = tempdir().unwrap();
+        let dir = temp.path().join("patches");
+        let bank = patch_factory::patches();
+        assert_eq!(seed_patch_bank(&dir).unwrap(), bank.len());
+        assert_eq!(seed_patch_bank(&dir).unwrap(), 0, "once");
+        let listed = list_presets(&dir);
+        assert_eq!(listed.len(), bank.len());
+        for patch in bank {
+            let summary = listed
+                .iter()
+                .find(|found| found.name == patch.name)
+                .unwrap_or_else(|| panic!("{} is missing from the bank", patch.name));
+            assert_eq!(summary.kind, PresetKind::Patch);
+            let report = load_bundle(&summary.path).unwrap();
+            assert!(report.repairs.is_empty(), "{}: {:?}", patch.name, report.repairs);
+            let LoadedDocument::Patch(fragment) = report.document else {
+                panic!("{} did not load as a patch", patch.name);
+            };
+            assert_eq!(*fragment, patch.fragment, "{} changed on disk", patch.name);
         }
     }
 

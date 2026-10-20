@@ -33,7 +33,7 @@ mod io_cost;
 
 pub use factory::{
     seed_ds01_bank, seed_effect_bank, seed_effect_run_bank, seed_mlm1_bank,
-    seed_mlp8_bank,
+    seed_mlp8_bank, seed_patch_bank,
 };
 pub use integrity::{Diagnosis, Issue, Remedy};
 
