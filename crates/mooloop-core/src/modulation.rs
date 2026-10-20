@@ -863,6 +863,8 @@ pub const COUNTER_PARAM_STEPS: u32 = 0;
 pub const SELECT_PARAM_INPUTS: u32 = 0;
 /// How long a slew takes to cover its distance.
 pub const SLEW_PARAM_TIME_S: u32 = 0;
+/// How many outlets a switch chooses among (song patch boxes step 03).
+pub const SWITCH_PARAM_OUTPUTS: u32 = 0;
 
 /// A chord box's quality ([`crate::harmony::ChordQuality`]) and inversion
 /// (song patch step 08).
@@ -896,6 +898,8 @@ pub const NUM_LIMIT: f32 = 1000.0;
 pub const COUNTER_MAX_STEPS: u8 = 64;
 /// The most inputs a select takes: `a` to `h`.
 pub const SELECT_MAX_INPUTS: u8 = 8;
+/// The most outlets a switch has: `a` to `h`.
+pub const SWITCH_MAX_OUTPUTS: u8 = 8;
 
 /// A boolean as a descriptor: two positions, off by default.
 const fn toggle(id: u32, name: &'static str) -> ParamDescriptor {
@@ -1282,6 +1286,16 @@ pub const SELECT_DESCRIPTORS: [ParamDescriptor; 1] = [ParamDescriptor {
     default: 4.0,
 }];
 
+pub const SWITCH_DESCRIPTORS: [ParamDescriptor; 1] = [ParamDescriptor {
+    id: SWITCH_PARAM_OUTPUTS,
+    name: "Outputs",
+    unit: "",
+    min: 2.0,
+    max: SWITCH_MAX_OUTPUTS as f32,
+    curve: ParamCurve::Stepped(SWITCH_MAX_OUTPUTS as u16 - 1),
+    default: 2.0,
+}];
+
 pub const SLEW_DESCRIPTORS: [ParamDescriptor; 1] = [ParamDescriptor {
     id: SLEW_PARAM_TIME_S,
     name: "Time",
@@ -1654,6 +1668,20 @@ impl Default for ModSelectParams {
     }
 }
 
+/// Sends its `in` to one of `outputs` outlets, picked by its `which` inlet
+/// read as `0..1` across them; the others hold 0.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct ModSwitchParams {
+    pub outputs: u8,
+}
+
+impl Default for ModSwitchParams {
+    fn default() -> Self {
+        Self { outputs: 2 }
+    }
+}
+
 /// Follows its input, taking `time_seconds` to settle after a jump.
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
@@ -1820,7 +1848,8 @@ pub enum ModulatorParams {
     Transpose(ModTransposeParams),
     Chance(ModChanceParams),
     /// Notes in, control out: a gate, and the latest NoteOn's pitch and
-    /// velocity.
+    /// velocity. Typed `held`; saved as `gate`, its name before song patch
+    /// boxes step 03.
     #[serde(rename = "gate")]
     NoteGate,
     /// Shows a value, or sends one (song patch boxes step 01).
@@ -1829,6 +1858,12 @@ pub enum ModulatorParams {
     Hold,
     /// n stored values.
     Table(ModTableParams),
+    /// One input to one of n outlets.
+    Switch(ModSwitchParams),
+    /// Passes its `in` while its `open` is high. Typed `gate`; saved as
+    /// `pass`, since `gate` names the held box in songs already saved.
+    #[serde(rename = "pass")]
+    Gate,
     /// A box whose name this build does not know: typed, or saved by a
     /// later build. It keeps its text ([`SongModule::text`]), has no jacks,
     /// and puts out nothing.
@@ -1855,6 +1890,8 @@ impl ModulatorParams {
             Self::Num(_) => ModulatorKind::Num,
             Self::Hold => ModulatorKind::Hold,
             Self::Table(_) => ModulatorKind::Table,
+            Self::Switch(_) => ModulatorKind::Switch,
+            Self::Gate => ModulatorKind::Gate,
             Self::Unknown => ModulatorKind::Unknown,
         }
     }
@@ -1928,6 +1965,10 @@ impl ModulatorParams {
                 SELECT_PARAM_INPUTS => Some(f32::from(p.inputs)),
                 _ => None,
             },
+            Self::Switch(p) => match id {
+                SWITCH_PARAM_OUTPUTS => Some(f32::from(p.outputs)),
+                _ => None,
+            },
             Self::Slew(p) => match id {
                 SLEW_PARAM_TIME_S => Some(p.time_seconds),
                 _ => None,
@@ -1967,7 +2008,7 @@ impl ModulatorParams {
                 TABLE_PARAM_LENGTH => Some(f32::from(p.length)),
                 _ => Some(p.values[table_value_index(id)?]),
             },
-            Self::NoteGate | Self::Hold | Self::Unknown => None,
+            Self::NoteGate | Self::Hold | Self::Gate | Self::Unknown => None,
         }
     }
 
@@ -2058,6 +2099,11 @@ impl ModulatorParams {
                     p.inputs = index.clamp(2, i32::from(SELECT_MAX_INPUTS)) as u8;
                 }
             }
+            Self::Switch(p) => {
+                if id == SWITCH_PARAM_OUTPUTS {
+                    p.outputs = index.clamp(2, i32::from(SWITCH_MAX_OUTPUTS)) as u8;
+                }
+            }
             Self::Slew(p) => {
                 if id == SLEW_PARAM_TIME_S {
                     p.time_seconds = value;
@@ -2107,7 +2153,7 @@ impl ModulatorParams {
                     }
                 }
             },
-            Self::NoteGate | Self::Hold | Self::Unknown => {}
+            Self::NoteGate | Self::Hold | Self::Gate | Self::Unknown => {}
         }
     }
 }
@@ -2133,6 +2179,9 @@ pub enum ModulatorKind {
     Num,
     Hold,
     Table,
+    Switch,
+    #[serde(rename = "pass")]
+    Gate,
     /// A box this build has no name for; never in [`Self::ALL`].
     Unknown,
 }
@@ -2141,7 +2190,7 @@ impl ModulatorKind {
     /// Every kind a box can be made as, in the order the shelf's kind
     /// tokens number them: new kinds are appended, so a token keeps naming
     /// the kind it did.
-    pub const ALL: [ModulatorKind; 17] = [
+    pub const ALL: [ModulatorKind; 19] = [
         ModulatorKind::Lfo,
         ModulatorKind::Envelope,
         ModulatorKind::Step,
@@ -2159,6 +2208,8 @@ impl ModulatorKind {
         ModulatorKind::Num,
         ModulatorKind::Hold,
         ModulatorKind::Table,
+        ModulatorKind::Switch,
+        ModulatorKind::Gate,
     ];
 
     /// Whether the kind works on notes: the engine's note pass runs it,
@@ -2185,10 +2236,12 @@ impl ModulatorKind {
             Self::Scale => "Scale",
             Self::Transpose => "Transpose",
             Self::Chance => "Chance",
-            Self::NoteGate => "Gate",
+            Self::NoteGate => "Held",
             Self::Num => "Number",
             Self::Hold => "Hold",
             Self::Table => "Table",
+            Self::Switch => "Switch",
+            Self::Gate => "Gate",
             Self::Unknown => "Unknown",
         }
     }
@@ -2210,10 +2263,12 @@ impl ModulatorKind {
             Self::Scale => "SCL",
             Self::Transpose => "TRN",
             Self::Chance => "CHNC",
-            Self::NoteGate => "GATE",
+            Self::NoteGate => "HELD",
             Self::Num => "NUM",
             Self::Hold => "HOLD",
             Self::Table => "TBL",
+            Self::Switch => "SW",
+            Self::Gate => "GATE",
             Self::Unknown => "?",
         }
     }
@@ -2253,6 +2308,8 @@ impl ModulatorKind {
             Self::Num => ModulatorParams::Num(ModNumParams::default()),
             Self::Hold => ModulatorParams::Hold,
             Self::Table => ModulatorParams::Table(ModTableParams::default()),
+            Self::Switch => ModulatorParams::Switch(ModSwitchParams::default()),
+            Self::Gate => ModulatorParams::Gate,
             Self::Unknown => ModulatorParams::Unknown,
         }
     }
@@ -2275,7 +2332,8 @@ impl ModulatorKind {
             Self::Chance => &CHANCE_DESCRIPTORS,
             Self::Num => &NUM_DESCRIPTORS,
             Self::Table => &TABLE_DESCRIPTORS,
-            Self::NoteGate | Self::Hold | Self::Unknown => &[],
+            Self::Switch => &SWITCH_DESCRIPTORS,
+            Self::NoteGate | Self::Hold | Self::Gate | Self::Unknown => &[],
         }
     }
 
@@ -3320,6 +3378,8 @@ impl ModRack {
             | ModulatorParams::Num(_)
             | ModulatorParams::Hold
             | ModulatorParams::Table(_)
+            | ModulatorParams::Switch(_)
+            | ModulatorParams::Gate
             | ModulatorParams::Unknown => 1.0,
         }
     }
@@ -3494,6 +3554,8 @@ fn rack_input(
         | ModulatorParams::Num(_)
         | ModulatorParams::Hold
         | ModulatorParams::Table(_)
+        | ModulatorParams::Switch(_)
+        | ModulatorParams::Gate
         | ModulatorParams::Unknown => InputSource::None,
         // A seat with no identity: a preset's gate on its own channel's notes,
         // which means the channel it lands on.
@@ -3628,9 +3690,9 @@ impl<'de> serde::Deserialize<'de> for UnknownParams {
 }
 
 /// Every `kind` a module's params are saved under, as serde spells them.
-const KNOWN_KINDS: [&str; 18] = [
+const KNOWN_KINDS: [&str; 20] = [
     "lfo", "envelope", "step", "random", "math", "counter", "select", "slew", "chord", "modal", "scale",
-    "transpose", "chance", "gate", "num", "hold", "table", "unknown",
+    "transpose", "chance", "gate", "num", "hold", "table", "switch", "pass", "unknown",
 ];
 
 fn is_zero(value: &u32) -> bool {

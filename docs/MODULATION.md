@@ -162,22 +162,22 @@ parameter (`routes`). A channel holds none. Boxes and tags are named by a
 `ModSourceId` from one mint, so a wire names either the same way.
 
 **A box** is typed as text and spelled back from its settings
-(`mooloop_core::box_text`: `parse`, `spell`, and `VOCABULARY`, the twenty-three
+(`mooloop_core::box_text`: `parse`, `spell`, and `VOCABULARY`, the twenty-five
 names in the order the completion list offers them). A box keeps its
 settings as parameters (`ModulatorParams`), never as text, so `*   -.5`
 typed reads `* -0.5`, and a knob turned on its face changes what the box
 says. The control boxes are `lfo`, `env`, `step`, `random`, `counter`,
-`select`, `slew`, `num`, `hold` and `table`, and the arithmetic boxes `+ - * / min max clip` (one
+`select`, `switch`, `gate`, `slew`, `num`, `hold` and `table`, and the arithmetic boxes `+ - * / min max clip` (one
 kind, Math, with an operator). The note boxes are `chord`, `modal`,
-`scale`, `transpose`, `chance` and `gate`; their pitch, chord and mode tables
+`scale`, `transpose`, `chance` and `held`; their pitch, chord and mode tables
 are `crates/mooloop-core/src/harmony.rs`. A name the vocabulary lacks makes
 an **unknown** box that keeps its text and does nothing; a song from a later
 build with a kind this one does not know opens with that box unknown.
 
 **Jacks.** Each kind declares its inlets and outlets in port order
 (`ModulatorKind::ports`, and `ModulatorParams::ports` where the settings
-change them: a `select 6` has `index` and `a` to `f`, `clip` has no
-operand), and each jack is one of two sorts (`JackSort`): **control**, a
+change them: a `select 6` has `index` and `a` to `f`, a `switch 3` has
+outlets `a` to `c`, `clip` has no operand), and each jack is one of two sorts (`JackSort`): **control**, a
 value every control tick, or **note**, notes with each NoteOff following
 its NoteOn. A wire (`Wire`) runs from one outlet to one inlet of the same
 sort. **An inlet takes one wire**: two signals into one inlet are summed by
@@ -243,6 +243,12 @@ trigger inlet takes as a NoteOn.
   inside `-1..1`**, so an assignment never sees more.
 - A **hold** box keeps its **in** as of its last **trigger**, 0 before the
   first.
+- A **switch** of n (`switch 3`) sends its **in** to the outlet its
+  **which** picks (`0..1` across n, as a select's index); the others send
+  0. A route from a switch reads its first outlet. A **gate** passes its
+  **in**, value and events, while its **open** is at or above 0.5, and
+  sends 0 otherwise; with nothing wired into **open** it is closed. Both
+  work on control wires.
 - A **Step** box's steps, and a **table**'s values, are bars drawn with the
   mouse on its open face, the playing step or the slot read lit. A Step is
   bipolar (`-1..1`) or, typed `step 8 uni`, unipolar (`0..1`, a step held
@@ -251,7 +257,7 @@ trigger inlet takes as a NoteOn.
   its **value** wire there. What is drawn is saved; what a wire writes lasts
   until the set is rebuilt, and a value drawn again replaces what was
   written there.
-- A **gate** box sends what a gate tag does from the notes that reach it,
+- A **held** box sends what a gate tag does from the notes that reach it,
   on its first outlet; its **pitch** and **velocity** outlets carry the
   latest NoteOn's, each `0..1`, and no events.
 
@@ -308,7 +314,7 @@ reach it.
   a bounce plays what playback did.
 
 **An assignment is a route.** A route (`ModRoute`) runs from a box or a tag
-(`ModSourceRef::Id`), reading its first outlet (a gate box's gate), to one
+(`ModSourceRef::Id`), reading its first outlet (a held box's gate), to one
 `ParamAddr` anywhere in the song: any channel's generator, inserts and
 strip, any track's inserts and strip, the master's included, and a box's
 own knobs (`ParamOwner::Modulator { module }`, under `MODULATOR_SCOPE`, a
@@ -390,11 +396,11 @@ means "my channel" implicitly; a preset's "this channel" is
 | Kind | Meaning | Status |
 | --- | --- | --- |
 | LFO | Free-running or note-restarted periodic movement. | Implemented. |
-| Envelope | Gate-driven attack, decay, sustain, and release contour. | Implemented. Its gate is any control wire: a gate tag's notes, a gate box, a generator's gate outlet through an inlet tag, or any value read by its level. |
+| Envelope | Gate-driven attack, decay, sustain, and release contour. | Implemented. Its gate is any control wire: a gate tag's notes, a held box, a generator's gate outlet through an inlet tag, or any value read by its level. |
 | Step / random generator | Clocked patterns, probability, and controlled variation. | Implemented as the Step and Random boxes, with `counter`, `select` and `slew` beside them. |
 | Arithmetic | Scaling, inverting, offsetting and limiting another signal. | Implemented as the arithmetic boxes, `+ - * / min max clip`. |
 | Transport | Beat, bar, pattern position and the playing pattern. | Implemented as inlet tags. |
-| Note value | Velocity, pitch and gate from a channel's notes, reduced to one control signal. | Implemented as the `gate` box on a note wire: the latest NoteOn's pitch and velocity. |
+| Note value | Velocity, pitch and gate from a channel's notes, reduced to one control signal. | Implemented as the `held` box on a note wire: the latest NoteOn's pitch and velocity. |
 | Macro | A user macro knob. | Planned. |
 | Generator outlet | Generator-reduced values such as last-note velocity, gate, envelope, or Buffer state. | Implemented for the ML-P8's seven and DS-01's six, through the one-block control table, and read on the canvas through an inlet tag bound to the outlet: the tag is armed and wired like a box's outlet. Only the control run is offered; an audio outlet is refused by domain. Note the range convention below. |
 | Device outlet | Named effect signals such as gain reduction, envelope-following level, or gate state. | Planned. The vocabulary is shared with generator outlets; no effect declares one. |
@@ -697,7 +703,7 @@ reach the patch, through gate tags as per-tick gates and through notes-in
 tags as notes.
 
 **The patch is one answer, for anything a parameter can do.** A gate tag or
-a notes-in tag into a `gate` box drives an Envelope, a Step or a Random, and
+a notes-in tag into a `held` box drives an Envelope, a Step or a Random, and
 its assignment moves any insert's knob: a filter that opens on each kick, a
 delay whose feedback swells while a chord is held, a send that steps per
 note, all at control rate, with the notes from any channel. What the patch

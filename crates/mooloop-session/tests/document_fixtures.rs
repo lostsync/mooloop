@@ -177,7 +177,7 @@ fn maximal_project() -> Project {
     // the song patch's alone; a rack holds none.
     let rack_kinds = ModulatorKind::ALL
         .into_iter()
-        .filter(|kind| !kind.is_note_box() && !matches!(kind, ModulatorKind::Num | ModulatorKind::Hold | ModulatorKind::Table));
+        .filter(|kind| !kind.is_note_box() && !matches!(kind, ModulatorKind::Num | ModulatorKind::Hold | ModulatorKind::Table | ModulatorKind::Switch | ModulatorKind::Gate));
     project.land_rack(first, |rack| {
     for (slot, kind) in rack_kinds.enumerate() {
         rack.install(slot, kind.default_params())

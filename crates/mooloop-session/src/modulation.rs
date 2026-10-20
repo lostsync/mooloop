@@ -852,7 +852,7 @@ impl Session {
             if module.id == to.node {
                 continue;
             }
-            let ports = module.params.kind().ports();
+            let ports = module.params.ports();
             for (port, outlet) in ports.outlets.iter().enumerate() {
                 if outlet.sort != inlet.sort {
                     continue;

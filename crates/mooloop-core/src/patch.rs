@@ -104,9 +104,22 @@ const CHANCE_IN: &[Port] = &[note("notes"), control("probability")];
 const NUM_IN: &[Port] = &[control("in")];
 const HOLD_IN: &[Port] = &[control("in"), control("trigger")];
 const TABLE_IN: &[Port] = &[control("index"), control("value"), control("write")];
-/// A gate box's outlets: the gate, as a gate tag's (step 06), then the
+const SWITCH_IN: &[Port] = &[control("in"), control("which")];
+/// A switch's outlets; a switch of `n` has the first `n`.
+const SWITCH_OUT: &[Port] = &[
+    control("a"),
+    control("b"),
+    control("c"),
+    control("d"),
+    control("e"),
+    control("f"),
+    control("g"),
+    control("h"),
+];
+const GATE_IN: &[Port] = &[control("in"), control("open")];
+/// A held box's outlets: the gate, as a gate tag's (step 06), then the
 /// latest NoteOn's pitch and velocity.
-const GATE_OUT: &[Port] = &[control("gate"), control("pitch"), control("velocity")];
+const HELD_OUT: &[Port] = &[control("gate"), control("pitch"), control("velocity")];
 
 impl ModulatorKind {
     /// This kind's jacks.
@@ -158,7 +171,7 @@ impl ModulatorKind {
             },
             Self::NoteGate => Ports {
                 inlets: NOTES,
-                outlets: GATE_OUT,
+                outlets: HELD_OUT,
             },
             Self::Num => Ports {
                 inlets: NUM_IN,
@@ -170,6 +183,14 @@ impl ModulatorKind {
             },
             Self::Table => Ports {
                 inlets: TABLE_IN,
+                outlets: OUT,
+            },
+            Self::Switch => Ports {
+                inlets: SWITCH_IN,
+                outlets: SWITCH_OUT,
+            },
+            Self::Gate => Ports {
+                inlets: GATE_IN,
                 outlets: OUT,
             },
             Self::Unknown => Ports {
@@ -192,7 +213,7 @@ impl ModulatorKind {
 
 impl crate::modulation::ModulatorParams {
     /// This box's jacks as its params have them: a select has as many
-    /// inputs as it is set to, and `clip`, the arithmetic box with two
+    /// inputs as it is set to, a switch as many outlets, and `clip`, the arithmetic box with two
     /// bounds rather than an operand, has no operand inlet. Every other kind
     /// has its kind's table.
     pub fn ports(&self) -> Ports {
@@ -202,6 +223,10 @@ impl crate::modulation::ModulatorParams {
             ModulatorParams::Select(select) => Ports {
                 inlets: &SELECT_IN[..1 + usize::from(select.inputs.clamp(2, 8))],
                 outlets: ports.outlets,
+            },
+            ModulatorParams::Switch(switch) => Ports {
+                inlets: ports.inlets,
+                outlets: &SWITCH_OUT[..usize::from(switch.outputs.clamp(2, 8))],
             },
             ModulatorParams::Math(math) if math.op == ModMathOp::Clamp => Ports {
                 inlets: CLIP_IN,
@@ -1101,6 +1126,23 @@ mod tests {
         assert_eq!(left, [Jack::new(select, 1)]);
     }
 
+    #[test]
+    fn narrowing_a_switch_drops_the_wires_from_outlets_it_no_longer_has() {
+        use crate::modulation::{ModSwitchParams, ModulatorParams};
+        let (mut song, ids) = song_with(&[ModulatorKind::Switch, ModulatorKind::Math, ModulatorKind::Slew]);
+        let (switch, math, slew) = (ids[0], ids[1], ids[2]);
+        song.wires.clear();
+        song.module_mut(switch).unwrap().params = ModulatorParams::Switch(ModSwitchParams { outputs: 3 });
+        let names: Vec<_> = song.module(switch).unwrap().params.ports().outlets.iter().map(|port| port.name).collect();
+        assert_eq!(names, ["a", "b", "c"]);
+        song.connect(Jack::new(switch, 0), Jack::new(math, 0)).unwrap();
+        song.connect(Jack::new(switch, 2), Jack::new(slew, 0)).unwrap();
+        song.module_mut(switch).unwrap().params = ModulatorParams::Switch(ModSwitchParams { outputs: 2 });
+        assert!(song.drop_dead_wires());
+        let left: Vec<_> = song.wires.iter().map(|wire| wire.from).collect();
+        assert_eq!(left, [Jack::new(switch, 0)]);
+    }
+
     /// Every source an inlet tag can read saves and reopens as it was
     /// (song patch step 06), and binding one keeps its wires.
     #[test]
@@ -1174,6 +1216,31 @@ params = { kind = "lfo", rate_hz = "fast" }
             toml::from_str::<SongModulation>(damaged).is_err(),
             "a known kind it cannot read is damage, not a newer box"
         );
+    }
+
+    #[test]
+    fn a_gate_box_saved_before_the_rename_opens_as_held() {
+        use crate::box_text::spell;
+        use crate::modulation::ModulatorParams;
+        let saved = r#"
+next_source_id = 2
+
+[[modules]]
+id = 1
+at = { x = 10, y = 10 }
+params = { kind = "gate" }
+"#;
+        let loaded: SongModulation = toml::from_str(saved).unwrap();
+        let held = loaded.module(ModSourceId(1)).unwrap();
+        assert_eq!(held.params, ModulatorParams::NoteGate);
+        assert_eq!(spell(&held.params, &held.text), "held");
+
+        let (mut song, ids) = song_with(&[ModulatorKind::Lfo]);
+        song.module_mut(ids[0]).unwrap().params = ModulatorParams::Gate;
+        let text = toml::to_string(&song).unwrap();
+        assert!(text.contains(r#"kind = "pass""#), "{text}");
+        let loaded: SongModulation = toml::from_str(&text).unwrap();
+        assert_eq!(loaded.module(ids[0]).unwrap().params, ModulatorParams::Gate);
     }
 
     #[test]

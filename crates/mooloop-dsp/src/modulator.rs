@@ -780,6 +780,11 @@ enum Source {
         values: [f32; mooloop_core::TABLE_MAX_VALUES],
         slot: u8,
     },
+    /// A switch box, by its outlet count; where it sends is read from its
+    /// `which` inlet each tick.
+    Switch(u8),
+    /// A gate box: passes its `in` while its `open` is high.
+    Gate,
     /// A box this build does not know. It puts out nothing.
     Silent,
 }
@@ -791,8 +796,8 @@ enum Source {
 pub struct SpecInlet {
     pub node: u16,
     pub delayed: bool,
-    /// Which of the node's outlets: past 0, a gate box's pitch and
-    /// velocity.
+    /// Which of the node's outlets: past 0, a held box's pitch and
+    /// velocity, or a switch's later outlets.
     pub port: u8,
 }
 
@@ -842,6 +847,8 @@ impl ModuleSpec {
                 values: params.values,
                 slot: 0,
             },
+            ModulatorParams::Switch(params) => Source::Switch(params.outputs),
+            ModulatorParams::Gate => Source::Gate,
             ModulatorParams::Unknown => Source::Silent,
         }
     }
@@ -875,6 +882,9 @@ struct Tag {
     notes: u32,
 }
 
+/// The most outlets a box has: a switch's `a` to `h`.
+const MAX_OUTLETS: usize = mooloop_core::SWITCH_MAX_OUTPUTS as usize;
+
 /// What a node put on its outlet this tick: a value, and the events that
 /// happened. Only a gate tag has events: its channel's NoteOns, NoteOffs
 /// and choke, which is what an Envelope's gate counted before the patch and
@@ -886,8 +896,9 @@ struct Signal {
     value: f32,
     events: NoteGateEvents,
     fire: bool,
-    /// The outlets past the first: a gate box's pitch and velocity.
-    ports: [f32; 2],
+    /// The outlets past the first: a held box's pitch and velocity, a
+    /// switch's `b` to `h`.
+    ports: [f32; MAX_OUTLETS - 1],
 }
 
 impl Signal {
@@ -1202,6 +1213,7 @@ impl ModulatorSet {
                 counter.index %= next.steps.max(2);
             }
             (ModulatorParams::Select(next), Source::Select(inputs)) => *inputs = next.inputs,
+            (ModulatorParams::Switch(next), Source::Switch(outputs)) => *outputs = next.outputs,
             (ModulatorParams::Slew(next), Source::Slew(slew)) => slew.time_seconds = next.time_seconds,
             (ModulatorParams::Num(next), Source::Num(num)) => *num = next,
             // A value drawn anew replaces what a wire wrote there; the rest
@@ -1224,6 +1236,7 @@ impl ModulatorSet {
             )
             | (ModulatorParams::NoteGate, Source::NoteGate { .. })
             | (ModulatorParams::Hold, Source::Hold(_))
+            | (ModulatorParams::Gate, Source::Gate)
             | (ModulatorParams::Unknown, Source::Silent) => {}
             _ => module.source = module.spec.build(),
         }
@@ -1426,9 +1439,12 @@ impl ModulatorSet {
             }
             let module = &mut self.modules[node];
             let gate_slot = module.gate_slot;
-            // What a gate box puts on its gate outlet besides its value, and
-            // on its pitch and velocity outlets.
-            let mut gate_out = None;
+            // What a box puts on its first outlet besides its value: a held
+            // box's notes, or what an open gate passes. Then its other
+            // outlets.
+            let mut events = NoteGateEvents::default();
+            let mut fire = false;
+            let mut ports = [0.0; MAX_OUTLETS - 1];
             let mut fired = [false; MAX_INLETS];
             for port in 0..MAX_INLETS {
                 if let Some(signal) = inlets[port] {
@@ -1548,7 +1564,8 @@ impl ModulatorSet {
                         *pitch = struck_pitch;
                         *velocity = struck_velocity;
                     }
-                    gate_out = Some((tick.events, [*pitch, *velocity]));
+                    events = tick.events;
+                    ports[..2].copy_from_slice(&[*pitch, *velocity]);
                     if *held > 0 { 1.0 } else { 0.0 }
                 }
                 Source::Num(num) => inlets[0].map_or_else(|| num.value(), |signal| num.shape(signal.value)),
@@ -1567,15 +1584,39 @@ impl ModulatorSet {
                     *slot = at as u8;
                     values[at]
                 }
+                Source::Switch(outputs) => {
+                    let last = (*outputs).clamp(2, MAX_OUTLETS as u8) - 1;
+                    let which = inlets[1].map_or(0.0, |signal| signal.value.clamp(0.0, 1.0));
+                    let pick = (which * f32::from(last)).round() as usize;
+                    let value = inlets[0].map_or(0.0, |signal| signal.value);
+                    match pick {
+                        0 => value,
+                        _ => {
+                            ports[pick - 1] = value;
+                            0.0
+                        }
+                    }
+                }
+                Source::Gate => {
+                    // Unwired, `open` is closed.
+                    let open = inlets[1].is_some_and(|signal| signal.value >= TRIGGER_LEVEL);
+                    match inlets[0].filter(|_| open) {
+                        Some(signal) => {
+                            events = signal.events;
+                            fire = signal.fire;
+                            signal.value
+                        }
+                        None => 0.0,
+                    }
+                }
                 Source::Silent => 0.0,
             };
             self.outputs[node] = value;
-            let (events, ports) = gate_out.unwrap_or_default();
             self.signals[node] = Signal {
                 value,
                 events,
+                fire,
                 ports,
-                ..Signal::default()
             };
         }
     }
@@ -1598,6 +1639,8 @@ impl ModulatorSet {
                 | Source::Num(_)
                 | Source::Hold(_)
                 | Source::Table { .. }
+                | Source::Switch(_)
+                | Source::Gate
                 | Source::Silent => {}
             }
         }
@@ -2661,6 +2704,46 @@ mod tests {
             assert_eq!(set.outputs()[2], -0.25, "written");
             set.tick(48_000, 32, 120.0, None, &NO_GATES);
             assert_eq!(set.outputs()[2], -0.25, "and kept");
+        }
+
+        #[test]
+        fn a_switch_sends_its_input_to_the_outlet_which_picks() {
+            // Node 0 is `in`, node 1 `which`, node 2 the switch; nodes 3..6
+            // read its outlets a, b and c.
+            let through = ModulatorParams::Math(ModMathParams {
+                op: ModMathOp::Add,
+                operand: 0.0,
+                ..ModMathParams::default()
+            });
+            for (which, expected) in [(0.0, [0.7, 0.0, 0.0]), (0.5, [0.0, 0.7, 0.0]), (1.0, [0.0, 0.0, 0.7])] {
+                let switch = ModulatorParams::Switch(mooloop_core::ModSwitchParams { outputs: 3 });
+                let mut specs = vec![constant(0.7), constant(which), box_of(switch, &[(0, 0), (1, 1)])];
+                for port in 0..3 {
+                    let mut reader = box_of(through, &[(0, 2)]);
+                    reader.inlets[0].as_mut().unwrap().port = port;
+                    specs.push(reader);
+                }
+                let mut set = set(specs, 0);
+                set.tick(48_000, 32, 120.0, None, &NO_GATES);
+                assert_eq!(set.outputs()[3..], expected, "which {which}");
+            }
+        }
+
+        #[test]
+        fn a_gate_passes_its_input_and_its_notes_only_while_open() {
+            // Node 0 is `open`; node 3 is the gate tag, into the gate's `in`
+            // and on into a counter.
+            let counter = ModulatorParams::Counter(ModCounterParams { steps: 8 });
+            for (open, counted) in [(Some(1.0), 1.0 / 7.0), (Some(0.2), 0.0), (None, 0.0)] {
+                let gate = match open {
+                    Some(_) => box_of(ModulatorParams::Gate, &[(0, 3), (1, 0)]),
+                    None => box_of(ModulatorParams::Gate, &[(0, 3)]),
+                };
+                let mut set = set(vec![constant(open.unwrap_or(0.0)), gate, box_of(counter, &[(0, 1)])], 1);
+                set.tick(48_000, 32, 120.0, None, &note_on());
+                let passed = if counted > 0.0 { 1.0 } else { 0.0 };
+                assert_eq!(set.outputs()[1..], [passed, counted], "open {open:?}");
+            }
         }
 
         #[test]

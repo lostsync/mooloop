@@ -440,6 +440,8 @@ pub fn local_slot_sources(rack: &ModRack) -> Vec<(u8, ModSourceDescriptor)> {
                 | ModulatorParams::Num(_)
                 | ModulatorParams::Hold
                 | ModulatorParams::Table(_)
+                | ModulatorParams::Switch(_)
+                | ModulatorParams::Gate
                 | ModulatorParams::Unknown => ModSourceDescriptor::local_math(id, name),
             };
             Some((slot as u8, descriptor))

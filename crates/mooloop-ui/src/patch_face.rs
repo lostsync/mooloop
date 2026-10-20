@@ -22,7 +22,7 @@ use mooloop_core::{
     MOD_STEP_MAX_STEPS, ModMathOp, ParamCurve, ParamDescriptor, RANDOM_PARAM_BIPOLAR,
     RANDOM_PARAM_DRUNK, RANDOM_PARAM_PROBABILITY, RANDOM_PARAM_QUANTIZE, RANDOM_PARAM_RATE_DIVISION,
     RANDOM_PARAM_RATE_HZ, RANDOM_PARAM_TEMPO_SYNC, RANDOM_PARAM_TRIGGER, RANDOM_PARAM_WALK,
-    SELECT_PARAM_INPUTS, SLEW_PARAM_TIME_S, STEP_PARAM_DIVISION, STEP_PARAM_GLIDE,
+    SELECT_PARAM_INPUTS, SWITCH_PARAM_OUTPUTS, SLEW_PARAM_TIME_S, STEP_PARAM_DIVISION, STEP_PARAM_GLIDE,
     STEP_PARAM_LENGTH, STEP_PARAM_TRIGGER, STEP_PARAM_UNIPOLAR, STEP_PARAM_VALUE_BASE,
     TABLE_PARAM_LENGTH, TABLE_PARAM_VALUE_BASE,
 };
@@ -106,6 +106,7 @@ pub(crate) fn face_params(params: &ModulatorParams) -> Vec<u32> {
         ModulatorParams::Math(_) => vec![MATH_PARAM_OPERAND],
         ModulatorParams::Counter(_) => vec![COUNTER_PARAM_STEPS],
         ModulatorParams::Select(_) => vec![SELECT_PARAM_INPUTS],
+        ModulatorParams::Switch(_) => vec![SWITCH_PARAM_OUTPUTS],
         ModulatorParams::Slew(_) => vec![SLEW_PARAM_TIME_S],
         // The note boxes' arguments, as stepped knobs that read as typed
         // (song patch step 08).
@@ -115,7 +116,9 @@ pub(crate) fn face_params(params: &ModulatorParams) -> Vec<u32> {
         ModulatorParams::Transpose(_) => vec![TRANSPOSE_PARAM_SEMITONES],
         ModulatorParams::Chance(_) => vec![CHANCE_PARAM_PROBABILITY],
         ModulatorParams::Num(_) => vec![NUM_PARAM_POSITION, NUM_PARAM_FORMAT],
-        ModulatorParams::NoteGate | ModulatorParams::Hold | ModulatorParams::Unknown => Vec::new(),
+        ModulatorParams::NoteGate | ModulatorParams::Hold | ModulatorParams::Gate | ModulatorParams::Unknown => {
+            Vec::new()
+        }
     }
 }
 

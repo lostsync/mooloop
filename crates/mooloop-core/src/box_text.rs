@@ -14,9 +14,9 @@
 use crate::harmony::{ChordQuality, Mode, MAX_CHORD_NOTES, PITCH_NAMES};
 use crate::modulation::{
     ModChanceParams, ModChordParams, ModModalParams, ModScaleParams, ModTransposeParams,
-    TRANSPOSE_MAX_SEMITONES, ModCounterParams, ModLfoParams, ModLfoWaveform, ModMathOp, ModMathParams, ModSelectParams,
+    TRANSPOSE_MAX_SEMITONES, ModCounterParams, ModLfoParams, ModLfoWaveform, ModMathOp, ModMathParams, ModSelectParams, ModSwitchParams,
     ModNumParams, ModSlewParams, ModStepParams, ModTimeDivision, ModulatorKind, ModulatorParams,
-    ModTableParams, NumFormat, COUNTER_MAX_STEPS, TABLE_MAX_VALUES, MOD_STEP_MAX_STEPS, NUM_LIMIT, SELECT_MAX_INPUTS,
+    ModTableParams, NumFormat, COUNTER_MAX_STEPS, TABLE_MAX_VALUES, MOD_STEP_MAX_STEPS, NUM_LIMIT, SELECT_MAX_INPUTS, SWITCH_MAX_OUTPUTS,
 };
 
 /// One name a box can be typed as, and the line the completion list shows
@@ -33,13 +33,15 @@ const fn word(name: &'static str, says: &'static str) -> Word {
 
 /// The boxes, the control boxes then the note boxes, as the completion
 /// list offers them.
-pub const VOCABULARY: [Word; 23] = [
+pub const VOCABULARY: [Word; 25] = [
     word("lfo", "Periodic movement. lfo tri 1/4"),
     word("env", "Attack, decay, sustain, release from a gate."),
     word("step", "A row of values, one per advance. step 8 uni"),
     word("random", "A new value on each trigger."),
     word("counter", "Counts advances and wraps at n. counter 4"),
     word("select", "Passes one of n inputs, picked by index. select 4"),
+    word("switch", "Sends its input to one of n outlets, picked by which. switch 3"),
+    word("gate", "Passes its input while open is high."),
     word("slew", "Smooths jumps over time. slew 0.2"),
     word("num", "Shows a value, or sends one. num int 0 16"),
     word("hold", "Keeps its input from the last trigger."),
@@ -56,7 +58,7 @@ pub const VOCABULARY: [Word; 23] = [
     word("scale", "Snaps each note into a mode. scale c minor"),
     word("transpose", "Moves notes by semitones. transpose -12"),
     word("chance", "Lets each note through with a probability. chance 0.7"),
-    word("gate", "Notes to a gate, pitch and velocity."),
+    word("held", "Notes to a gate, pitch and velocity."),
 ];
 
 /// How an inversion is spelled after a chord's type: none for root
@@ -251,7 +253,9 @@ pub fn spell(params: &ModulatorParams, text: &str) -> String {
         ),
         ModulatorParams::Transpose(transpose) => format!("transpose {}", transpose.semitones),
         ModulatorParams::Chance(chance) => format!("chance {}", format_number(chance.probability)),
-        ModulatorParams::NoteGate => "gate".into(),
+        ModulatorParams::NoteGate => "held".into(),
+        ModulatorParams::Switch(switch) => format!("switch {}", switch.outputs),
+        ModulatorParams::Gate => "gate".into(),
         ModulatorParams::Num(num) => {
             let mut spelled = String::from("num");
             if let Some(format) = NUM_FORMATS.iter().find(|(_, held)| *held == num.format) {
@@ -468,7 +472,13 @@ pub fn parse(text: &str) -> Option<ModulatorParams> {
                 probability: clamp_by(ModulatorKind::Chance, crate::CHANCE_PARAM_PROBABILITY, probability),
             }))
         }
-        "gate" => at_most(0).map(|()| ModulatorParams::NoteGate),
+        "held" => at_most(0).map(|()| ModulatorParams::NoteGate),
+        "switch" => {
+            at_most(1)?;
+            let outputs = count(args.first().copied(), 2, 2, SWITCH_MAX_OUTPUTS)?;
+            Some(ModulatorParams::Switch(ModSwitchParams { outputs }))
+        }
+        "gate" => at_most(0).map(|()| ModulatorParams::Gate),
         "num" => num(&args),
         "hold" => at_most(0).map(|()| ModulatorParams::Hold),
         "clip" => {
@@ -592,8 +602,20 @@ mod tests {
         assert_eq!(round_trip("transpose 100"), "transpose 48", "held to four octaves");
         assert_eq!(round_trip("chance .7"), "chance 0.7");
         assert_eq!(round_trip("chance 2"), "chance 1");
+        assert_eq!(round_trip("held"), "held");
+        for typed in ["chord min9", "chord /4th", "modal h", "scale c minor 7", "held 1"] {
+            assert_eq!(parse(typed), None, "{typed:?}");
+        }
+    }
+
+    #[test]
+    fn switch_and_gate_spell_as_typed() {
+        assert_eq!(round_trip("switch"), "switch 2");
+        assert_eq!(round_trip("switch 3"), "switch 3");
+        assert_eq!(round_trip("switch 20"), "switch 8");
         assert_eq!(round_trip("gate"), "gate");
-        for typed in ["chord min9", "chord /4th", "modal h", "scale c minor 7", "gate 1"] {
+        assert_eq!(parse("gate"), Some(ModulatorParams::Gate), "gate is the control gate now");
+        for typed in ["gate 1", "switch 3 3"] {
             assert_eq!(parse(typed), None, "{typed:?}");
         }
     }
@@ -612,7 +634,7 @@ mod tests {
             assert!(parse(word.name).is_some(), "{}", word.name);
         }
         let offered: Vec<_> = completions("s").map(|word| word.name).collect();
-        assert_eq!(offered, ["step", "select", "slew", "scale"]);
+        assert_eq!(offered, ["step", "select", "switch", "slew", "scale"]);
         let offered: Vec<_> = completions("m").map(|word| word.name).collect();
         assert_eq!(offered, ["min", "max", "modal"]);
         assert_eq!(completions("").count(), VOCABULARY.len());
