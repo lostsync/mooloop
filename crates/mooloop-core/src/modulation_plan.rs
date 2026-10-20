@@ -123,6 +123,15 @@ pub enum NoteFeed {
     Box { at: u16, port: u8 },
 }
 
+/// A notes-in tag at the start of a note path, by its index among the
+/// tags, with its channel and seat.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NoteRoot {
+    pub tag: u16,
+    pub channel: ChannelId,
+    pub seat: u8,
+}
+
 /// A note box the note pass runs (song patch step 08): a box reached from
 /// a channel's notes-in tag along note wires. A merge has several note
 /// inlets and an unpack or a note switch several note outlets, so the boxes
@@ -138,10 +147,9 @@ pub struct CompiledNoteBox {
     pub inputs: [Option<NoteFeed>; MAX_NOTE_INLETS],
     /// The notes-in tag its first input comes from in the end, by its index
     /// among the tags, with that tag's channel and seat: where a link from
-    /// it says its notes start.
-    pub root_tag: u16,
-    pub root_channel: ChannelId,
-    pub root_seat: u8,
+    /// it says its notes start. `None` where they start at a box that makes
+    /// notes, a `note` (song patch boxes step 06).
+    pub root: Option<NoteRoot>,
     /// This box and everything feeding it, hashed: the same path across a
     /// change of set is the same box, so it keeps the notes it is holding.
     pub path: u64,
@@ -354,9 +362,17 @@ impl CompiledModulation {
                 Some((tag.id, at, channel, seat, path_step(0, tag.id, channel.0)))
             })
             .collect();
-        // Every box the notes reach, walked from the roots.
-        let mut reached: Vec<u16> = Vec::new();
-        let mut frontier: Vec<ModSourceId> = roots.iter().map(|root| root.0).collect();
+        // Every box the notes reach, walked from the roots: the notes-in
+        // tags and the boxes that make notes.
+        let makes_notes = |module: &&CompiledModule| module.params.kind() == crate::ModulatorKind::Note;
+        let mut reached: Vec<u16> = (0..modules.len() as u16)
+            .filter(|&at| makes_notes(&&modules[usize::from(at)]))
+            .collect();
+        let mut frontier: Vec<ModSourceId> = roots
+            .iter()
+            .map(|root| root.0)
+            .chain(modules.iter().filter(makes_notes).map(|module| module.id))
+            .collect();
         while let Some(node) = frontier.pop() {
             for wire in song.wires.iter().filter(|wire| wire.from.node == node).filter(note_wire) {
                 let Some(module) = position_of(wire.to.node) else { continue };
@@ -399,7 +415,7 @@ impl CompiledModulation {
                 let (feed, from_path, from_root) = if let Some(&(_, tag, channel, seat, tag_path)) =
                     roots.iter().find(|root| root.0 == wire.from.node)
                 {
-                    (NoteFeed::Tag { tag, seat }, tag_path, (tag, channel, seat))
+                    (NoteFeed::Tag { tag, seat }, tag_path, Some(NoteRoot { tag, channel, seat }))
                 } else if let Some(from) = placed(wire.from.node) {
                     let from_box = note_boxes[from];
                     (
@@ -408,7 +424,7 @@ impl CompiledModulation {
                             port: wire.from.port,
                         },
                         from_box.path,
-                        (from_box.root_tag, from_box.root_channel, from_box.root_seat),
+                        from_box.root,
                     )
                 } else {
                     continue;
@@ -419,19 +435,25 @@ impl CompiledModulation {
                     root = Some((port, from_root));
                 }
             }
-            let Some((_, (root_tag, root_channel, root_seat))) = root else {
-                // Fed by nothing the notes reach after all: it is placed so
-                // the boxes after it are, and reads nothing.
-                reached.retain(|&held| held != module);
-                continue;
+            let makes = makes_notes(&&modules[usize::from(module)]);
+            if makes {
+                path = path_step(0, id, 0);
+            }
+            let root = match root {
+                Some((_, root)) => root,
+                None if makes => None,
+                None => {
+                    // Fed by nothing the notes reach after all: it is placed
+                    // so the boxes after it are, and reads nothing.
+                    reached.retain(|&held| held != module);
+                    continue;
+                }
             };
             note_boxes.push(CompiledNoteBox {
                 id,
                 module,
                 inputs,
-                root_tag,
-                root_channel,
-                root_seat,
+                root,
                 path,
             });
         }
@@ -454,14 +476,16 @@ impl CompiledModulation {
                         0 => from_box.path,
                         port => path_step(from_box.path, from_box.id, u32::from(port)),
                     };
-                    (
-                        song.tags[usize::from(from_box.root_tag)].id,
-                        from_box.root_tag,
-                        from_box.root_channel,
-                        from_box.root_seat,
-                        Some((at as u16, wire.from.port)),
-                        path,
-                    )
+                    // Notes a box made start where they end.
+                    let (from, root) = match from_box.root {
+                        Some(root) => (song.tags[usize::from(root.tag)].id, root),
+                        None => (from_box.id, NoteRoot {
+                            tag: to_tag,
+                            channel: to_channel,
+                            seat: to_seat,
+                        }),
+                    };
+                    (from, root.tag, root.channel, root.seat, Some((at as u16, wire.from.port)), path)
                 } else {
                     continue;
                 };

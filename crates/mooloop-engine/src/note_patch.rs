@@ -772,6 +772,11 @@ impl NotePass {
             if matches!(params, ModulatorParams::Gate(_)) && control < OPEN_LEVEL {
                 self.end_all(at, 0);
             }
+            if matches!(params, ModulatorParams::Note) {
+                self.run_note(at, start, inputs, let_go);
+                self.flow_at[at] = (start, self.flow.len() as u32);
+                continue;
+            }
             if let ModulatorParams::Wait(wait) = params {
                 self.run_wait(at, start, wait, inputs.clock, let_go);
                 self.flow_at[at] = (start, self.flow.len() as u32);
@@ -861,6 +866,22 @@ impl NotePass {
     fn end_all(&mut self, at: usize, offset: u32) {
         while let Some(held) = self.box_tables[at].held[..self.box_tables[at].held_len].last().copied() {
             self.end(at, offset, held.inlet, held.input);
+        }
+    }
+
+    /// Note box `at` plays what its trigger struck last block, at the
+    /// offset of each tick, each strike ending the note before it.
+    fn run_note(&mut self, at: usize, start: u32, inputs: BoxInputs, let_go: bool) {
+        if let_go {
+            self.end_all(at, 0);
+        }
+        let last = inputs.clock.frames.max(1) - 1;
+        for strike in inputs.set.note_strikes(usize::from(self.boxes[at].module)) {
+            let offset = (usize::from(strike.tick) * CONTROL_RATE_FRAMES).min(last) as u32;
+            self.end_all(at, offset);
+            if strike.on {
+                self.play(at, start, offset, 0, 0, 0, Pitches::one(i16::from(strike.note)), strike.velocity);
+            }
         }
     }
 

@@ -739,7 +739,7 @@ before any of them existed still loads:
     chord, modal, scale and held `notes`; num `in`; hold `in`, `trigger`;
     table `index`, `value`, `write`; switch `in`, `which`; gate `in`,
     `open`; pick and unpack `notes`; merge `a` to `h`, as many as it has;
-    wait `notes`, `in`.
+    wait `notes`, `in`; note `pitch`, `velocity`, `trigger`.
     Every box has one outlet, `out`, except a counter's `index`, a note
     box's `notes`, a held box's `gate`, `pitch` and `velocity`, and a
     switch's and an unpack's `a` to `h`, as many as it has, and a wait's

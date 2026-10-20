@@ -793,8 +793,31 @@ enum Source {
         ring: u16,
         ticks: u32,
     },
+    /// A note box: the notes its trigger struck this block, for the note
+    /// pass to play in the next, the tick it is on, and whether what it
+    /// struck last still sounds.
+    Note {
+        strikes: [NoteStrike; NOTE_STRIKES],
+        len: u8,
+        tick: u8,
+        sounding: bool,
+    },
     /// A box this build does not know. It puts out nothing.
     Silent,
+}
+
+/// The most strikes a note box keeps in a block; past them a NoteOn is
+/// dropped, and a release takes the last place.
+const NOTE_STRIKES: usize = 16;
+
+/// What a note box's trigger did in one control tick of a block: struck
+/// `note` at `velocity`, or let go of what it struck.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NoteStrike {
+    pub tick: u8,
+    pub on: bool,
+    pub note: u8,
+    pub velocity: u8,
 }
 
 /// One wire into an inlet, as the set reads it: the node it comes from (a
@@ -870,6 +893,12 @@ impl ModuleSpec {
                 ring: u16::MAX,
                 ticks: 0,
             },
+            ModulatorParams::Note => Source::Note {
+                strikes: [NoteStrike::default(); NOTE_STRIKES],
+                len: 0,
+                tick: 0,
+                sounding: false,
+            },
             ModulatorParams::Unknown => Source::Silent,
         }
     }
@@ -921,6 +950,9 @@ struct Signal {
     value: f32,
     events: NoteGateEvents,
     fire: bool,
+    /// A transport tag's: a trigger inlet takes its `fire`, not its ramp
+    /// rising through 0.5.
+    clocked: bool,
     /// The outlets past the first: a held box's pitch and velocity, a
     /// switch's `b` to `h`.
     ports: [f32; MAX_OUTLETS - 1],
@@ -1020,6 +1052,7 @@ impl Tag {
                     TagSource::PatternPosition => transport.pattern_position,
                     _ => transport.pattern,
                 };
+                signal.clocked = true;
                 match reading.filter(|_| transport.playing) {
                     // Stopped, or no pattern playing here: hold, and the
                     // next reading after it is a start.
@@ -1179,6 +1212,26 @@ impl ModulatorSet {
         }
     }
 
+    /// Start a block: each note box's strikes so far were the last
+    /// block's, which the note pass has played.
+    pub fn begin_block(&mut self) {
+        for module in &mut self.modules {
+            if let Source::Note { len, tick, .. } = &mut module.source {
+                *len = 0;
+                *tick = 0;
+            }
+        }
+    }
+
+    /// What note box `at`'s trigger struck in the last block, in tick
+    /// order; nothing for every other box.
+    pub fn note_strikes(&self, at: usize) -> &[NoteStrike] {
+        match self.modules.get(at).map(|module| &module.source) {
+            Some(Source::Note { strikes, len, .. }) => &strikes[..usize::from(*len)],
+            _ => &[],
+        }
+    }
+
     pub fn len(&self) -> usize {
         self.modules.len()
     }
@@ -1279,6 +1332,7 @@ impl ModulatorSet {
             | (ModulatorParams::Gate(ModGateParams { notes: false }), Source::Gate)
             | (ModulatorParams::Switch(ModSwitchParams { notes: true, .. }), Source::Notes(_))
             | (ModulatorParams::Gate(ModGateParams { notes: true }), Source::Notes(_))
+            | (ModulatorParams::Note, Source::Note { .. })
             | (ModulatorParams::Unknown, Source::Silent) => {}
             _ => module.source = module.spec.build(),
         }
@@ -1498,13 +1552,14 @@ impl ModulatorSet {
             // outlets.
             let mut events = NoteGateEvents::default();
             let mut fire = false;
+            let mut clocked = false;
             let mut ports = [0.0; MAX_OUTLETS - 1];
             let mut fired = [false; MAX_INLETS];
             for port in 0..MAX_INLETS {
                 if let Some(signal) = inlets[port] {
                     fired[port] = signal.events.note_ons > 0
                         || signal.fire
-                        || (module.last[port] < TRIGGER_LEVEL && signal.value >= TRIGGER_LEVEL);
+                        || (!signal.clocked && module.last[port] < TRIGGER_LEVEL && signal.value >= TRIGGER_LEVEL);
                     module.last[port] = signal.value;
                 }
             }
@@ -1658,6 +1713,7 @@ impl ModulatorSet {
                         Some(signal) => {
                             events = signal.events;
                             fire = signal.fire;
+                            clocked = signal.clocked;
                             signal.value
                         }
                         None => 0.0,
@@ -1700,6 +1756,51 @@ impl ModulatorSet {
                     ports[0] = value;
                     value
                 }
+                Source::Note {
+                    strikes,
+                    len,
+                    tick,
+                    sounding,
+                } => {
+                    let at = *tick;
+                    *tick = tick.saturating_add(1);
+                    // Unwired, middle C at velocity 100.
+                    let level = |inlet: Option<Signal>, unwired: u8| {
+                        inlet.map_or(unwired, |signal| (signal.value.clamp(0.0, 1.0) * 127.0).round() as u8)
+                    };
+                    let mut strike = |strike: NoteStrike| {
+                        if usize::from(*len) < NOTE_STRIKES {
+                            strikes[usize::from(*len)] = strike;
+                            *len += 1;
+                        } else if !strike.on {
+                            strikes[NOTE_STRIKES - 1] = strike;
+                        }
+                    };
+                    // A level trigger falling lets go; a clocked one only
+                    // strikes again.
+                    let fell = match inlets[2] {
+                        None => true,
+                        Some(signal) => !signal.clocked && signal.value < TRIGGER_LEVEL,
+                    };
+                    if *sounding && fell {
+                        *sounding = false;
+                        strike(NoteStrike {
+                            tick: at,
+                            on: false,
+                            ..NoteStrike::default()
+                        });
+                    }
+                    if fired[2] {
+                        *sounding = true;
+                        strike(NoteStrike {
+                            tick: at,
+                            on: true,
+                            note: level(inlets[0], 60),
+                            velocity: level(inlets[1], 100).max(1),
+                        });
+                    }
+                    0.0
+                }
                 Source::Silent => 0.0,
             };
             self.outputs[node] = value;
@@ -1707,6 +1808,7 @@ impl ModulatorSet {
                 value,
                 events,
                 fire,
+                clocked,
                 ports,
             };
         }
@@ -1733,6 +1835,7 @@ impl ModulatorSet {
                 | Source::Switch(_)
                 | Source::Gate
                 | Source::Wait { .. }
+                | Source::Note { .. }
                 | Source::Silent => {}
             }
         }
@@ -2750,6 +2853,62 @@ mod tests {
             );
             set.tick(48_000, 32, 120.0, None, &NO_GATES);
             assert_eq!(&set.outputs()[1..], [0.25, 0.5, 1.0]);
+        }
+
+        /// A note box strikes its pitch as its trigger rises and lets go as
+        /// it falls, each at its tick in the block; the next block starts
+        /// a fresh list.
+        #[test]
+        fn a_note_box_strikes_its_pitch_on_each_trigger_and_lets_go_as_it_falls() {
+            use super::super::NoteStrike;
+            // Node 2 is the gate tag: high while its note is held.
+            let mut set = set(
+                vec![constant(64.0 / 127.0), box_of(ModulatorParams::Note, &[(0, 0), (2, 2)])],
+                1,
+            );
+            set.begin_block();
+            set.tick(48_000, 32, 120.0, None, &NO_GATES);
+            set.tick(48_000, 32, 120.0, None, &note_on());
+            set.tick(48_000, 32, 120.0, None, &NO_GATES);
+            set.tick(48_000, 32, 120.0, None, &note_off());
+            let on = NoteStrike {
+                tick: 1,
+                on: true,
+                note: 64,
+                velocity: 100,
+            };
+            let off = NoteStrike {
+                tick: 3,
+                on: false,
+                ..NoteStrike::default()
+            };
+            assert_eq!(set.note_strikes(1), [on, off]);
+            set.begin_block();
+            assert!(set.note_strikes(1).is_empty());
+            set.tick(48_000, 32, 120.0, None, &note_on());
+            assert_eq!(set.note_strikes(1), [NoteStrike { tick: 0, ..on }]);
+        }
+
+        /// A Beat tag into a trigger fires as each beat starts, not again
+        /// as its ramp passes halfway.
+        #[test]
+        fn a_beat_tag_triggers_once_a_beat() {
+            use super::super::{SongInputs, TransportTick};
+            let counter = ModulatorParams::Counter(ModCounterParams { steps: 8 });
+            let mut set = ModulatorSet::new(
+                vec![box_of(counter, &[(0, 1)])],
+                [Some(mooloop_core::TagSource::Beat)],
+                vec![1, 0],
+            );
+            for beat in [0.1, 0.3, 0.6, 0.9, 0.1, 0.6] {
+                let transport = TransportTick {
+                    playing: true,
+                    beat,
+                    ..TransportTick::default()
+                };
+                set.tick_with(48_000, 32, 120.0, Some(0.0), &SongInputs::quiet(&NO_GATES, transport));
+            }
+            assert_eq!(set.outputs()[0], 2.0 / 7.0, "the start and one new beat");
         }
 
         #[test]

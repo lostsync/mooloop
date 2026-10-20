@@ -124,6 +124,8 @@ const NOTE_OUT: &[Port] = &[note("out")];
 /// A wait's two lanes: notes, and a control signal.
 const WAIT_IN: &[Port] = &[note("notes"), control("in")];
 const WAIT_OUT: &[Port] = &[note("notes"), control("out")];
+/// A note box: what to play, how hard, and when.
+const NOTE_MAKER_IN: &[Port] = &[control("pitch"), control("velocity"), control("trigger")];
 /// An unpack's outlets, a note switch's, and a merge's inlets; each has the
 /// first as many as it is set to.
 const NOTE_LETTERS: &[Port] = &[
@@ -228,6 +230,10 @@ impl ModulatorKind {
                 inlets: WAIT_IN,
                 outlets: WAIT_OUT,
             },
+            Self::Note => Ports {
+                inlets: NOTE_MAKER_IN,
+                outlets: NOTES,
+            },
             Self::Unknown => Ports {
                 inlets: &[],
                 outlets: &[],
@@ -237,10 +243,12 @@ impl ModulatorKind {
 
     /// The inlet a module's single input arrives on, which is what
     /// [`InputSource`] stood for: the LFO's `retrigger`, the Envelope's
-    /// `gate`, the Step's `advance`, the Random's `trigger` and Math's `in`.
+    /// `gate`, the Step's `advance`, the Random's `trigger`, Math's `in` and a
+    /// note's `trigger`.
     pub const fn input_port(self) -> u8 {
         match self {
             Self::Lfo => 1,
+            Self::Note => 2,
             _ => 0,
         }
     }
@@ -1010,7 +1018,13 @@ mod tests {
         for kind in ModulatorKind::ALL {
             let port = kind.ports().inlet(kind.input_port());
             assert!(port.is_some(), "{kind:?}'s input port is not one of its inlets");
-            let sort = if kind.is_note_box() { JackSort::Note } else { JackSort::Control };
+            // A note box makes its notes from control: its input is its
+            // trigger.
+            let sort = if kind.is_note_box() && kind != ModulatorKind::Note {
+                JackSort::Note
+            } else {
+                JackSort::Control
+            };
             assert_eq!(port.unwrap().sort, sort, "{kind:?}");
         }
     }

@@ -162,7 +162,7 @@ parameter (`routes`). A channel holds none. Boxes and tags are named by a
 `ModSourceId` from one mint, so a wire names either the same way.
 
 **A box** is typed as text and spelled back from its settings
-(`mooloop_core::box_text`: `parse`, `spell`, and `VOCABULARY`, the twenty-nine
+(`mooloop_core::box_text`: `parse`, `spell`, and `VOCABULARY`, the thirty
 names in the order the completion list offers them). A box keeps its
 settings as parameters (`ModulatorParams`), never as text, so `*   -.5`
 typed reads `* -0.5`, and a knob turned on its face changes what the box
@@ -170,7 +170,8 @@ says. The control boxes are `lfo`, `env`, `step`, `random`, `counter`,
 `select`, `switch`, `gate`, `slew`, `num`, `hold` and `table`, and the arithmetic boxes `+ - * / min max clip` (one
 kind, Math, with an operator). The note boxes are `chord`, `modal`,
 `scale`, `transpose`, `chance`, `held`, `pick`, `unpack` and `merge`
-(and a `switch` or a `gate` on notes), and `wait` has a lane of each; their pitch, chord and mode tables
+(and a `switch` or a `gate` on notes), `note` makes notes from control,
+and `wait` has a lane of each; their pitch, chord and mode tables
 are `crates/mooloop-core/src/harmony.rs`. A name the vocabulary lacks makes
 an **unknown** box that keeps its text and does nothing; a song from a later
 build with a kind this one does not know opens with that box unknown.
@@ -338,6 +339,13 @@ reach it.
   a seek, a loop fold, a panic and a Choke into it drop what it holds back
   and release what it played. The control lane keeps 2048 readings across
   its longest wait, so past the shortest waits it reads between them.
+- **`note`** plays its `pitch` (as a `held` box sends it, `0..1` for notes
+  0 to 127; middle C unwired) at its `velocity` (100 unwired) each time its
+  `trigger` fires, and lets go when the next one fires or when a level
+  trigger falls back below 0.5. It reads its inlets each control tick and
+  plays what they struck a block later, at the tick each struck. Stopping, a
+  seek, a loop fold and a panic release what it plays. With `unpack`,
+  `held`, a `counter` and a `select` it builds an arp from parts.
 - The boxes make a graph with no loops, compiled so each box runs after
   every box feeding it (`CompiledNoteBox::inputs`, `NoteFeed`); a box keeps
   its notes across an edit while it and everything feeding it are the same
