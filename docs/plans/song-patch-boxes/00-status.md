@@ -95,3 +95,18 @@ ring per wait). Where it differs from the step file:
   seconds fits at any sample rate, and read between readings.
 - The delay is taken at the tempo when each note arrives.
 
+**06 (MOO-538).** `note` (`ModulatorParams::Note`): the set logs each tick
+its trigger struck or let go in a block (`ModulatorSet::note_strikes`, up to
+16; `begin_block` empties them), and the note pass plays them in the next
+block at their ticks' offsets. A note box is a root of the note graph with
+no notes-in tag (`CompiledNoteBox::root` is `None`). Where it differs from
+the step file:
+
+- **A transport tag into a trigger fires once a beat.** Its ramp rising
+  through 0.5 fired a trigger a second time mid-beat (a counter on Beat
+  counted twice a beat); a transport tag's signal is now `clocked`, and a
+  trigger takes only its `fire`.
+- **A clocked trigger never falls**, so its note lasts until the next one;
+  a level trigger (a `held` box's gate) ends the note as it falls.
+- Unwired, pitch is middle C and velocity 100.
+

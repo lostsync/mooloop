@@ -805,3 +805,50 @@ fn nothing_hangs_when_the_transport_moves_mid_wait() {
         }
     }
 }
+
+/// The step's patch: an arp built from parts. A held chord unpacked into
+/// four held boxes, a counter on the Beat tag picking one pitch of the four,
+/// and a note box playing it on each beat, a block late, each note ending
+/// as the next starts.
+#[test]
+fn an_arp_from_parts_plays_a_chord_one_note_a_beat() {
+    let project = chords_on(&[(0, 16)], |project, chord| {
+        if let Some(module) = project.modulation.modules.iter_mut().find(|module| module.id == chord) {
+            module.params = mooloop_core::box_text::parse("chord maj7").unwrap();
+        }
+        let beat = project.modulation.add_tag(
+            TagKind::Inlet {
+                bind: Some(mooloop_core::InletSource::Beat),
+            },
+            CanvasPoint::default(),
+        );
+        let unpack = add(project, ModulatorParams::Unpack(mooloop_core::ModUnpackParams { outputs: 4 }));
+        let counter = add(project, ModulatorParams::Counter(mooloop_core::ModCounterParams { steps: 4 }));
+        let select = add(project, ModulatorParams::Select(mooloop_core::ModSelectParams { inputs: 4 }));
+        let note = add(project, ModulatorParams::Note);
+        wire(project, (chord, 0), (unpack, 0));
+        wire(project, (beat, 0), (counter, 0));
+        wire(project, (counter, 0), (select, 0));
+        for at in 0..4 {
+            let held = add(project, ModulatorParams::NoteGate);
+            wire(project, (unpack, at), (held, 0));
+            wire(project, (held, 1), (select, at + 1));
+        }
+        wire(project, (select, 0), (note, 0));
+        wire(project, (beat, 0), (note, 2));
+        (note, 0)
+    });
+    let (heard, sounding) = heard_over(&project, BAR_BLOCKS, false);
+    let beat = SAMPLE_RATE as usize / 2;
+    let on: Vec<(usize, u8)> = heard.iter().filter(|event| event.1).map(|event| (event.0, event.2)).collect();
+    // The counter's first count is the play's start: E, G, B, then C.
+    assert_eq!(on.iter().map(|&(_, note)| note).collect::<Vec<_>>(), [64, 67, 71, 60]);
+    for (at, &(frame, _)) in on.iter().enumerate() {
+        let late = frame - at * beat;
+        assert!((BLOCK..BLOCK + 32).contains(&late), "note {at} at {frame}");
+    }
+    // Each ends as the next starts; the last still sounds.
+    let off: Vec<usize> = heard.iter().filter(|event| !event.1).map(|event| event.0).collect();
+    assert_eq!(off, on[1..].iter().map(|&(frame, _)| frame).collect::<Vec<_>>());
+    assert_eq!(sounding.0.len(), 1);
+}

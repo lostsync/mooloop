@@ -231,6 +231,7 @@ impl SongModulator {
         sources: Option<ChannelInputs>,
     ) -> usize {
         let modules = self.set.len();
+        self.set.begin_block();
         let mut tick = 0;
         for offset in (0..frames).step_by(CONTROL_RATE_FRAMES) {
             if tick >= MAX_CONTROL_TICKS_PER_BLOCK {

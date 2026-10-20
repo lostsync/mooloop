@@ -123,7 +123,11 @@ pub(crate) fn face_params(params: &ModulatorParams) -> Vec<u32> {
         ModulatorParams::Transpose(_) => vec![TRANSPOSE_PARAM_SEMITONES],
         ModulatorParams::Chance(_) => vec![CHANCE_PARAM_PROBABILITY],
         ModulatorParams::Num(_) => vec![NUM_PARAM_POSITION, NUM_PARAM_FORMAT],
-        ModulatorParams::NoteGate | ModulatorParams::Hold | ModulatorParams::Gate(_) | ModulatorParams::Unknown => {
+        ModulatorParams::NoteGate
+        | ModulatorParams::Hold
+        | ModulatorParams::Gate(_)
+        | ModulatorParams::Note
+        | ModulatorParams::Unknown => {
             Vec::new()
         }
     }

@@ -2028,6 +2028,8 @@ pub enum ModulatorParams {
     Merge(ModMergeParams),
     /// Notes and a control signal in, the same out later.
     Wait(ModWaitParams),
+    /// Control in, notes out: plays its `pitch` on each `trigger`.
+    Note,
     /// A box whose name this build does not know: typed, or saved by a
     /// later build. It keeps its text ([`SongModule::text`]), has no jacks,
     /// and puts out nothing.
@@ -2060,6 +2062,7 @@ impl ModulatorParams {
             Self::Unpack(_) => ModulatorKind::Unpack,
             Self::Merge(_) => ModulatorKind::Merge,
             Self::Wait(_) => ModulatorKind::Wait,
+            Self::Note => ModulatorKind::Note,
             Self::Unknown => ModulatorKind::Unknown,
         }
     }
@@ -2194,7 +2197,7 @@ impl ModulatorParams {
                 TABLE_PARAM_LENGTH => Some(f32::from(p.length)),
                 _ => Some(p.values[table_value_index(id)?]),
             },
-            Self::NoteGate | Self::Hold | Self::Gate(_) | Self::Unknown => None,
+            Self::NoteGate | Self::Hold | Self::Gate(_) | Self::Note | Self::Unknown => None,
         }
     }
 
@@ -2362,7 +2365,7 @@ impl ModulatorParams {
                     }
                 }
             },
-            Self::NoteGate | Self::Hold | Self::Gate(_) | Self::Unknown => {}
+            Self::NoteGate | Self::Hold | Self::Gate(_) | Self::Note | Self::Unknown => {}
         }
     }
 
@@ -2415,6 +2418,7 @@ pub enum ModulatorKind {
     Unpack,
     Merge,
     Wait,
+    Note,
     /// A box this build has no name for; never in [`Self::ALL`].
     Unknown,
 }
@@ -2423,7 +2427,7 @@ impl ModulatorKind {
     /// Every kind a box can be made as, in the order the shelf's kind
     /// tokens number them: new kinds are appended, so a token keeps naming
     /// the kind it did.
-    pub const ALL: [ModulatorKind; 23] = [
+    pub const ALL: [ModulatorKind; 24] = [
         ModulatorKind::Lfo,
         ModulatorKind::Envelope,
         ModulatorKind::Step,
@@ -2447,6 +2451,7 @@ impl ModulatorKind {
         ModulatorKind::Unpack,
         ModulatorKind::Merge,
         ModulatorKind::Wait,
+        ModulatorKind::Note,
     ];
 
     /// Whether the kind works on notes: the engine's note pass runs it,
@@ -2465,6 +2470,7 @@ impl ModulatorKind {
                 | Self::Unpack
                 | Self::Merge
                 | Self::Wait
+                | Self::Note
         )
     }
 
@@ -2493,6 +2499,7 @@ impl ModulatorKind {
             Self::Unpack => "Unpack",
             Self::Merge => "Merge",
             Self::Wait => "Wait",
+            Self::Note => "Note",
             Self::Unknown => "Unknown",
         }
     }
@@ -2524,6 +2531,7 @@ impl ModulatorKind {
             Self::Unpack => "UNPK",
             Self::Merge => "MRG",
             Self::Wait => "WAIT",
+            Self::Note => "NOTE",
             Self::Unknown => "?",
         }
     }
@@ -2569,6 +2577,7 @@ impl ModulatorKind {
             Self::Unpack => ModulatorParams::Unpack(ModUnpackParams::default()),
             Self::Merge => ModulatorParams::Merge(ModMergeParams::default()),
             Self::Wait => ModulatorParams::Wait(ModWaitParams::default()),
+            Self::Note => ModulatorParams::Note,
             Self::Unknown => ModulatorParams::Unknown,
         }
     }
@@ -2596,7 +2605,7 @@ impl ModulatorKind {
             Self::Unpack => &UNPACK_DESCRIPTORS,
             Self::Merge => &MERGE_DESCRIPTORS,
             Self::Wait => &WAIT_DESCRIPTORS,
-            Self::NoteGate | Self::Hold | Self::Gate | Self::Unknown => &[],
+            Self::NoteGate | Self::Hold | Self::Gate | Self::Note | Self::Unknown => &[],
         }
     }
 
@@ -3647,6 +3656,7 @@ impl ModRack {
             | ModulatorParams::Unpack(_)
             | ModulatorParams::Merge(_)
             | ModulatorParams::Wait(_)
+            | ModulatorParams::Note
             | ModulatorParams::Unknown => 1.0,
         }
     }
@@ -3827,6 +3837,7 @@ fn rack_input(
         | ModulatorParams::Unpack(_)
         | ModulatorParams::Merge(_)
         | ModulatorParams::Wait(_)
+        | ModulatorParams::Note
         | ModulatorParams::Unknown => InputSource::None,
         // A seat with no identity: a preset's gate on its own channel's notes,
         // which means the channel it lands on.
@@ -3961,10 +3972,10 @@ impl<'de> serde::Deserialize<'de> for UnknownParams {
 }
 
 /// Every `kind` a module's params are saved under, as serde spells them.
-const KNOWN_KINDS: [&str; 24] = [
+const KNOWN_KINDS: [&str; 25] = [
     "lfo", "envelope", "step", "random", "math", "counter", "select", "slew", "chord", "modal", "scale",
     "transpose", "chance", "gate", "num", "hold", "table", "switch", "pass", "pick", "unpack",
-    "merge", "wait", "unknown",
+    "merge", "wait", "note", "unknown",
 ];
 
 fn is_zero(value: &u32) -> bool {

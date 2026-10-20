@@ -33,7 +33,7 @@ const fn word(name: &'static str, says: &'static str) -> Word {
 
 /// The boxes, the control boxes then the note boxes, as the completion
 /// list offers them.
-pub const VOCABULARY: [Word; 29] = [
+pub const VOCABULARY: [Word; 30] = [
     word("lfo", "Periodic movement. lfo tri 1/4"),
     word("env", "Attack, decay, sustain, release from a gate."),
     word("step", "A row of values, one per advance. step 8 uni"),
@@ -63,6 +63,7 @@ pub const VOCABULARY: [Word; 29] = [
     word("unpack", "Each chord's notes on their own outlets, lowest first. unpack 4"),
     word("merge", "n streams of notes into one. merge 2"),
     word("wait", "Delays notes and a control signal. wait 1/8, wait 250ms, wait 2b"),
+    word("note", "Plays its pitch on each trigger, till the next or the trigger falls."),
 ];
 
 /// How an inversion is spelled after a chord's type: none for root
@@ -285,6 +286,7 @@ pub fn spell(params: &ModulatorParams, text: &str) -> String {
             spelled
         }
         ModulatorParams::Hold => "hold".into(),
+        ModulatorParams::Note => "note".into(),
         ModulatorParams::Unknown => text.trim().to_string(),
     }
 }
@@ -540,6 +542,7 @@ pub fn parse(text: &str) -> Option<ModulatorParams> {
         }
         "num" => num(&args),
         "hold" => at_most(0).map(|()| ModulatorParams::Hold),
+        "note" => at_most(0).map(|()| ModulatorParams::Note),
         "clip" => {
             at_most(2)?;
             let low = args.first().map_or(Some(-1.0), |arg| number(arg))?;
@@ -603,6 +606,7 @@ mod tests {
         assert_eq!(round_trip("env"), "env");
         assert_eq!(round_trip("random"), "random");
         assert_eq!(round_trip("hold"), "hold");
+        assert_eq!(round_trip("note"), "note");
         assert_eq!(round_trip("step 8 uni"), "step uni");
         assert_eq!(round_trip("step bi 4"), "step 4");
         assert_eq!(round_trip("step uni 12"), "step 12 uni");
