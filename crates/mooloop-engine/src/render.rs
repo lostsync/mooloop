@@ -47,6 +47,7 @@ use mooloop_dsp::strip::Strip;
 use crate::meters::{BusMeters, DeviceMeters, DeviceTelemetry, ModulatorMeters, PlayheadMeters};
 use crate::sequencer::Sequencer;
 use crate::song_modulation::SongModulator;
+use crate::note_patch::NoteClock;
 use crate::site_times::SiteTimes;
 use crate::transport::{BlockSpan, Transport};
 use crate::{PreviewCommand, StructuralCommand, StructuralReclaim};
@@ -10453,7 +10454,13 @@ impl RenderState {
         // (song patch step 07).
         let live = self.live_channels();
         let playing = self.transport.playing;
-        self.song_modulation.pass_notes(&mut self.events, live, panicked, playing, frames);
+        let clock = NoteClock {
+            frames,
+            sample_rate: self.sample_rate,
+            bpm: self.transport.bpm,
+            jumped: seeked || jumped,
+        };
+        self.song_modulation.pass_notes(&mut self.events, live, panicked, playing, clock);
 
         let context = ProcessContext {
             sample_rate: self.sample_rate,
@@ -20354,11 +20361,12 @@ mod footprint {
         // song's one set replaced a rack and a table per channel. What
         // stays is the set, empty until a song has modules, and every
         // channel's outlets and keyboard as this block's routes read them,
-        // 10 KiB.
+        // 10 KiB. Song patch boxes step 05 added a wait box's clock and its
+        // control lanes' rings to the set, which took this past 15 KiB.
         let fixed = MAX_CHANNELS * size_of::<usize>() * 2
             + size_of::<SongModulator>()
             + size_of::<ChannelSources>();
-        assert_eq!(fixed / 1024, 14);
+        assert_eq!(fixed / 1024, 15);
 
         // Paid per channel the project actually has. The source is boxed
         // since MOO-56, so it is not in `ChannelStrip`'s own size, and the

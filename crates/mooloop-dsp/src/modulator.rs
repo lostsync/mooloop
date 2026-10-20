@@ -785,6 +785,14 @@ enum Source {
     Switch(u8),
     /// A gate box: passes its `in` while its `open` is high.
     Gate,
+    /// A wait box's control lane: its settings, its ring in
+    /// [`ModulatorSet::rings`], and the ticks it has run. Its notes are the
+    /// note pass's.
+    Wait {
+        params: mooloop_core::ModWaitParams,
+        ring: u16,
+        ticks: u32,
+    },
     /// A box this build does not know. It puts out nothing.
     Silent,
 }
@@ -856,6 +864,12 @@ impl ModuleSpec {
             },
             ModulatorParams::Switch(params) => Source::Switch(params.outputs),
             ModulatorParams::Gate(_) => Source::Gate,
+            // Its ring is handed out by the set.
+            ModulatorParams::Wait(params) => Source::Wait {
+                params,
+                ring: u16::MAX,
+                ticks: 0,
+            },
             ModulatorParams::Unknown => Source::Silent,
         }
     }
@@ -888,6 +902,10 @@ struct Tag {
     /// see a note go down its wire.
     notes: u32,
 }
+
+/// How many readings a wait's control lane keeps: at most every few
+/// ticks, so [`mooloop_core::WAIT_MAX_SECONDS`] fits at any sample rate.
+const WAIT_RING: usize = 2048;
 
 /// The most outlets a box has: a switch's `a` to `h`.
 const MAX_OUTLETS: usize = mooloop_core::SWITCH_MAX_OUTPUTS as usize;
@@ -1059,6 +1077,9 @@ pub struct ModulatorSet {
     /// them. Empty when no knob is routed.
     knobs: Vec<CompiledKnob>,
     knob_spans: Vec<(u32, u32)>,
+    /// Each wait box's control lane: what its `in` read, every so many
+    /// ticks.
+    rings: Vec<[f32; WAIT_RING]>,
 }
 
 impl ModulatorSet {
@@ -1069,7 +1090,7 @@ impl ModulatorSet {
         tags: impl IntoIterator<Item = Option<TagSource>>,
         order: impl IntoIterator<Item = u16>,
     ) -> Self {
-        let modules: Vec<Module> = specs
+        let mut modules: Vec<Module> = specs
             .into_iter()
             .map(|spec| Module {
                 spec,
@@ -1092,6 +1113,13 @@ impl ModulatorSet {
             .into_iter()
             .filter(|&node| usize::from(node) < nodes)
             .collect();
+        let mut rings = Vec::new();
+        for module in &mut modules {
+            if let Source::Wait { ring, .. } = &mut module.source {
+                *ring = u16::try_from(rings.len()).unwrap_or(u16::MAX);
+                rings.push([0.0; WAIT_RING]);
+            }
+        }
         Self {
             outputs: vec![0.0; modules.len()],
             signals: vec![Signal::default(); nodes],
@@ -1101,6 +1129,7 @@ impl ModulatorSet {
             order,
             knobs: Vec::new(),
             knob_spans: Vec::new(),
+            rings,
         }
     }
 
@@ -1221,6 +1250,7 @@ impl ModulatorSet {
             }
             (ModulatorParams::Select(next), Source::Select(inputs)) => *inputs = next.inputs,
             (ModulatorParams::Switch(next), Source::Switch(outputs)) if !next.notes => *outputs = next.outputs,
+            (ModulatorParams::Wait(next), Source::Wait { params, .. }) => *params = next,
             (ModulatorParams::Slew(next), Source::Slew(slew)) => slew.time_seconds = next.time_seconds,
             (ModulatorParams::Num(next), Source::Num(num)) => *num = next,
             // A value drawn anew replaces what a wire wrote there; the rest
@@ -1323,7 +1353,18 @@ impl ModulatorSet {
             return;
         }
         let params = module.spec.params;
+        let own_ring = match module.source {
+            Source::Wait { ring, .. } => Some(ring),
+            _ => None,
+        };
         self.modules[at].source = previous.source;
+        // A wait keeps its own ring, holding what the old one held.
+        if let (Some(own), Source::Wait { ring, .. }) = (own_ring, &mut self.modules[at].source) {
+            if let (Some(held), Some(_)) = (from.rings.get(usize::from(*ring)), self.rings.get(usize::from(own))) {
+                self.rings[usize::from(own)] = *held;
+            }
+            *ring = own;
+        }
         self.modules[at].last = previous.last;
         self.outputs[at] = from.outputs[from_at];
         self.signals[at] = from.signals[from_at];
@@ -1450,6 +1491,7 @@ impl ModulatorSet {
                 Self::run_on(&mut self.modules[node], params, false);
             }
             let module = &mut self.modules[node];
+            let rings = &mut self.rings;
             let gate_slot = module.gate_slot;
             // What a box puts on its first outlet besides its value: a held
             // box's notes, or what an open gate passes. Then its other
@@ -1621,6 +1663,43 @@ impl ModulatorSet {
                         None => 0.0,
                     }
                 }
+                Source::Wait { params, ring, ticks } => {
+                    let input = inlets[1].map_or(0.0, |signal| signal.value);
+                    let frames = frames.max(1) as f32;
+                    let rate = sample_rate.max(1) as f32;
+                    let now = *ticks;
+                    *ticks = ticks.wrapping_add(1);
+                    let value = match rings.get_mut(usize::from(*ring)) {
+                        None => input,
+                        Some(ring) => {
+                            // Every `stride` ticks a reading, so the ring
+                            // covers the longest wait.
+                            let longest = mooloop_core::WAIT_MAX_SECONDS * rate / frames;
+                            let stride = (longest / WAIT_RING as f32).ceil().max(1.0) as u32;
+                            if now % stride == 0 {
+                                ring[(now / stride) as usize % WAIT_RING] = input;
+                            }
+                            let delay = params.seconds(bpm) * rate / frames;
+                            let back = now as f32 - delay;
+                            if delay < 1.0 {
+                                input
+                            } else if back < 0.0 {
+                                0.0
+                            } else {
+                                let at = back / stride as f32;
+                                let low = at.floor() as u32;
+                                let newest = now / stride;
+                                let high = (low + 1).min(newest);
+                                let fraction = at - low as f32;
+                                let read = |slot: u32| ring[slot as usize % WAIT_RING];
+                                read(low) + (read(high) - read(low)) * fraction
+                            }
+                        }
+                    };
+                    // Its control lane is its second outlet.
+                    ports[0] = value;
+                    value
+                }
                 Source::Silent => 0.0,
             };
             self.outputs[node] = value;
@@ -1653,6 +1732,7 @@ impl ModulatorSet {
                 | Source::Table { .. }
                 | Source::Switch(_)
                 | Source::Gate
+                | Source::Wait { .. }
                 | Source::Silent => {}
             }
         }
@@ -2755,6 +2835,34 @@ mod tests {
                 set.tick(48_000, 32, 120.0, None, &note_on());
                 let passed = if counted > 0.0 { 1.0 } else { 0.0 };
                 assert_eq!(set.outputs()[1..], [passed, counted], "open {open:?}");
+            }
+        }
+
+        #[test]
+        fn a_wait_puts_out_its_input_as_it_was_the_set_time_ago() {
+            // 10 ms at 48 kHz is fifteen 32-frame ticks; a slow saw is a
+            // straight line over them.
+            let saw = ModulatorParams::Lfo(ModLfoParams {
+                rate_hz: 0.5,
+                waveform: mooloop_core::ModLfoWaveform::Saw,
+                ..ModLfoParams::default()
+            });
+            let wait = ModulatorParams::Wait(mooloop_core::ModWaitParams {
+                time_ms: 10.0,
+                sync: false,
+                ..Default::default()
+            });
+            let mut set = set(vec![box_of(saw, &[]), box_of(wait, &[(1, 0)])], 0);
+            let mut seen = Vec::new();
+            for tick in 0..60 {
+                set.tick(48_000, 32, 120.0, None, &NO_GATES);
+                seen.push(set.outputs()[0]);
+                let waited = set.outputs()[1];
+                if tick < 15 {
+                    assert_eq!(waited, 0.0, "nothing yet at tick {tick}");
+                } else {
+                    assert!((waited - seen[tick - 15]).abs() < 1e-3, "tick {tick}: {waited} vs {}", seen[tick - 15]);
+                }
             }
         }
 

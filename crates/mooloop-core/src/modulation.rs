@@ -873,6 +873,11 @@ pub const PICK_PARAM_WHICH: u32 = 0;
 pub const UNPACK_PARAM_OUTPUTS: u32 = 0;
 /// How many note inlets a merge box takes.
 pub const MERGE_PARAM_INPUTS: u32 = 0;
+/// A wait box's delay (song patch boxes step 05): milliseconds, or a tempo
+/// division when synced, as an LFO's rate is.
+pub const WAIT_PARAM_TIME_MS: u32 = 0;
+pub const WAIT_PARAM_SYNC: u32 = 1;
+pub const WAIT_PARAM_DIVISION: u32 = 2;
 
 /// A chord box's quality ([`crate::harmony::ChordQuality`]) and inversion
 /// (song patch step 08).
@@ -912,6 +917,9 @@ pub const SWITCH_MAX_OUTPUTS: u8 = 8;
 pub const PICK_MOST: i8 = 8;
 /// The most note jacks an unpack or merge box has: `a` to `h`.
 pub const NOTE_JACKS_MAX: u8 = 8;
+/// The longest a wait box delays, in seconds, whatever its setting and the
+/// tempo: a division is capped at 16 beats by the grid's longest.
+pub const WAIT_MAX_SECONDS: f32 = 8.0;
 
 /// A boolean as a descriptor: two positions, off by default.
 const fn toggle(id: u32, name: &'static str) -> ParamDescriptor {
@@ -1337,6 +1345,24 @@ pub const MERGE_DESCRIPTORS: [ParamDescriptor; 1] = [ParamDescriptor {
     curve: ParamCurve::Stepped(NOTE_JACKS_MAX as u16 - 1),
     default: 2.0,
 }];
+
+pub const WAIT_DESCRIPTORS: [ParamDescriptor; 3] = [
+    ParamDescriptor {
+        id: WAIT_PARAM_TIME_MS,
+        name: "Time",
+        unit: "ms",
+        min: 1.0,
+        max: WAIT_MAX_SECONDS * 1_000.0,
+        curve: ParamCurve::Exponential,
+        default: 250.0,
+    },
+    // Synced by default: a wait is mostly a musical delay.
+    ParamDescriptor {
+        default: 1.0,
+        ..toggle(WAIT_PARAM_SYNC, "Sync")
+    },
+    division(WAIT_PARAM_DIVISION, "Division", 10.0),
+];
 
 pub const SLEW_DESCRIPTORS: [ParamDescriptor; 1] = [ParamDescriptor {
     id: SLEW_PARAM_TIME_S,
@@ -1766,6 +1792,39 @@ impl Default for ModUnpackParams {
     }
 }
 
+/// Delays what is wired into it, notes and a control signal, by
+/// `time_ms`, or by `division` when synced; never past
+/// [`WAIT_MAX_SECONDS`].
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct ModWaitParams {
+    pub time_ms: f32,
+    pub sync: bool,
+    pub division: ModTimeDivision,
+}
+
+impl Default for ModWaitParams {
+    fn default() -> Self {
+        Self {
+            time_ms: 250.0,
+            sync: true,
+            division: ModTimeDivision::Eighth,
+        }
+    }
+}
+
+impl ModWaitParams {
+    /// The delay in seconds at `bpm`, capped.
+    pub fn seconds(&self, bpm: f64) -> f32 {
+        let seconds = if self.sync {
+            self.division.beats() * 60.0 / (bpm.max(1.0) as f32)
+        } else {
+            self.time_ms / 1_000.0
+        };
+        seconds.clamp(0.0, WAIT_MAX_SECONDS)
+    }
+}
+
 /// `inputs` streams of notes into one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
@@ -1967,6 +2026,8 @@ pub enum ModulatorParams {
     Unpack(ModUnpackParams),
     /// Several note inlets, one note outlet.
     Merge(ModMergeParams),
+    /// Notes and a control signal in, the same out later.
+    Wait(ModWaitParams),
     /// A box whose name this build does not know: typed, or saved by a
     /// later build. It keeps its text ([`SongModule::text`]), has no jacks,
     /// and puts out nothing.
@@ -1998,6 +2059,7 @@ impl ModulatorParams {
             Self::Pick(_) => ModulatorKind::Pick,
             Self::Unpack(_) => ModulatorKind::Unpack,
             Self::Merge(_) => ModulatorKind::Merge,
+            Self::Wait(_) => ModulatorKind::Wait,
             Self::Unknown => ModulatorKind::Unknown,
         }
     }
@@ -2085,6 +2147,12 @@ impl ModulatorParams {
             },
             Self::Merge(p) => match id {
                 MERGE_PARAM_INPUTS => Some(f32::from(p.inputs)),
+                _ => None,
+            },
+            Self::Wait(p) => match id {
+                WAIT_PARAM_TIME_MS => Some(p.time_ms),
+                WAIT_PARAM_SYNC => Some(if p.sync { 1.0 } else { 0.0 }),
+                WAIT_PARAM_DIVISION => Some(p.division.to_index() as f32),
                 _ => None,
             },
             Self::Slew(p) => match id {
@@ -2239,6 +2307,12 @@ impl ModulatorParams {
                     p.inputs = index.clamp(2, i32::from(NOTE_JACKS_MAX)) as u8;
                 }
             }
+            Self::Wait(p) => match id {
+                WAIT_PARAM_TIME_MS => p.time_ms = value,
+                WAIT_PARAM_SYNC => p.sync = index != 0,
+                WAIT_PARAM_DIVISION => p.division = ModTimeDivision::from_index(index),
+                _ => {}
+            },
             Self::Slew(p) => {
                 if id == SLEW_PARAM_TIME_S {
                     p.time_seconds = value;
@@ -2340,6 +2414,7 @@ pub enum ModulatorKind {
     Pick,
     Unpack,
     Merge,
+    Wait,
     /// A box this build has no name for; never in [`Self::ALL`].
     Unknown,
 }
@@ -2348,7 +2423,7 @@ impl ModulatorKind {
     /// Every kind a box can be made as, in the order the shelf's kind
     /// tokens number them: new kinds are appended, so a token keeps naming
     /// the kind it did.
-    pub const ALL: [ModulatorKind; 22] = [
+    pub const ALL: [ModulatorKind; 23] = [
         ModulatorKind::Lfo,
         ModulatorKind::Envelope,
         ModulatorKind::Step,
@@ -2371,6 +2446,7 @@ impl ModulatorKind {
         ModulatorKind::Pick,
         ModulatorKind::Unpack,
         ModulatorKind::Merge,
+        ModulatorKind::Wait,
     ];
 
     /// Whether the kind works on notes: the engine's note pass runs it,
@@ -2388,6 +2464,7 @@ impl ModulatorKind {
                 | Self::Pick
                 | Self::Unpack
                 | Self::Merge
+                | Self::Wait
         )
     }
 
@@ -2415,6 +2492,7 @@ impl ModulatorKind {
             Self::Pick => "Pick",
             Self::Unpack => "Unpack",
             Self::Merge => "Merge",
+            Self::Wait => "Wait",
             Self::Unknown => "Unknown",
         }
     }
@@ -2445,6 +2523,7 @@ impl ModulatorKind {
             Self::Pick => "PICK",
             Self::Unpack => "UNPK",
             Self::Merge => "MRG",
+            Self::Wait => "WAIT",
             Self::Unknown => "?",
         }
     }
@@ -2489,6 +2568,7 @@ impl ModulatorKind {
             Self::Pick => ModulatorParams::Pick(ModPickParams::default()),
             Self::Unpack => ModulatorParams::Unpack(ModUnpackParams::default()),
             Self::Merge => ModulatorParams::Merge(ModMergeParams::default()),
+            Self::Wait => ModulatorParams::Wait(ModWaitParams::default()),
             Self::Unknown => ModulatorParams::Unknown,
         }
     }
@@ -2515,6 +2595,7 @@ impl ModulatorKind {
             Self::Pick => &PICK_DESCRIPTORS,
             Self::Unpack => &UNPACK_DESCRIPTORS,
             Self::Merge => &MERGE_DESCRIPTORS,
+            Self::Wait => &WAIT_DESCRIPTORS,
             Self::NoteGate | Self::Hold | Self::Gate | Self::Unknown => &[],
         }
     }
@@ -3565,6 +3646,7 @@ impl ModRack {
             | ModulatorParams::Pick(_)
             | ModulatorParams::Unpack(_)
             | ModulatorParams::Merge(_)
+            | ModulatorParams::Wait(_)
             | ModulatorParams::Unknown => 1.0,
         }
     }
@@ -3744,6 +3826,7 @@ fn rack_input(
         | ModulatorParams::Pick(_)
         | ModulatorParams::Unpack(_)
         | ModulatorParams::Merge(_)
+        | ModulatorParams::Wait(_)
         | ModulatorParams::Unknown => InputSource::None,
         // A seat with no identity: a preset's gate on its own channel's notes,
         // which means the channel it lands on.
@@ -3878,10 +3961,10 @@ impl<'de> serde::Deserialize<'de> for UnknownParams {
 }
 
 /// Every `kind` a module's params are saved under, as serde spells them.
-const KNOWN_KINDS: [&str; 23] = [
+const KNOWN_KINDS: [&str; 24] = [
     "lfo", "envelope", "step", "random", "math", "counter", "select", "slew", "chord", "modal", "scale",
     "transpose", "chance", "gate", "num", "hold", "table", "switch", "pass", "pick", "unpack",
-    "merge", "unknown",
+    "merge", "wait", "unknown",
 ];
 
 fn is_zero(value: &u32) -> bool {

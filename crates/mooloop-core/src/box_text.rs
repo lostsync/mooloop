@@ -14,7 +14,7 @@
 use crate::harmony::{ChordQuality, Mode, MAX_CHORD_NOTES, PITCH_NAMES};
 use crate::modulation::{
     ModChanceParams, ModChordParams, ModModalParams, ModScaleParams, ModTransposeParams,
-    TRANSPOSE_MAX_SEMITONES, ModCounterParams, ModLfoParams, ModLfoWaveform, ModMathOp, ModMathParams, ModSelectParams, ModSwitchParams, ModGateParams, ModPickParams, ModUnpackParams, ModMergeParams,
+    TRANSPOSE_MAX_SEMITONES, ModCounterParams, ModLfoParams, ModLfoWaveform, ModMathOp, ModMathParams, ModSelectParams, ModSwitchParams, ModGateParams, ModPickParams, ModUnpackParams, ModMergeParams, ModWaitParams,
     ModNumParams, ModSlewParams, ModStepParams, ModTimeDivision, ModulatorKind, ModulatorParams,
     ModTableParams, NumFormat, COUNTER_MAX_STEPS, TABLE_MAX_VALUES, MOD_STEP_MAX_STEPS, NUM_LIMIT, SELECT_MAX_INPUTS, SWITCH_MAX_OUTPUTS, PICK_MOST, NOTE_JACKS_MAX,
 };
@@ -33,7 +33,7 @@ const fn word(name: &'static str, says: &'static str) -> Word {
 
 /// The boxes, the control boxes then the note boxes, as the completion
 /// list offers them.
-pub const VOCABULARY: [Word; 28] = [
+pub const VOCABULARY: [Word; 29] = [
     word("lfo", "Periodic movement. lfo tri 1/4"),
     word("env", "Attack, decay, sustain, release from a gate."),
     word("step", "A row of values, one per advance. step 8 uni"),
@@ -62,6 +62,7 @@ pub const VOCABULARY: [Word; 28] = [
     word("pick", "Keeps one note of each chord. pick low, pick 2, pick -1"),
     word("unpack", "Each chord's notes on their own outlets, lowest first. unpack 4"),
     word("merge", "n streams of notes into one. merge 2"),
+    word("wait", "Delays notes and a control signal. wait 1/8, wait 250ms, wait 2b"),
 ];
 
 /// How an inversion is spelled after a chord's type: none for root
@@ -266,6 +267,10 @@ pub fn spell(params: &ModulatorParams, text: &str) -> String {
         },
         ModulatorParams::Unpack(unpack) => format!("unpack {}", unpack.outputs),
         ModulatorParams::Merge(merge) => format!("merge {}", merge.inputs),
+        ModulatorParams::Wait(wait) => match wait.sync {
+            true => format!("wait {}", division_name(wait.division)),
+            false => format!("wait {}ms", format_number(wait.time_ms)),
+        },
         ModulatorParams::Num(num) => {
             let mut spelled = String::from("num");
             if let Some(format) = NUM_FORMATS.iter().find(|(_, held)| *held == num.format) {
@@ -509,6 +514,25 @@ pub fn parse(text: &str) -> Option<ModulatorParams> {
             let outputs = count(args.first().copied(), 4, 2, NOTE_JACKS_MAX)?;
             Some(ModulatorParams::Unpack(ModUnpackParams { outputs }))
         }
+        "wait" => {
+            at_most(1)?;
+            let mut wait = ModWaitParams::default();
+            if let Some(arg) = args.first() {
+                let arg = arg.to_ascii_lowercase();
+                if let Some((_, division)) = DIVISIONS.iter().find(|(name, _)| *name == arg) {
+                    wait.division = *division;
+                } else if let Some(beats) = arg.strip_suffix('b') {
+                    // Beats name the division that long: `2b` is `1/2`.
+                    let beats = number(beats)?;
+                    let (_, division) = DIVISIONS.iter().find(|(_, division)| division.beats() == beats)?;
+                    wait.division = *division;
+                } else {
+                    wait.sync = false;
+                    wait.time_ms = clamp_by(ModulatorKind::Wait, crate::WAIT_PARAM_TIME_MS, seconds(&arg)? * 1_000.0);
+                }
+            }
+            Some(ModulatorParams::Wait(wait))
+        }
         "merge" => {
             at_most(1)?;
             let inputs = count(args.first().copied(), 2, 2, NOTE_JACKS_MAX)?;
@@ -673,6 +697,20 @@ mod tests {
         assert_eq!(round_trip("merge"), "merge 2");
         assert_eq!(round_trip("merge 9"), "merge 8");
         for typed in ["pick 0", "pick middle", "unpack 2 2", "merge x"] {
+            assert_eq!(parse(typed), None, "{typed:?}");
+        }
+    }
+
+    #[test]
+    fn wait_spells_a_division_or_a_time() {
+        assert_eq!(round_trip("wait"), "wait 1/8");
+        assert_eq!(round_trip("wait 1/16t"), "wait 1/16t");
+        assert_eq!(round_trip("wait 2b"), "wait 1/2");
+        assert_eq!(round_trip("wait 16b"), "wait 4/1");
+        assert_eq!(round_trip("wait 250ms"), "wait 250ms");
+        assert_eq!(round_trip("wait 1.5s"), "wait 1500ms");
+        assert_eq!(round_trip("wait 20s"), "wait 8000ms", "held to eight seconds");
+        for typed in ["wait 5b", "wait soon", "wait 1/8 2"] {
             assert_eq!(parse(typed), None, "{typed:?}");
         }
     }

@@ -121,6 +121,9 @@ const GATE_IN: &[Port] = &[control("in"), control("open")];
 const NOTE_SWITCH_IN: &[Port] = &[note("in"), control("which")];
 const NOTE_GATE_IN: &[Port] = &[note("in"), control("open")];
 const NOTE_OUT: &[Port] = &[note("out")];
+/// A wait's two lanes: notes, and a control signal.
+const WAIT_IN: &[Port] = &[note("notes"), control("in")];
+const WAIT_OUT: &[Port] = &[note("notes"), control("out")];
 /// An unpack's outlets, a note switch's, and a merge's inlets; each has the
 /// first as many as it is set to.
 const NOTE_LETTERS: &[Port] = &[
@@ -220,6 +223,10 @@ impl ModulatorKind {
             Self::Merge => Ports {
                 inlets: NOTE_LETTERS,
                 outlets: NOTES,
+            },
+            Self::Wait => Ports {
+                inlets: WAIT_IN,
+                outlets: WAIT_OUT,
             },
             Self::Unknown => Ports {
                 inlets: &[],

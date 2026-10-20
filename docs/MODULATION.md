@@ -162,7 +162,7 @@ parameter (`routes`). A channel holds none. Boxes and tags are named by a
 `ModSourceId` from one mint, so a wire names either the same way.
 
 **A box** is typed as text and spelled back from its settings
-(`mooloop_core::box_text`: `parse`, `spell`, and `VOCABULARY`, the twenty-eight
+(`mooloop_core::box_text`: `parse`, `spell`, and `VOCABULARY`, the twenty-nine
 names in the order the completion list offers them). A box keeps its
 settings as parameters (`ModulatorParams`), never as text, so `*   -.5`
 typed reads `* -0.5`, and a knob turned on its face changes what the box
@@ -170,7 +170,7 @@ says. The control boxes are `lfo`, `env`, `step`, `random`, `counter`,
 `select`, `switch`, `gate`, `slew`, `num`, `hold` and `table`, and the arithmetic boxes `+ - * / min max clip` (one
 kind, Math, with an operator). The note boxes are `chord`, `modal`,
 `scale`, `transpose`, `chance`, `held`, `pick`, `unpack` and `merge`
-(and a `switch` or a `gate` on notes); their pitch, chord and mode tables
+(and a `switch` or a `gate` on notes), and `wait` has a lane of each; their pitch, chord and mode tables
 are `crates/mooloop-core/src/harmony.rs`. A name the vocabulary lacks makes
 an **unknown** box that keeps its text and does nothing; a song from a later
 build with a kind this one does not know opens with that box unknown.
@@ -330,6 +330,14 @@ reach it.
   its NoteOff follows it there whatever `which` does since. **A note gate**
   passes NoteOns while `open` is high and, when it closes, releases what it
   let through at the start of the block.
+- **`wait`** (`wait 1/8`, `wait 2b` for the division two beats long,
+  `wait 250ms`) delays what reaches it: each NoteOn and its NoteOff on its
+  `notes` lane by the same time, at the tempo as the note arrived, and its
+  control `in` on its `out`. It never waits past 8 seconds. It tracks 64
+  notes at once; a NoteOn past that is dropped with its NoteOff. Stopping,
+  a seek, a loop fold, a panic and a Choke into it drop what it holds back
+  and release what it played. The control lane keeps 2048 readings across
+  its longest wait, so past the shortest waits it reads between them.
 - The boxes make a graph with no loops, compiled so each box runs after
   every box feeding it (`CompiledNoteBox::inputs`, `NoteFeed`); a box keeps
   its notes across an edit while it and everything feeding it are the same

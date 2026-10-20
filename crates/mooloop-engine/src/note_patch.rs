@@ -132,7 +132,112 @@ struct Sounding {
 /// The level at which a note gate's `open` lets notes through.
 const OPEN_LEVEL: f32 = 0.5;
 
-/// What one note box is holding, and a chance box's generator.
+/// What a wait box holds back at once: a NoteOn and its NoteOff for each
+/// note it can track.
+const WAIT_QUEUE: usize = 2 * MAX_LINK_NOTES;
+
+/// One note event a wait box is holding back, and when it is due, in
+/// frames on the pass's clock.
+#[derive(Debug, Clone, Copy)]
+struct Pending {
+    due: u64,
+    order: u32,
+    event: Event,
+}
+
+impl Default for Pending {
+    fn default() -> Self {
+        Self {
+            due: 0,
+            order: 0,
+            event: Event::Choke,
+        }
+    }
+}
+
+/// A wait box's notes still to play (song patch boxes step 05), and the
+/// notes it is tracking: each NoteOn it took until its NoteOff has played.
+/// A NoteOn it cannot track is dropped with its NoteOff, so there is
+/// always room for the NoteOffs of the notes it took.
+#[derive(Debug, Clone, Copy)]
+struct WaitQueue {
+    pending: [Pending; WAIT_QUEUE],
+    len: usize,
+    tracked: [u64; MAX_LINK_NOTES],
+    tracked_len: usize,
+    next_order: u32,
+}
+
+impl Default for WaitQueue {
+    fn default() -> Self {
+        Self {
+            pending: [Pending::default(); WAIT_QUEUE],
+            len: 0,
+            tracked: [0; MAX_LINK_NOTES],
+            tracked_len: 0,
+            next_order: 0,
+        }
+    }
+}
+
+impl WaitQueue {
+    fn clear(&mut self) {
+        self.len = 0;
+        self.tracked_len = 0;
+    }
+
+    fn tracks(&self, id: u64) -> Option<usize> {
+        self.tracked[..self.tracked_len].iter().position(|&held| held == id)
+    }
+
+    /// Hold `event` back until `due`. A NoteOn past what it can track is
+    /// dropped; a NoteOff for a note it does not track is too.
+    fn hold(&mut self, due: u64, event: Event) {
+        match event {
+            Event::NoteOn { id, .. } => {
+                if self.tracked_len == MAX_LINK_NOTES || self.len == WAIT_QUEUE {
+                    return;
+                }
+                self.tracked[self.tracked_len] = id;
+                self.tracked_len += 1;
+            }
+            Event::NoteOff { id, .. } => {
+                if self.tracks(id).is_none() || self.len == WAIT_QUEUE {
+                    return;
+                }
+            }
+            _ => return,
+        }
+        self.pending[self.len] = Pending {
+            due,
+            order: self.next_order,
+            event,
+        };
+        self.len += 1;
+        self.next_order = self.next_order.wrapping_add(1);
+    }
+
+    /// The earliest event due before `until`, taken out; a NoteOff stops
+    /// its note being tracked.
+    fn next_before(&mut self, until: u64) -> Option<Pending> {
+        let at = (0..self.len)
+            .filter(|&at| self.pending[at].due < until)
+            .min_by_key(|&at| (self.pending[at].due, self.pending[at].order))?;
+        let pending = self.pending[at];
+        self.pending.copy_within(at + 1..self.len, at);
+        self.len -= 1;
+        if let Event::NoteOff { id, .. } = pending.event {
+            if let Some(at) = self.tracks(id) {
+                self.tracked[at] = self.tracked[self.tracked_len - 1];
+                self.tracked_len -= 1;
+            }
+        }
+        Some(pending)
+    }
+}
+
+/// What one note box is holding, a chance box's generator, and a wait
+/// box's queue.
 #[derive(Debug, Clone, Copy)]
 struct BoxTable {
     held: [BoxHeld; MAX_LINK_NOTES],
@@ -140,6 +245,7 @@ struct BoxTable {
     sounding: [Sounding; MAX_LINK_NOTES],
     sounding_len: usize,
     rng: u32,
+    waiting: WaitQueue,
 }
 
 impl BoxTable {
@@ -150,6 +256,7 @@ impl BoxTable {
             sounding: [Sounding::default(); MAX_LINK_NOTES],
             sounding_len: 0,
             rng: seeded(seed),
+            waiting: WaitQueue::default(),
         }
     }
 
@@ -180,8 +287,31 @@ pub(crate) struct BoxInputs<'a> {
     /// Whether the transport is playing: a chance box's generator restarts
     /// as it starts.
     pub(crate) playing: bool,
-    /// How long the block is, for the gate boxes' control ticks.
+    pub(crate) clock: NoteClock,
+}
+
+/// The block the pass runs over, in time.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct NoteClock {
+    /// How long the block is: the held boxes' control ticks, and how far a
+    /// wait box's clock moves.
     pub(crate) frames: usize,
+    pub(crate) sample_rate: u32,
+    pub(crate) bpm: f64,
+    /// Whether the transport seeked or folded the loop into this block: a
+    /// wait box lets go of what it held back.
+    pub(crate) jumped: bool,
+}
+
+impl Default for NoteClock {
+    fn default() -> Self {
+        Self {
+            frames: 256,
+            sample_rate: 48_000,
+            bpm: 120.0,
+            jumped: false,
+        }
+    }
 }
 
 /// A release owed to a seat at the start of the next block.
@@ -232,6 +362,8 @@ pub(crate) struct NotePass {
     /// The ids a box plays its pitches under, inside the pass.
     next_box_id: u64,
     was_playing: bool,
+    /// Frames the pass has run, wrapping: a wait box's clock.
+    now: u64,
     tag_ids: Vec<ModSourceId>,
     /// Each tag's NoteOn count, wrapping: a notes-in tag's the notes it
     /// passed, a notes-out tag's the notes it played.
@@ -311,6 +443,7 @@ impl NotePass {
             next_id: 0,
             next_box_id: 0,
             was_playing: false,
+            now: 0,
             tag_ids: plan.tags.iter().map(|tag| tag.id).collect(),
             tag_notes: vec![0; plan.tags.len()],
             tag_refused: vec![0; plan.tags.len()],
@@ -326,6 +459,7 @@ impl NotePass {
         self.next_id = previous.next_id;
         self.next_box_id = previous.next_box_id;
         self.was_playing = previous.was_playing;
+        self.now = previous.now;
         for (at, id) in self.tag_ids.iter().enumerate() {
             if let Some(from) = previous.tag_ids.iter().position(|old| old == id) {
                 self.tag_notes[at] = previous.tag_notes[from];
@@ -412,6 +546,9 @@ impl NotePass {
                 table.rng = seeded(seed);
             }
         }
+        // Stopping, a seek or a loop fold lets a wait box's held-back notes
+        // go, as they release any sequenced note.
+        let let_go = (self.was_playing && !inputs.playing) || inputs.clock.jumped || panicked;
         self.was_playing = inputs.playing;
         // What a change of set owed, first, so a note the block starts again
         // at offset 0 starts after the old one is let go. One that does not
@@ -474,7 +611,8 @@ impl NotePass {
                 list.retain(|event| !matches!(event.event, Event::NoteOn { .. } | Event::NoteOff { .. }));
             }
         }
-        self.run_boxes(inputs);
+        self.run_boxes(inputs, let_go);
+        self.now = self.now.wrapping_add(inputs.clock.frames as u64);
         for at in 0..self.links.len() {
             let link = self.links[at];
             let feed = match link.via {
@@ -539,6 +677,7 @@ impl NotePass {
             for table in &mut self.box_tables {
                 table.held_len = 0;
                 table.sounding_len = 0;
+                table.waiting.clear();
             }
         }
     }
@@ -593,10 +732,10 @@ impl NotePass {
     }
 
     /// Run every note box over what reached it, in the compiled order.
-    fn run_boxes(&mut self, inputs: BoxInputs) {
+    fn run_boxes(&mut self, inputs: BoxInputs, let_go: bool) {
         self.flow.clear();
         self.flow_port.clear();
-        let ticks = inputs.frames.div_ceil(CONTROL_RATE_FRAMES).clamp(1, MAX_CONTROL_TICKS_PER_BLOCK);
+        let ticks = inputs.clock.frames.div_ceil(CONTROL_RATE_FRAMES).clamp(1, MAX_CONTROL_TICKS_PER_BLOCK);
         for row in self.gate_ticks.chunks_mut(self.gates.max(1)).take(ticks) {
             row.fill(NoteGateTick::default());
         }
@@ -631,9 +770,12 @@ impl NotePass {
             let control = inputs.set.note_control(usize::from(note_box.module));
             // A gate closing lets go of what it let through.
             if matches!(params, ModulatorParams::Gate(_)) && control < OPEN_LEVEL {
-                while let Some(held) = self.box_tables[at].held[..self.box_tables[at].held_len].last().copied() {
-                    self.end(at, 0, held.inlet, held.input);
-                }
+                self.end_all(at, 0);
+            }
+            if let ModulatorParams::Wait(wait) = params {
+                self.run_wait(at, start, wait, inputs.clock, let_go);
+                self.flow_at[at] = (start, self.flow.len() as u32);
+                continue;
             }
             for index in 0..self.scratch.len() {
                 let (heard, inlet, _) = self.scratch[index];
@@ -712,6 +854,48 @@ impl NotePass {
                 }
             }
             self.flow_at[at] = (start, self.flow.len() as u32);
+        }
+    }
+
+    /// Box `at` lets go of everything it is playing, at `offset`.
+    fn end_all(&mut self, at: usize, offset: u32) {
+        while let Some(held) = self.box_tables[at].held[..self.box_tables[at].held_len].last().copied() {
+            self.end(at, offset, held.inlet, held.input);
+        }
+    }
+
+    /// Wait box `at` holds back what reached it this block and plays what
+    /// falls due in it. Letting go drops what it held back and releases
+    /// what it played, as a Choke into it does.
+    fn run_wait(&mut self, at: usize, start: u32, wait: mooloop_core::ModWaitParams, clock: NoteClock, let_go: bool) {
+        if let_go {
+            self.box_tables[at].waiting.clear();
+            self.end_all(at, 0);
+        }
+        let delay = (f64::from(wait.seconds(clock.bpm)) * f64::from(clock.sample_rate)).round() as u64;
+        for index in 0..self.scratch.len() {
+            let (heard, _, _) = self.scratch[index];
+            match heard.event {
+                Event::Choke => {
+                    self.box_tables[at].waiting.clear();
+                    self.end_all(at, heard.offset);
+                }
+                event => {
+                    let due = self.now.wrapping_add(u64::from(heard.offset)).wrapping_add(delay);
+                    self.box_tables[at].waiting.hold(due, event);
+                }
+            }
+        }
+        let until = self.now.wrapping_add(clock.frames as u64);
+        while let Some(pending) = self.box_tables[at].waiting.next_before(until) {
+            let offset = pending.due.saturating_sub(self.now) as u32;
+            match pending.event {
+                Event::NoteOn { id, note, velocity } => {
+                    self.play(at, start, offset, 0, id, 0, Pitches::one(i16::from(note)), velocity);
+                }
+                Event::NoteOff { id, .. } => self.end(at, offset, 0, id),
+                _ => {}
+            }
         }
     }
 
@@ -946,7 +1130,7 @@ mod tests {
             modules: &[],
             set: &set,
             playing: true,
-            frames: 256,
+            clock: NoteClock::default(),
         };
         pass.process(events, 2, false, inputs);
     }
