@@ -427,8 +427,8 @@ fn tab_completes_and_an_unknown_name_stays_as_typed() {
     assert_eq!(h.boxes().last().map(String::as_str), Some("counter 8"));
 
     h.double_click((600.0, 200.0));
-    h.type_text("arp up\n");
-    assert_eq!(h.boxes().last().map(String::as_str), Some("arp up"));
+    h.type_text("strum up\n");
+    assert_eq!(h.boxes().last().map(String::as_str), Some("strum up"));
     assert!(h.window.get_status_message().contains("not a box"), "{}", h.window.get_status_message());
     let st = h.state.borrow();
     assert_eq!(st.session.modulation.modules.last().unwrap().params, ModulatorParams::Unknown);

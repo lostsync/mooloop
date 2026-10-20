@@ -22,6 +22,7 @@ use mooloop_core::{
     MOD_STEP_MAX_STEPS, ModMathOp, ParamCurve, ParamDescriptor, RANDOM_PARAM_BIPOLAR,
     RANDOM_PARAM_DRUNK, RANDOM_PARAM_PROBABILITY, RANDOM_PARAM_QUANTIZE, RANDOM_PARAM_RATE_DIVISION,
     RANDOM_PARAM_RATE_HZ, RANDOM_PARAM_TEMPO_SYNC, RANDOM_PARAM_TRIGGER, RANDOM_PARAM_WALK,
+    ARP_PARAM_DIVISION, ARP_PARAM_GATE, ARP_PARAM_MODE, ARP_PARAM_OCTAVES,
     SELECT_PARAM_INPUTS, SWITCH_PARAM_OUTPUTS, PICK_PARAM_WHICH, UNPACK_PARAM_OUTPUTS, MERGE_PARAM_INPUTS, WAIT_PARAM_DIVISION, WAIT_PARAM_SYNC, WAIT_PARAM_TIME_MS, SLEW_PARAM_TIME_S, STEP_PARAM_DIVISION, STEP_PARAM_GLIDE,
     STEP_PARAM_LENGTH, STEP_PARAM_TRIGGER, STEP_PARAM_UNIPOLAR, STEP_PARAM_VALUE_BASE,
     TABLE_PARAM_LENGTH, TABLE_PARAM_VALUE_BASE,
@@ -114,6 +115,7 @@ pub(crate) fn face_params(params: &ModulatorParams) -> Vec<u32> {
             pick(wait.sync, WAIT_PARAM_DIVISION, WAIT_PARAM_TIME_MS),
             WAIT_PARAM_SYNC,
         ],
+        ModulatorParams::Arp(_) => vec![ARP_PARAM_MODE, ARP_PARAM_DIVISION, ARP_PARAM_OCTAVES, ARP_PARAM_GATE],
         ModulatorParams::Slew(_) => vec![SLEW_PARAM_TIME_S],
         // The note boxes' arguments, as stepped knobs that read as typed
         // (song patch step 08).
@@ -232,6 +234,9 @@ pub(crate) fn readout(params: &ModulatorParams, id: u32) -> String {
         },
         (ModulatorParams::Wait(wait), WAIT_PARAM_DIVISION) => division_name(wait.division).into(),
         (ModulatorParams::Wait(_), WAIT_PARAM_SYNC) => on_off(value),
+        (ModulatorParams::Arp(arp), ARP_PARAM_MODE) => arp.mode.name().into(),
+        (ModulatorParams::Arp(arp), ARP_PARAM_DIVISION) => division_name(arp.division).into(),
+        (ModulatorParams::Arp(arp), ARP_PARAM_GATE) => format!("{}%", (arp.gate * 100.0).round()),
         // As typed, not the knob's gapless position.
         (ModulatorParams::Pick(pick), PICK_PARAM_WHICH) => match pick.which {
             1 => "low".into(),
@@ -302,6 +307,11 @@ mod tests {
         assert_eq!(readout(&parse("wait 1/16").unwrap(), WAIT_PARAM_DIVISION), "1/16");
         assert_eq!(face_params(&parse("wait 250ms").unwrap()), [WAIT_PARAM_TIME_MS, WAIT_PARAM_SYNC]);
         assert!(face_params(&ModulatorParams::NoteGate).is_empty());
+        let arp = parse("arp updown 1/8 2").unwrap();
+        assert_eq!(readout(&arp, ARP_PARAM_MODE), "updown");
+        assert_eq!(readout(&arp, ARP_PARAM_DIVISION), "1/8");
+        assert_eq!(readout(&arp, ARP_PARAM_OCTAVES), "2");
+        assert_eq!(readout(&arp, ARP_PARAM_GATE), "50%");
     }
 
     /// A Step's steps and a table's values are bars, as long as it plays.

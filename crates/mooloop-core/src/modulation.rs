@@ -878,6 +878,13 @@ pub const MERGE_PARAM_INPUTS: u32 = 0;
 pub const WAIT_PARAM_TIME_MS: u32 = 0;
 pub const WAIT_PARAM_SYNC: u32 = 1;
 pub const WAIT_PARAM_DIVISION: u32 = 2;
+/// An arp box (song patch boxes step 07): the order it plays the chord
+/// in, how fast, across how many octaves, and how long each note sounds as
+/// a share of its step.
+pub const ARP_PARAM_MODE: u32 = 0;
+pub const ARP_PARAM_DIVISION: u32 = 1;
+pub const ARP_PARAM_OCTAVES: u32 = 2;
+pub const ARP_PARAM_GATE: u32 = 3;
 
 /// A chord box's quality ([`crate::harmony::ChordQuality`]) and inversion
 /// (song patch step 08).
@@ -920,6 +927,8 @@ pub const NOTE_JACKS_MAX: u8 = 8;
 /// The longest a wait box delays, in seconds, whatever its setting and the
 /// tempo: a division is capped at 16 beats by the grid's longest.
 pub const WAIT_MAX_SECONDS: f32 = 8.0;
+/// The most octaves an arp spreads its chord across.
+pub const ARP_MAX_OCTAVES: u8 = 4;
 
 /// A boolean as a descriptor: two positions, off by default.
 const fn toggle(id: u32, name: &'static str) -> ParamDescriptor {
@@ -1362,6 +1371,29 @@ pub const WAIT_DESCRIPTORS: [ParamDescriptor; 3] = [
         ..toggle(WAIT_PARAM_SYNC, "Sync")
     },
     division(WAIT_PARAM_DIVISION, "Division", 10.0),
+];
+
+pub const ARP_DESCRIPTORS: [ParamDescriptor; 4] = [
+    choice(ARP_PARAM_MODE, "Mode", ModArpMode::ALL.len()),
+    division(ARP_PARAM_DIVISION, "Rate", 13.0),
+    ParamDescriptor {
+        id: ARP_PARAM_OCTAVES,
+        name: "Octaves",
+        unit: "",
+        min: 1.0,
+        max: ARP_MAX_OCTAVES as f32,
+        curve: ParamCurve::Stepped(ARP_MAX_OCTAVES as u16),
+        default: 1.0,
+    },
+    ParamDescriptor {
+        id: ARP_PARAM_GATE,
+        name: "Gate",
+        unit: "",
+        min: 0.05,
+        max: 1.0,
+        curve: ParamCurve::Linear,
+        default: 0.5,
+    },
 ];
 
 pub const SLEW_DESCRIPTORS: [ParamDescriptor; 1] = [ParamDescriptor {
@@ -1825,6 +1857,68 @@ impl ModWaitParams {
     }
 }
 
+/// The order an arp plays its chord in: by pitch up, down, or up then
+/// down; in the order its notes came; or at random.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModArpMode {
+    #[default]
+    Up,
+    Down,
+    UpDown,
+    Played,
+    Random,
+}
+
+impl ModArpMode {
+    pub const ALL: [Self; 5] = [Self::Up, Self::Down, Self::UpDown, Self::Played, Self::Random];
+
+    /// How the mode is typed and spelled.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Up => "up",
+            Self::Down => "down",
+            Self::UpDown => "updown",
+            Self::Played => "played",
+            Self::Random => "random",
+        }
+    }
+
+    pub fn to_index(self) -> usize {
+        Self::ALL.iter().position(|mode| *mode == self).unwrap_or(0)
+    }
+
+    pub fn from_index(index: i32) -> Self {
+        usize::try_from(index)
+            .ok()
+            .and_then(|index| Self::ALL.get(index))
+            .copied()
+            .unwrap_or_default()
+    }
+}
+
+/// Holds the chord reaching it and plays it one note at a time: a step
+/// each `division` on the transport, or each `advance` when one is wired.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct ModArpParams {
+    pub mode: ModArpMode,
+    pub division: ModTimeDivision,
+    pub octaves: u8,
+    pub gate: f32,
+}
+
+impl Default for ModArpParams {
+    fn default() -> Self {
+        Self {
+            mode: ModArpMode::Up,
+            division: ModTimeDivision::Sixteenth,
+            octaves: 1,
+            gate: 0.5,
+        }
+    }
+}
+
 /// `inputs` streams of notes into one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
@@ -2030,6 +2124,8 @@ pub enum ModulatorParams {
     Wait(ModWaitParams),
     /// Control in, notes out: plays its `pitch` on each `trigger`.
     Note,
+    /// Notes in, the chord one note at a time out.
+    Arp(ModArpParams),
     /// A box whose name this build does not know: typed, or saved by a
     /// later build. It keeps its text ([`SongModule::text`]), has no jacks,
     /// and puts out nothing.
@@ -2063,6 +2159,7 @@ impl ModulatorParams {
             Self::Merge(_) => ModulatorKind::Merge,
             Self::Wait(_) => ModulatorKind::Wait,
             Self::Note => ModulatorKind::Note,
+            Self::Arp(_) => ModulatorKind::Arp,
             Self::Unknown => ModulatorKind::Unknown,
         }
     }
@@ -2156,6 +2253,13 @@ impl ModulatorParams {
                 WAIT_PARAM_TIME_MS => Some(p.time_ms),
                 WAIT_PARAM_SYNC => Some(if p.sync { 1.0 } else { 0.0 }),
                 WAIT_PARAM_DIVISION => Some(p.division.to_index() as f32),
+                _ => None,
+            },
+            Self::Arp(p) => match id {
+                ARP_PARAM_MODE => Some(p.mode.to_index() as f32),
+                ARP_PARAM_DIVISION => Some(p.division.to_index() as f32),
+                ARP_PARAM_OCTAVES => Some(f32::from(p.octaves)),
+                ARP_PARAM_GATE => Some(p.gate),
                 _ => None,
             },
             Self::Slew(p) => match id {
@@ -2316,6 +2420,13 @@ impl ModulatorParams {
                 WAIT_PARAM_DIVISION => p.division = ModTimeDivision::from_index(index),
                 _ => {}
             },
+            Self::Arp(p) => match id {
+                ARP_PARAM_MODE => p.mode = ModArpMode::from_index(index),
+                ARP_PARAM_DIVISION => p.division = ModTimeDivision::from_index(index),
+                ARP_PARAM_OCTAVES => p.octaves = index.clamp(1, i32::from(ARP_MAX_OCTAVES)) as u8,
+                ARP_PARAM_GATE => p.gate = value,
+                _ => {}
+            },
             Self::Slew(p) => {
                 if id == SLEW_PARAM_TIME_S {
                     p.time_seconds = value;
@@ -2419,6 +2530,7 @@ pub enum ModulatorKind {
     Merge,
     Wait,
     Note,
+    Arp,
     /// A box this build has no name for; never in [`Self::ALL`].
     Unknown,
 }
@@ -2427,7 +2539,7 @@ impl ModulatorKind {
     /// Every kind a box can be made as, in the order the shelf's kind
     /// tokens number them: new kinds are appended, so a token keeps naming
     /// the kind it did.
-    pub const ALL: [ModulatorKind; 24] = [
+    pub const ALL: [ModulatorKind; 25] = [
         ModulatorKind::Lfo,
         ModulatorKind::Envelope,
         ModulatorKind::Step,
@@ -2452,6 +2564,7 @@ impl ModulatorKind {
         ModulatorKind::Merge,
         ModulatorKind::Wait,
         ModulatorKind::Note,
+        ModulatorKind::Arp,
     ];
 
     /// Whether the kind works on notes: the engine's note pass runs it,
@@ -2471,6 +2584,7 @@ impl ModulatorKind {
                 | Self::Merge
                 | Self::Wait
                 | Self::Note
+                | Self::Arp
         )
     }
 
@@ -2500,6 +2614,7 @@ impl ModulatorKind {
             Self::Merge => "Merge",
             Self::Wait => "Wait",
             Self::Note => "Note",
+            Self::Arp => "Arp",
             Self::Unknown => "Unknown",
         }
     }
@@ -2532,6 +2647,7 @@ impl ModulatorKind {
             Self::Merge => "MRG",
             Self::Wait => "WAIT",
             Self::Note => "NOTE",
+            Self::Arp => "ARP",
             Self::Unknown => "?",
         }
     }
@@ -2578,6 +2694,7 @@ impl ModulatorKind {
             Self::Merge => ModulatorParams::Merge(ModMergeParams::default()),
             Self::Wait => ModulatorParams::Wait(ModWaitParams::default()),
             Self::Note => ModulatorParams::Note,
+            Self::Arp => ModulatorParams::Arp(ModArpParams::default()),
             Self::Unknown => ModulatorParams::Unknown,
         }
     }
@@ -2605,6 +2722,7 @@ impl ModulatorKind {
             Self::Unpack => &UNPACK_DESCRIPTORS,
             Self::Merge => &MERGE_DESCRIPTORS,
             Self::Wait => &WAIT_DESCRIPTORS,
+            Self::Arp => &ARP_DESCRIPTORS,
             Self::NoteGate | Self::Hold | Self::Gate | Self::Note | Self::Unknown => &[],
         }
     }
@@ -3657,6 +3775,7 @@ impl ModRack {
             | ModulatorParams::Merge(_)
             | ModulatorParams::Wait(_)
             | ModulatorParams::Note
+            | ModulatorParams::Arp(_)
             | ModulatorParams::Unknown => 1.0,
         }
     }
@@ -3838,6 +3957,7 @@ fn rack_input(
         | ModulatorParams::Merge(_)
         | ModulatorParams::Wait(_)
         | ModulatorParams::Note
+        | ModulatorParams::Arp(_)
         | ModulatorParams::Unknown => InputSource::None,
         // A seat with no identity: a preset's gate on its own channel's notes,
         // which means the channel it lands on.
@@ -3972,10 +4092,10 @@ impl<'de> serde::Deserialize<'de> for UnknownParams {
 }
 
 /// Every `kind` a module's params are saved under, as serde spells them.
-const KNOWN_KINDS: [&str; 25] = [
+const KNOWN_KINDS: [&str; 26] = [
     "lfo", "envelope", "step", "random", "math", "counter", "select", "slew", "chord", "modal", "scale",
     "transpose", "chance", "gate", "num", "hold", "table", "switch", "pass", "pick", "unpack",
-    "merge", "wait", "note", "unknown",
+    "merge", "wait", "note", "arp", "unknown",
 ];
 
 fn is_zero(value: &u32) -> bool {

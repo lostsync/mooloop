@@ -47,7 +47,7 @@ use mooloop_dsp::strip::Strip;
 use crate::meters::{BusMeters, DeviceMeters, DeviceTelemetry, ModulatorMeters, PlayheadMeters};
 use crate::sequencer::Sequencer;
 use crate::song_modulation::SongModulator;
-use crate::note_patch::NoteClock;
+use crate::note_patch::{BeatSpan, NoteClock};
 use crate::site_times::SiteTimes;
 use crate::transport::{BlockSpan, Transport};
 use crate::{PreviewCommand, StructuralCommand, StructuralReclaim};
@@ -10454,12 +10454,25 @@ impl RenderState {
         // (song patch step 07).
         let live = self.live_channels();
         let playing = self.transport.playing;
-        let clock = NoteClock {
+        let mut clock = NoteClock {
             frames,
             sample_rate: self.sample_rate,
             bpm: self.transport.bpm,
             jumped: seeked || jumped,
+            ..NoteClock::default()
         };
+        if playing {
+            let ticks_per_beat = f64::from(self.transport.ppq.ticks_per_beat()).max(1.0);
+            for (beats, span) in clock.beats.iter_mut().zip(&spans[..span_count]) {
+                *beats = BeatSpan {
+                    frame: span.frame,
+                    frames: span.frames,
+                    from: span.start_tick / ticks_per_beat,
+                    to: span.end_tick / ticks_per_beat,
+                };
+            }
+            clock.spans = span_count.min(clock.beats.len());
+        }
         self.song_modulation.pass_notes(&mut self.events, live, panicked, playing, clock);
 
         let context = ProcessContext {

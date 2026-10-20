@@ -852,3 +852,122 @@ fn an_arp_from_parts_plays_a_chord_one_note_a_beat() {
     assert_eq!(off, on[1..].iter().map(|&(frame, _)| frame).collect::<Vec<_>>());
     assert_eq!(sounding.0.len(), 1);
 }
+
+// arp (`docs/plans/song-patch-boxes/07-arp.md`).
+
+fn arp_of(typed: &str) -> ModulatorParams {
+    let params = mooloop_core::box_text::parse(typed).expect(typed);
+    assert!(matches!(params, ModulatorParams::Arp(_)), "{typed}");
+    params
+}
+
+/// Keys' chord, from the chord box, into an arp typed `typed`.
+fn arped(steps: &[(u32, u32)], typed: &str) -> Project {
+    let params = arp_of(typed);
+    chords_on(steps, |project, chord| {
+        let arp = add(project, params);
+        wire(project, (chord, 0), (arp, 0));
+        (arp, 0)
+    })
+}
+
+/// On its own clock an arp plays the chord up, a note every sixteenth on
+/// the grid, each for half its step, live and bounced alike.
+#[test]
+fn an_arp_plays_the_chord_up_on_the_grid_live_and_bounced() {
+    let step = SAMPLE_RATE as usize / 8;
+    for looping in [true, false] {
+        let (heard, sounding) = heard_over(&arped(&[(0, 6)], "arp up 1/16"), 8 * STEP_BLOCKS, looping);
+        let on: Vec<(usize, u8)> = heard.iter().filter(|event| event.1).map(|event| (event.0, event.2)).collect();
+        // C major held for six steps: C E G C E G.
+        let expected: Vec<(usize, u8)> = [60, 64, 67, 60, 64, 67]
+            .iter()
+            .enumerate()
+            .map(|(at, &note)| (at * step, note))
+            .collect();
+        assert_eq!(on, expected, "looping {looping}");
+        let off: Vec<usize> = heard.iter().filter(|event| !event.1).map(|event| event.0).collect();
+        assert_eq!(off, expected.iter().map(|&(frame, _)| frame + step / 2).collect::<Vec<_>>());
+        assert!(sounding.0.is_empty());
+    }
+}
+
+/// Down, updown across two octaves, and played order.
+#[test]
+fn an_arp_plays_its_modes_and_octaves() {
+    for (typed, expected) in [
+        ("arp down 1/16", vec![67, 64, 60, 67]),
+        ("arp updown 1/16 2", vec![60, 64, 67, 72, 76, 79, 76, 72]),
+    ] {
+        let (heard, _) = heard_over(&arped(&[(0, 16)], typed), 16 * STEP_BLOCKS, false);
+        let on = pitches(&heard, true);
+        assert_eq!(on[..expected.len()], expected[..], "{typed}");
+    }
+}
+
+/// A chord change mid-arp is picked up at the next step, and nothing is
+/// left sounding when the chord goes, a seek or a stop.
+#[test]
+fn an_arp_follows_chord_changes_without_hung_notes() {
+    let (heard, sounding) = heard_over(&arped(&[(0, 3), (3, 3)], "arp up 1/16"), 8 * STEP_BLOCKS, false);
+    // C major for three steps, then C# major.
+    assert_eq!(pitches(&heard, true), [60, 64, 67, 61, 65, 68]);
+    assert!(sounding.0.is_empty());
+    for command in [EngineCommand::Stop, EngineCommand::Panic] {
+        let mut render = RenderState::from_project(SAMPLE_RATE, &arped(&[(0, 16)], "arp up 1/32"), &[]);
+        render.play();
+        let mut sounding = Sounding::default();
+        run(&mut render, STEP_BLOCKS + 3, false, &mut sounding);
+        assert_eq!(sounding.0.len(), 1, "a note sounds");
+        render.apply_command(command);
+        run(&mut render, 4, false, &mut sounding);
+        assert!(sounding.0.is_empty(), "{command:?} let it go");
+    }
+}
+
+/// A random arp plays the same notes on every bounce.
+#[test]
+fn a_random_arp_plays_the_same_on_every_bounce() {
+    let project = arped(&[(0, 16)], "arp random 1/16 2");
+    let (first, _) = heard_over(&project, 16 * STEP_BLOCKS, false);
+    let (second, _) = heard_over(&project, 16 * STEP_BLOCKS, false);
+    assert_eq!(first, second);
+    let on = pitches(&first, true);
+    assert!(on.iter().collect::<HashSet<_>>().len() > 2, "it moves: {on:?}");
+}
+
+/// Wired, `advance` clocks the arp in place of its own clock, a block late.
+#[test]
+fn an_advance_wire_clocks_the_arp_in_place_of_its_own_clock() {
+    let project = chords_on(&[(0, 16)], |project, chord| {
+        let arp = add(project, arp_of("arp up 1/16"));
+        let held = add(project, ModulatorParams::NoteGate);
+        let clock = add(project, ModulatorParams::Chord(ModChordParams::default()));
+        // Keys' own notes, as a gate, are the clock: one advance a note.
+        wire(project, (chord, 0), (arp, 0));
+        wire(project, (NOTES_IN, 0), (clock, 0));
+        wire(project, (clock, 0), (held, 0));
+        wire(project, (held, 0), (arp, 1));
+        (arp, 0)
+    });
+    let (heard, _) = heard_over(&project, 16 * STEP_BLOCKS, false);
+    // One Keys note, one advance: the first note only, a block late.
+    let on: Vec<(usize, u8)> = heard.iter().filter(|event| event.1).map(|event| (event.0, event.2)).collect();
+    assert_eq!(on, [(BLOCK, 60)]);
+}
+
+#[test]
+fn the_arp_allocates_nothing() {
+    let project = arped(&[(0, 4), (8, 4)], "arp random 1/32 3");
+    let mut render = RenderState::from_project(SAMPLE_RATE, &project, &[]);
+    render.play();
+    render.process_once_block(BLOCK);
+    let before = (crate::COUNTING.allocations(), crate::COUNTING.frees());
+    for _ in 0..16 * STEP_BLOCKS {
+        render.process_once_block(BLOCK);
+    }
+    render.apply_command(EngineCommand::Panic);
+    render.process_once_block(BLOCK);
+    let after = (crate::COUNTING.allocations(), crate::COUNTING.frees());
+    assert_eq!(after, before, "the callback allocated or freed with an arp in the patch");
+}
