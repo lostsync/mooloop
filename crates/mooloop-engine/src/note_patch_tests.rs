@@ -571,7 +571,7 @@ fn the_note_boxes_allocate_nothing() {
     assert_eq!(after, before, "the callback allocated or freed with note boxes in the patch");
 }
 
-// Note boxes with many jacks (`docs/plans/song-patch-boxes/04-pick-unpack-merge.md`).
+// Note boxes with many jacks (`docs/plans/archive/song-patch-boxes/04-note-boxes-with-many-jacks.md`).
 
 /// A box of `params` added to `project`'s patch.
 fn add(project: &mut Project, params: ModulatorParams) -> ModSourceId {
@@ -747,7 +747,7 @@ fn the_many_jack_boxes_allocate_nothing() {
     assert_eq!(after, before, "the callback allocated or freed with many-jack note boxes in the patch");
 }
 
-// wait (`docs/plans/song-patch-boxes/05-wait.md`).
+// wait (`docs/plans/archive/song-patch-boxes/05-wait.md`).
 
 fn wait_of(typed: &str) -> ModulatorParams {
     mooloop_core::box_text::parse(typed).unwrap()
@@ -853,7 +853,7 @@ fn an_arp_from_parts_plays_a_chord_one_note_a_beat() {
     assert_eq!(sounding.0.len(), 1);
 }
 
-// arp (`docs/plans/song-patch-boxes/07-arp.md`).
+// arp (`docs/plans/archive/song-patch-boxes/07-arp.md`).
 
 fn arp_of(typed: &str) -> ModulatorParams {
     let params = mooloop_core::box_text::parse(typed).expect(typed);

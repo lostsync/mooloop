@@ -394,6 +394,13 @@ landed by `land_on_channel`): a one-channel song in which "this channel" is
 `MAX_MODULATORS_PER_CHANNEL` (8) and `MAX_MOD_ROUTES_PER_CHANNEL` (16)
 constants bound what such a rack holds, not what a song holds.
 
+**Two patch presets ship** (`crates/mooloop-core/src/patch_factory.rs`,
+written into the patch presets' directory once by `seed_patch_bank`, then
+ordinary user presets): **Left hand**, a chord's lowest note an octave down
+under it (`pick low` → `transpose -12` → `merge 2`), and **Arp from parts**
+(`unpack 4` → four `held` → `select 4` on a `counter 4` clocked by the beat
+→ `note`). Their tags land empty with hints: Notes in, Notes out and Beat.
+
 **There is no count a user meets.** The set is sized from the song, not
 reserved: any edit that changes its shape (a box, tag, wire or route added
 or removed, a box retyped, a route onto a box's knob retuned, a channel or

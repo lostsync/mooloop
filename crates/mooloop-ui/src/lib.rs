@@ -7522,6 +7522,11 @@ impl AppUi {
         {
             log_warn!("app", "could not write the ML-P8 factory bank: {error}");
         }
+        // The patch presets that show the note boxes together, in the patch
+        // presets' directory, on the same terms.
+        if let Err(error) = mooloop_project::seed_patch_bank(&settings::patch_presets_dir()) {
+            log_warn!("app", "could not write the patch factory bank: {error}");
+        }
         // The effect banks, one directory a kind, on the same terms -- and
         // beside each, its bank of container runs, which only the layer has
         // (`containers/10`), under a marker of its own.
