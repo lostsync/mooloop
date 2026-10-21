@@ -2,7 +2,7 @@ import { Theme } from "theme.slint";
 import { GainMath } from "gain.slint";
 import { ParameterKnob } from "controls.slint";
 import { DeviceRackMetrics, EffectDeviceShell } from "device-rack.slint";
-import { DynamicsCurveDisplay } from "device-displays.slint";
+import { DynamicsCurveDisplay, GainReductionMeter } from "device-displays.slint";
 
 // Comp device face. Gate, compressor, and limiter share one transfer-curve
 // display because they are the same kind of plot; only their controls
@@ -47,8 +47,6 @@ export component CompressorDeviceFace inherits EffectDeviceShell {
     private property <length> plot-height: 148px;
     private property <length> meter-width: 34px;
     private property <length> knob-y: root.top + root.plot-height + 6px;
-    // The reduction the meter shows, 0..24 dB, falling from the top.
-    private property <float> reduction-db: clamp(-root.gain-reduction-db, 0, 24);
 
     Rectangle {
         x: root.pad;
@@ -78,34 +76,11 @@ export component CompressorDeviceFace inherits EffectDeviceShell {
     }
 
     // Gain reduction, scaled in dB: what the curve is doing right now.
-    Rectangle {
-        x: root.pad + root.inner - root.meter-width;
+    GainReductionMeter {
+        x: root.pad + root.inner - self.width;
         y: root.top;
-        width: root.meter-width;
         height: root.plot-height;
-        background: Theme.panel;
-        border-radius: Theme.radius-sm;
-        Rectangle {
-            x: 5px;
-            y: 6px;
-            width: 7px;
-            height: (parent.height - 22px) * root.reduction-db / 24;
-            background: Theme.warning;
-        }
-        for mark in [0, 3, 6, 12, 24] : Text {
-            x: 16px;
-            y: 2px + (parent.height - 22px) * mark / 24;
-            text: mark;
-            color: Theme.text-faint;
-            font-size: Theme.text-xs;
-        }
-        Text {
-            x: 4px;
-            y: parent.height - 13px;
-            text: "GR";
-            color: Theme.text-faint;
-            font-size: Theme.text-xs;
-        }
+        gain-reduction-db: root.gain-reduction-db;
     }
 
     ParameterKnob {

@@ -2,11 +2,16 @@ import { Theme } from "theme.slint";
 import { GainMath } from "gain.slint";
 import { ParameterKnob } from "controls.slint";
 import { DeviceRackMetrics, EffectDeviceShell } from "device-rack.slint";
-import { DynamicsCurveDisplay } from "device-displays.slint";
+import { DynamicsCurveDisplay, GainReductionMeter } from "device-displays.slint";
 
 // Gate device face. Gate, compressor, and limiter share one transfer-curve
 // display because they are the same kind of plot; only their controls
 // differ. Header and drag come from the shared EffectDeviceShell.
+//
+// Redrawn 2026-10-19 to the Comp's grid: the curve and a reduction meter
+// scaled to the gate's 80 dB across the top, and five equal knobs under
+// them -- where it opens and how far it shuts, then its timing. Placed by
+// hand: a full-size knob inside a layout is a binding loop.
 export component GateDeviceFace inherits EffectDeviceShell {
     name: "Gate";
     kind: "FX";
@@ -30,126 +35,152 @@ export component GateDeviceFace inherits EffectDeviceShell {
     private property <float> release-ms: pow(2000, root.release);
     private property <float> range-db: -80 + root.range * 80;
 
-    VerticalLayout {
-        padding: 6px;
-        padding-top: DeviceRackMetrics.header-height + 6px;
-        spacing: 4px;
-        Rectangle {
-            height: 104px;
-            background: Theme.panel;
-            border-radius: Theme.radius-sm;
-            DynamicsCurveDisplay {
-                x: 4px;
-                y: 4px;
-                width: parent.width - 8px;
-                height: parent.height - 8px;
-                mode: 0;
-                threshold-db: root.threshold-db;
-                threshold-min-db: -80;
-                ratio: 1;
-                knee-db: 0;
-                extra-db: root.range-db;
-                detector-db: root.detector-db;
-                gain-reduction-db: root.gain-reduction-db;
-                threshold-dragged(db) => {
-                    // Reported, not written: `threshold` is the model row's, and
-                    // writing it would drop that binding (MOO-220).
-                    root.threshold-changed(clamp((db + 80) / 80, 0, 1));
-                }
+    private property <length> pad: 8px;
+    private property <length> inner: root.width - 2 * root.pad;
+    private property <length> top: DeviceRackMetrics.header-height + 8px;
+    private property <length> plot-height: 148px;
+    private property <length> knob-y: root.top + root.plot-height + 6px;
+
+    Rectangle {
+        x: root.pad;
+        y: root.top;
+        width: root.inner - meter.width - 6px;
+        height: root.plot-height;
+        background: Theme.panel;
+        border-radius: Theme.radius-sm;
+        DynamicsCurveDisplay {
+            x: 4px;
+            y: 4px;
+            width: parent.width - 8px;
+            height: parent.height - 8px;
+            mode: 0;
+            threshold-db: root.threshold-db;
+            threshold-min-db: -80;
+            ratio: 1;
+            knee-db: 0;
+            extra-db: root.range-db;
+            detector-db: root.detector-db;
+            gain-reduction-db: root.gain-reduction-db;
+            threshold-dragged(db) => {
+                // Reported, not written: `threshold` is the model row's, and
+                // writing it would drop that binding (MOO-220).
+                root.threshold-changed(clamp((db + 80) / 80, 0, 1));
             }
         }
-        HorizontalLayout {
-            spacing: 0px;
-            ParameterKnob {
-                width: 85px;
-                diameter: 38px;
-                label: "Thresh";
-                tooltip: "Level the gate opens at";
-                value <=> root.threshold;
-                default-value: 0.5;
-                value-text: GainMath.format-plain-db(root.threshold-db) + " dB";
-                modulation-armed: root.modulation-armed;
-                modulation-allowed: root.modulation-allowed[0];
-                modulation-depth: root.modulation-depths[0];
-                modulation-offset: root.modulation-offsets[0];
-                modulation-route-count: root.modulation-route-counts[0];
-                changed(v) => { root.threshold-changed(v); }
-                modulation-depth-changed(v) => { root.modulation-depth-changed(0, v); }
-                modulation-edit-started => { root.modulation-edit-started(0); }
-                modulation-edit-finished => { root.modulation-edit-finished(0); }
-            }
-            ParameterKnob {
-                width: 85px;
-                diameter: 38px;
-                label: "Attack";
-                tooltip: "How fast the gate opens";
-                value <=> root.attack;
-                default-value: 0.3941;
-                value-text: round(root.attack-ms * 100) / 100 + " ms";
-                modulation-armed: root.modulation-armed;
-                modulation-allowed: root.modulation-allowed[1];
-                modulation-depth: root.modulation-depths[1];
-                modulation-offset: root.modulation-offsets[1];
-                modulation-route-count: root.modulation-route-counts[1];
-                changed(v) => { root.attack-changed(v); }
-                modulation-depth-changed(v) => { root.modulation-depth-changed(1, v); }
-                modulation-edit-started => { root.modulation-edit-started(1); }
-                modulation-edit-finished => { root.modulation-edit-finished(1); }
-            }
-            ParameterKnob {
-                width: 85px;
-                diameter: 38px;
-                label: "Hold";
-                tooltip: "How long it stays open after the level drops";
-                value <=> root.hold;
-                default-value: 0.02;
-                value-text: round(root.hold-ms) + " ms";
-                modulation-armed: root.modulation-armed;
-                modulation-allowed: root.modulation-allowed[2];
-                modulation-depth: root.modulation-depths[2];
-                modulation-offset: root.modulation-offsets[2];
-                modulation-route-count: root.modulation-route-counts[2];
-                changed(v) => { root.hold-changed(v); }
-                modulation-depth-changed(v) => { root.modulation-depth-changed(2, v); }
-                modulation-edit-started => { root.modulation-edit-started(2); }
-                modulation-edit-finished => { root.modulation-edit-finished(2); }
-            }
-            ParameterKnob {
-                width: 85px;
-                diameter: 38px;
-                label: "Release";
-                tooltip: "How fast the gate shuts";
-                value <=> root.release;
-                default-value: 0.6058;
-                value-text: round(root.release-ms) + " ms";
-                modulation-armed: root.modulation-armed;
-                modulation-allowed: root.modulation-allowed[3];
-                modulation-depth: root.modulation-depths[3];
-                modulation-offset: root.modulation-offsets[3];
-                modulation-route-count: root.modulation-route-counts[3];
-                changed(v) => { root.release-changed(v); }
-                modulation-depth-changed(v) => { root.modulation-depth-changed(3, v); }
-                modulation-edit-started => { root.modulation-edit-started(3); }
-                modulation-edit-finished => { root.modulation-edit-finished(3); }
-            }
-            ParameterKnob {
-                width: 85px;
-                diameter: 38px;
-                label: "Range";
-                tooltip: "Attenuation while shut";
-                value <=> root.range;
-                default-value: 0.0;
-                value-text: GainMath.format-plain-db(root.range-db) + " dB";
-                modulation-armed: root.modulation-armed;
-                modulation-allowed: root.modulation-allowed[4];
-                modulation-depth: root.modulation-depths[4];
-                modulation-offset: root.modulation-offsets[4];
-                modulation-route-count: root.modulation-route-counts[4];
-                changed(v) => { root.range-changed(v); }
-                modulation-depth-changed(v) => { root.modulation-depth-changed(4, v); }
-                modulation-edit-started => { root.modulation-edit-started(4); }
-                modulation-edit-finished => { root.modulation-edit-finished(4); }
-            }
-        }
+    }
+
+    meter := GainReductionMeter {
+        x: root.pad + root.inner - self.width;
+        y: root.top;
+        height: root.plot-height;
+        gain-reduction-db: root.gain-reduction-db;
+        max-db: 80;
+        marks: [0, 12, 24, 48, 80];
+    }
+
+    ParameterKnob {
+        x: root.pad + root.inner * 0 / 5;
+        y: root.knob-y;
+        width: root.inner / 5;
+        height: root.height - root.knob-y - 4px;
+        diameter: 32px;
+        label: "Thresh";
+        tooltip: "Level the gate opens at";
+        value <=> root.threshold;
+        default-value: 0.5;
+        value-text: GainMath.format-plain-db(root.threshold-db) + " dB";
+        modulation-armed: root.modulation-armed;
+        modulation-allowed: root.modulation-allowed[0];
+        modulation-depth: root.modulation-depths[0];
+        modulation-offset: root.modulation-offsets[0];
+        modulation-route-count: root.modulation-route-counts[0];
+        changed(v) => { root.threshold-changed(v); }
+        modulation-depth-changed(v) => { root.modulation-depth-changed(0, v); }
+        modulation-edit-started => { root.modulation-edit-started(0); }
+        modulation-edit-finished => { root.modulation-edit-finished(0); }
+    }
+    ParameterKnob {
+        x: root.pad + root.inner * 1 / 5;
+        y: root.knob-y;
+        width: root.inner / 5;
+        height: root.height - root.knob-y - 4px;
+        diameter: 32px;
+        label: "Range";
+        tooltip: "Attenuation while shut";
+        value <=> root.range;
+        default-value: 0.0;
+        value-text: GainMath.format-plain-db(root.range-db) + " dB";
+        modulation-armed: root.modulation-armed;
+        modulation-allowed: root.modulation-allowed[4];
+        modulation-depth: root.modulation-depths[4];
+        modulation-offset: root.modulation-offsets[4];
+        modulation-route-count: root.modulation-route-counts[4];
+        changed(v) => { root.range-changed(v); }
+        modulation-depth-changed(v) => { root.modulation-depth-changed(4, v); }
+        modulation-edit-started => { root.modulation-edit-started(4); }
+        modulation-edit-finished => { root.modulation-edit-finished(4); }
+    }
+    ParameterKnob {
+        x: root.pad + root.inner * 2 / 5;
+        y: root.knob-y;
+        width: root.inner / 5;
+        height: root.height - root.knob-y - 4px;
+        diameter: 32px;
+        label: "Attack";
+        tooltip: "How fast the gate opens";
+        value <=> root.attack;
+        default-value: 0.3941;
+        value-text: round(root.attack-ms * 100) / 100 + " ms";
+        modulation-armed: root.modulation-armed;
+        modulation-allowed: root.modulation-allowed[1];
+        modulation-depth: root.modulation-depths[1];
+        modulation-offset: root.modulation-offsets[1];
+        modulation-route-count: root.modulation-route-counts[1];
+        changed(v) => { root.attack-changed(v); }
+        modulation-depth-changed(v) => { root.modulation-depth-changed(1, v); }
+        modulation-edit-started => { root.modulation-edit-started(1); }
+        modulation-edit-finished => { root.modulation-edit-finished(1); }
+    }
+    ParameterKnob {
+        x: root.pad + root.inner * 3 / 5;
+        y: root.knob-y;
+        width: root.inner / 5;
+        height: root.height - root.knob-y - 4px;
+        diameter: 32px;
+        label: "Hold";
+        tooltip: "How long it stays open after the level drops";
+        value <=> root.hold;
+        default-value: 0.02;
+        value-text: round(root.hold-ms) + " ms";
+        modulation-armed: root.modulation-armed;
+        modulation-allowed: root.modulation-allowed[2];
+        modulation-depth: root.modulation-depths[2];
+        modulation-offset: root.modulation-offsets[2];
+        modulation-route-count: root.modulation-route-counts[2];
+        changed(v) => { root.hold-changed(v); }
+        modulation-depth-changed(v) => { root.modulation-depth-changed(2, v); }
+        modulation-edit-started => { root.modulation-edit-started(2); }
+        modulation-edit-finished => { root.modulation-edit-finished(2); }
+    }
+    ParameterKnob {
+        x: root.pad + root.inner * 4 / 5;
+        y: root.knob-y;
+        width: root.inner / 5;
+        height: root.height - root.knob-y - 4px;
+        diameter: 32px;
+        label: "Release";
+        tooltip: "How fast the gate shuts";
+        value <=> root.release;
+        default-value: 0.6058;
+        value-text: round(root.release-ms) + " ms";
+        modulation-armed: root.modulation-armed;
+        modulation-allowed: root.modulation-allowed[3];
+        modulation-depth: root.modulation-depths[3];
+        modulation-offset: root.modulation-offsets[3];
+        modulation-route-count: root.modulation-route-counts[3];
+        changed(v) => { root.release-changed(v); }
+        modulation-depth-changed(v) => { root.modulation-depth-changed(3, v); }
+        modulation-edit-started => { root.modulation-edit-started(3); }
+        modulation-edit-finished => { root.modulation-edit-finished(3); }
     }
 }
