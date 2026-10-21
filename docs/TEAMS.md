@@ -198,7 +198,12 @@ Files marked *shared* are split in the table above.
   behind `test-support`: test support, not API, MOO-234) and
   `session/tests/midi_record_loop.rs` (three passes through it, both modes,
   Overdub and Replace)
-- `core/src/`: `pattern.rs`, `playlist.rs`, `time.rs`
+- `core/src/`: `pattern.rs`, `playlist.rs`, `time.rs`, `harmony.rs` (the
+  pitch, chord and mode tables the song patch's note boxes read)
+- `engine/src/note_patch.rs` and `note_patch_tests.rs`: notes through the
+  song patch, from a Notes in tag through the note boxes to a Notes out
+  tag, and every release rule for the notes it plays (song patch steps 07
+  and 08)
 - `session/src/`: `roll.rs`, `steps.rs`, `transport.rs`, `notes.rs`
 - `ui/ui/`: `piano-grid.slint`, `channel-rack.slint`
 - `ui/tests/`: `piano_drag.rs`, `piano_snapshot.rs`, `piano_tools.rs`,
@@ -296,7 +301,14 @@ Files marked *shared* are split in the table above.
 - `core/src/`: `modulation.rs` (*shared*), `automation.rs`, `control.rs`,
   `midi.rs`, `mod_metadata.rs`, and the tests `param_id_freeze_tests.rs`,
   `stepped_round_trip_tests.rs`
+- `core/src/`: `patch.rs` (the song patch's jacks, tags and wires),
+  `box_text.rs` (the box vocabulary, `parse` and `spell`),
+  `modulation_plan.rs` (`CompiledModulation`, the patch compiled to a tick
+  order), `patch_factory.rs` (the shipped patch presets)
 - `dsp/src/modulator.rs`
+- `engine/src/song_modulation.rs` and `song_modulation_tests.rs`, and the
+  tests `engine/tests/modulation_null.rs` and `factory_patch_null.rs` (a
+  song or preset from before the patch plays as it did)
 - `session/src/`: `automation.rs`, `modulation.rs`, `midi.rs` (*shared*),
   `values.rs`, `plugin_params.rs` (a hosted plugin's parameters by address
   and by dense index, and the one conversion between them, MOO-82)
@@ -314,10 +326,13 @@ Files marked *shared* are split in the table above.
 - `session/src/`: `session.rs`, `document.rs`, `autosave.rs`, `history.rs`, `command.rs`,
   `project.rs`, `channel.rs`, `rack.rs` (*shared*), `recordings.rs`,
   `render_settings.rs` (the export dialog's settings, MOO-180),
-  `take.rs`, `browser.rs`, `edit_cost.rs`, `lib.rs`
+  `take.rs`, `browser.rs`, `edit_cost.rs`, `lib.rs`, `patch_presets.rs`
+  (saving and landing patch presets and a channel preset's patch)
 - `core/src/`: `project.rs`, `structure.rs`, `channel.rs`, `color.rs`,
   `file_names.rs` (a free name, and a write that never replaces a file:
-  takes, assets and exports, MOO-241, MOO-188), `lib.rs`
+  takes, assets and exports, MOO-241, MOO-188), `lib.rs`,
+  `patch_preset.rs` (a piece of the song's patch lifted and landed:
+  `fragment`, `land`, `channel_fragment`, `land_on_channel`)
 - `session/tests/`: `gesture_undo.rs`, `structure.rs`, `source_switch.rs`,
   `document_fixtures.rs`, `plugin_channel_paste.rs` (a channel copied,
   pasted or cloned gets a slot of its own for its plugin instrument and
@@ -351,6 +366,10 @@ Files marked *shared* are split in the table above.
 - `ui/src/plugin_gui.rs` (a plugin's own GUI window: the face's control, the
   pump's tick, focus hiding and teardown, MOO-302)
 - `ui/src/export_ui.rs` and its tests (the export card's wiring, MOO-180)
+- The song patch canvas: `ui/ui/patch-canvas.slint`, and `ui/src/`
+  `patch_canvas.rs` (layout, hit testing and gestures), `patch_face.rs` (a
+  box's face) and `patch_canvas_tests.rs`. The pane around it,
+  `modulation-shelf.slint`, is Control's.
 - `ui/tests/`: `menubar.rs`, `question_dialog.rs`, `panes.rs`, `pane_drag.rs`, `first_click.rs`,
   `name_field.rs`, `picker_chip.rs`, `color_picker.rs`, `sidebar.rs`,
   `browser.rs`, `gesture_bracket.rs`, `rack_keyboard.rs`,
